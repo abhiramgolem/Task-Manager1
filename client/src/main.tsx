@@ -7,6 +7,7 @@ import { applyWallpaper, getWallpaperId } from './lib/wallpaper'
 import { initTheme } from './lib/theme'
 import { releaseBackgroundRecording } from './lib/backgroundRecording'
 import './styles.css'
+import './tailwind.css' // after styles.css — see the note in tailwind.css
 
 // Restore the user's chosen app wallpaper before first paint.
 applyWallpaper(getWallpaperId())

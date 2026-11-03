@@ -148,10 +148,20 @@ function Layout({ children }: { children: React.ReactNode }) {
       .then((d) => { setChatUnread(d.unread); setLastSync(Date.now()); setOnline(true) })
       .catch(() => setOnline(false))
     load()
-    const iv = setInterval(load, 10000)
+    // Not while the tab is hidden, like the notification bell: every open copy
+    // of the app polls, and a background tab has no badge to show. Delivery
+    // ticks don't depend on it — CallCenter's chat socket keeps this user
+    // online, which marks their messages delivered as they arrive.
+    const iv = setInterval(() => { if (!document.hidden) load() }, 10000)
     const onPing = () => load()
+    const onVisible = () => { if (!document.hidden) load() }
     window.addEventListener('chat-unread-changed', onPing)
-    return () => { clearInterval(iv); window.removeEventListener('chat-unread-changed', onPing) }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(iv)
+      window.removeEventListener('chat-unread-changed', onPing)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
   const base = '/' + (loc.pathname.split('/')[1] || '')
   const meta = TITLES[base] || TITLES['/']

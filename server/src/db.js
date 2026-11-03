@@ -8,6 +8,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // file holds live org data, so exercising anything that writes (splits,
 // reassignment) must never touch it. Unset in normal use.
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'smarttask.db')
+// The RAG search worker opens its own read-only connection to the same file.
+export const DB_FILE = DB_PATH
 
 // Ensure the data directory exists.
 import fs from 'node:fs'
@@ -1244,6 +1246,32 @@ export function initSchema() {
       console.error('[migrate] notifications_comment_link_v1 skipped:', e.message)
     }
   })
+
+  // Indexes for lookups that run per row of a list, or on every save. Without
+  // them each lookup was a full table scan, so a list of N tasks cost N scans
+  // of the whole table — GET /tasks for 5,000 tasks took 5.6 s, and with one
+  // Node thread every other user waited behind it. Last in initSchema on
+  // purpose: every column named here exists by now, on a fresh DB or an old one.
+  // The two on embeddings let the RAG sync compare hashes and the search worker
+  // pick up changes without reading the 6 KB vector of every row (the table is
+  // most of the database, far bigger than the server's memory).
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tasks_org ON tasks(org_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
+    CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_deps_on ON task_dependencies(depends_on_task_id);
+    CREATE INDEX IF NOT EXISTS idx_segments_meeting ON transcript_segments(meeting_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_meeting_part_user ON meeting_participants(user_id);
+    CREATE INDEX IF NOT EXISTS idx_notif_user_time ON notifications(user_id, created_at);
+    -- Covering for chat.js deliverPending (run on every unread poll): "anything
+    -- from someone else since my last delivery?" is answered from the index
+    -- instead of reading each message row to see who sent it.
+    CREATE INDEX IF NOT EXISTS idx_chat_convo_sender ON chat_messages(conversation_id, created_at, sender_id);
+    CREATE INDEX IF NOT EXISTS idx_emb_hash ON embeddings(source_type, source_id, content_hash);
+    CREATE INDEX IF NOT EXISTS idx_emb_updated ON embeddings(updated_at);
+  `)
 }
 
 // Run a migration body exactly once, tracked by a key in app_meta.

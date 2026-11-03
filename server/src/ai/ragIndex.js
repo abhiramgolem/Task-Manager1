@@ -10,6 +10,24 @@ import { now } from '../util.js'
 import { embedTexts, hasEmbeddings, hashText, toBlob, embedModel } from './embeddings.js'
 
 const BATCH = 96 // inputs per embedding API call
+// Rows per page when the periodic sync walks a whole source table. Small enough
+// that one page is a few milliseconds of work, so a request never waits long
+// behind the sync (see syncAll).
+const PAGE = 250
+
+// Hand the event loop back so queued requests run before the next page.
+const yieldToLoop = () => new Promise((resolve) => setImmediate(resolve))
+
+// The stored hash for one source row, answered from idx_emb_hash alone. Without
+// INDEXED BY, SQLite picks the UNIQUE index and then reads the row itself — and
+// every row of this table carries a 6 KB vector, so checking all of them read
+// most of the database. This used to load EVERY hash into a Map to check even a
+// single row, synchronously, on every chat message and task save.
+let hashStmt = null
+function storedHash(sourceType, sourceId) {
+  hashStmt ||= db.prepare('SELECT content_hash FROM embeddings INDEXED BY idx_emb_hash WHERE source_type=? AND source_id=?')
+  return hashStmt.get(sourceType, sourceId)?.content_hash
+}
 
 // --- chunk builders: the text we actually embed for each source type ----------
 
@@ -44,16 +62,12 @@ function meetingChunk(m) {
 export async function indexItems(items) {
   if (!hasEmbeddings() || !items.length) return { embedded: 0, skipped: 0 }
 
-  const existing = db.prepare('SELECT source_type, source_id, content_hash FROM embeddings')
-  const seen = new Map()
-  for (const r of existing.all()) seen.set(`${r.source_type}:${r.source_id}`, r.content_hash)
-
   const stale = items.filter((it) => {
     const text = (it.text || '').trim()
     if (!text) return false
     it.text = text
     it.hash = hashText(text)
-    return seen.get(`${it.source_type}:${it.source_id}`) !== it.hash
+    return storedHash(it.source_type, it.source_id) !== it.hash
   })
   if (!stale.length) return { embedded: 0, skipped: items.length }
 
@@ -144,37 +158,87 @@ function chatItems(where = '', params = []) {
 
 // --- public API ---------------------------------------------------------------
 
+// Every collector, one page at a time in id order. The sync walks whole tables,
+// and doing that in one go is what froze the server for ~15 s every 5 minutes in
+// production: one Node thread, so every request queued behind it. A page is a
+// few milliseconds; between pages the event loop is free.
+const PAGED = [
+  (after) => taskItems('AND t.id > ? ORDER BY t.id LIMIT ?', [after, PAGE]),
+  (after) => meetingItems('AND id > ? ORDER BY id LIMIT ?', [after, PAGE]),
+  (after) => segmentItems('AND s.id > ? ORDER BY s.id LIMIT ?', [after, PAGE]),
+  (after) => chatItems('AND id > ? ORDER BY id LIMIT ?', [after, PAGE]),
+]
+
 export async function backfillAll() {
-  const items = [...taskItems(), ...meetingItems(), ...segmentItems(), ...chatItems()]
-  return indexItems(items)
+  let embedded = 0, skipped = 0
+  for (const page of PAGED) {
+    for (let after = ''; ;) {
+      const items = page(after)
+      if (!items.length) break
+      after = items[items.length - 1].source_id
+      const r = await indexItems(items)
+      embedded += r.embedded
+      skipped += r.skipped
+      await yieldToLoop()
+    }
+  }
+  return { embedded, skipped }
 }
 
 // Self-healing cleanup: delete embeddings whose source row no longer qualifies for
 // indexing (row deleted, chat message unsent/soft-deleted, segment emptied). The
 // per-route removeEmbedding hooks are best-effort and can silently miss; this makes
-// the index converge to exactly what the collectors above would produce. The NOT IN
-// predicates MIRROR each collector's WHERE clause so we never prune a live vector.
+// the index converge to exactly what the collectors above would produce. Each check
+// MIRRORS its collector's WHERE clause so we never prune a live vector; a source
+// type with no check here is left alone, as the old single DELETE left it.
+// Paged over the (source_type, source_id) index for the same reason as above —
+// a single DELETE … NOT IN over every table can't hand the event loop back.
 // Returns the number of orphan rows removed.
-export function pruneOrphans() {
-  const del = db.prepare(`
-    DELETE FROM embeddings WHERE
-         (source_type='task'    AND source_id NOT IN (SELECT id FROM tasks WHERE parent_task_id IS NULL))
-      OR (source_type='meeting' AND source_id NOT IN (SELECT id FROM meetings))
-      OR (source_type='segment' AND source_id NOT IN (SELECT id FROM transcript_segments WHERE length(text) > 0))
-      OR (source_type='chat'    AND source_id NOT IN (
-            SELECT id FROM chat_messages
-            WHERE deleted_for_all = 0 AND body IS NOT NULL AND length(trim(body)) > 0))
-  `)
-  try { return del.run().changes } catch (e) { console.warn('[rag] prune failed:', e.message); return 0 }
+export async function pruneOrphans() {
+  let pruned = 0
+  try {
+    const live = new Map([
+      ['task', db.prepare('SELECT 1 FROM tasks WHERE id=? AND parent_task_id IS NULL')],
+      ['meeting', db.prepare('SELECT 1 FROM meetings WHERE id=?')],
+      ['segment', db.prepare('SELECT 1 FROM transcript_segments WHERE id=? AND length(text) > 0')],
+      ['chat', db.prepare(`SELECT 1 FROM chat_messages
+        WHERE id=? AND deleted_for_all = 0 AND body IS NOT NULL AND length(trim(body)) > 0`)],
+    ])
+    const page = db.prepare(`SELECT source_type, source_id FROM embeddings
+      WHERE (source_type, source_id) > (?, ?) ORDER BY source_type, source_id LIMIT ?`)
+    const del = db.prepare('DELETE FROM embeddings WHERE source_type=? AND source_id=?')
+    for (let after = ['', '']; ;) {
+      const rows = page.all(after[0], after[1], PAGE * 4)
+      if (!rows.length) break
+      const last = rows[rows.length - 1]
+      after = [last.source_type, last.source_id]
+      const gone = rows.filter((r) => live.has(r.source_type) && !live.get(r.source_type).get(r.source_id))
+      if (gone.length) {
+        db.transaction(() => { for (const r of gone) pruned += del.run(r.source_type, r.source_id).changes })()
+      }
+      await yieldToLoop()
+    }
+  } catch (e) { console.warn('[rag] prune failed:', e.message) }
+  return pruned
 }
 
 // One call that makes the index fully current: embed new/changed rows AND remove
 // orphans. This is what the server runs on boot and on a timer so RAG stays live
 // with no manual command. Cheap on repeat — ~0 API calls when nothing changed.
-export async function syncAll() {
-  const { embedded, skipped } = await backfillAll()
-  const pruned = pruneOrphans()
-  return { embedded, skipped, pruned }
+// A sync now spans many event-loop turns, so a timer tick that lands while the
+// previous sync is still running joins it instead of starting a second walk.
+let running = null
+export function syncAll() {
+  running ||= (async () => {
+    try {
+      const { embedded, skipped } = await backfillAll()
+      const pruned = await pruneOrphans()
+      return { embedded, skipped, pruned }
+    } finally {
+      running = null
+    }
+  })()
+  return running
 }
 
 // Incremental hooks (call after the row is created/updated). Best-effort.

@@ -586,18 +586,22 @@ r.get('/conversations', (req, res) => {
 // Total unread across conversations (nav badge). Polled every few seconds by
 // every open copy of the app, which also makes it the moment messages count as
 // delivered to this person. Archived chats stay quiet, as WhatsApp keeps them.
+// Each chat counts at most UNREAD_CAP: the badge shows "9+" past nine, and a
+// group someone was added to but never opened would otherwise have its whole
+// history counted again on every poll.
+const UNREAD_CAP = 100
 r.get('/unread', (req, res) => {
   deliverPending(req.user.id)
   const convs = db.prepare('SELECT c.id, p.last_read_at FROM chat_conversations c JOIN chat_participants p ON p.conversation_id=c.id WHERE p.user_id=? AND COALESCE(p.archived,0)=0').all(req.user.id)
-  let unread = 0
-  for (const c of convs) {
-    unread += db.prepare(`
-      SELECT COUNT(*) c FROM chat_messages
+  const count = db.prepare(`
+    SELECT COUNT(*) c FROM (
+      SELECT 1 FROM chat_messages
       WHERE conversation_id=? AND sender_id!=? AND deleted_for_all=0 AND created_at > ?
         AND COALESCE(kind,'')<>'system'
-        AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)`)
-      .get(c.id, req.user.id, c.last_read_at || '', req.user.id).c
-  }
+        AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+      LIMIT ${UNREAD_CAP})`)
+  let unread = 0
+  for (const c of convs) unread += count.get(c.id, req.user.id, c.last_read_at || '', req.user.id).c
   res.json({ unread })
 })
 
