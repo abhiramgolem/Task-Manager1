@@ -14,6 +14,7 @@ import { useCallAnalyses, inProgress as analysing, callLabel } from '../lib/call
 import { MeetingDraft, loadMeetingDraft, saveMeetingDraft, clearMeetingDraft, draftLineCount, draftDuration, draftAgo } from '../lib/meetingDraft'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
+import { keepRecordingInBackground, updateBackgroundRecording, releaseBackgroundRecording } from '../lib/backgroundRecording'
 
 // Preset meeting titles for the dropdown; "Other" lets the user type a custom one.
 const MEETING_TITLES = ['Tech Meeting', 'Marketing Meeting', 'Sales Meeting', 'HR Meeting', 'Tech and Marketing Meeting']
@@ -528,10 +529,26 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const liveTriesRef = useRef(0)      // consecutive live-socket reconnect attempts (backoff)
   const retryRef = useRef(0)
   const pausedRef = useRef(false)
+  // Bumped whenever the capture engines are torn down. A loop, socket or
+  // callback from an engine that has since been replaced compares it and bows
+  // out, instead of carrying on next to its replacement.
+  const engineRef = useRef(0)
+  // Consecutive attempts to reopen a microphone that went away mid-meeting.
+  const micRetryRef = useRef(0)
+  // How this recording survives the screen going off. 'service': Android's
+  // microphone service holds it, so the screen may sleep. 'screen': no service
+  // (it refused, or this is an older build), so the screen is kept on instead.
+  const holdRef = useRef<null | 'service' | 'screen'>(null)
+  // Why the meeting is paused — a pause is now rare enough to deserve a reason.
+  const [pauseWhy, setPauseWhy] = useState('')
   const speakerRef = useRef(speaker)
   useEffect(() => { speakerRef.current = speaker }, [speaker])
   const transcriptRef = useRef('')
   useEffect(() => { transcriptRef.current = transcript }, [transcript])
+  const titleRef = useRef(title)
+  useEffect(() => { titleRef.current = title }, [title])
+  const secondsRef = useRef(seconds)
+  useEffect(() => { secondsRef.current = seconds }, [seconds])
 
   // Write the meeting to disk as it is captured. Every spoken phrase lands here
   // within a second of being recognised, so the worst a refresh, a crash or a
@@ -643,15 +660,12 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // stop & clean up on unmount
   useEffect(() => () => {
     recordingRef.current = false
-    try { recRef.current?.stop() } catch {}
-    try { pcmRef.current?.stop() } catch {}
-    try { wsRef.current?.close() } catch {}
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    keepScreenAwake(false)
+    teardownEngines()
+    releaseHold()
   }, [])
 
-  // Keep the device screen on while a meeting is in progress (native only) — the
-  // WebView (and thus recording) is suspended if the screen sleeps.
+  // The fallback for when the screen-off recording below is unavailable: keep
+  // the screen on (native only), since a backgrounded WebView gets no audio.
   const keepScreenAwake = (on: boolean) => {
     if (!Capacitor.isNativePlatform()) return
     import('@capacitor-community/keep-awake')
@@ -659,18 +673,89 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
       .catch(() => {})
   }
 
-  // Treat the app being backgrounded mid-capture (incoming call, screen lock,
-  // home button) as an interruption: pause and surface a Resume button.
+  // A meeting runs for hours and the phone goes face-down on the table; keeping
+  // the screen lit for all of it drained the battery, and letting it sleep used
+  // to pause the meeting. So the app asks Android to keep the recording going
+  // with the screen off (lib/backgroundRecording.ts), and only if it says no
+  // does it fall back to holding the screen on.
+  //
+  // Asked each time a microphone opens, not when Start is pressed: the first
+  // time someone records, mic permission is only granted by that getUserMedia,
+  // and Android will not start a microphone service before it is.
+  const holdBackground = async () => {
+    if (!Capacitor.isNativePlatform()) return
+    const state = { title: titleRef.current, paused: pausedRef.current, seconds: secondsRef.current }
+    if (holdRef.current === 'service') { updateBackgroundRecording(state); return }
+    if (await keepRecordingInBackground(state)) {
+      // Stopped while Android was being asked.
+      if (!recordingRef.current && !pausedRef.current) { releaseBackgroundRecording(); return }
+      holdRef.current = 'service'
+      keepScreenAwake(false)
+    } else if (!holdRef.current) {
+      holdRef.current = 'screen'
+      keepScreenAwake(true)
+    }
+  }
+  const releaseHold = () => {
+    if (holdRef.current === 'service') releaseBackgroundRecording()
+    holdRef.current = null
+    keepScreenAwake(false)
+  }
+
+  // The notification names the meeting and says when it is paused.
+  useEffect(() => {
+    if (holdRef.current === 'service') updateBackgroundRecording({ title, paused, seconds: secondsRef.current })
+  }, [title, paused])
+
+  // Backgrounded mid-capture (screen off, home button, an incoming call). With
+  // the service holding the mic that is nothing at all — the meeting carries on.
+  // Without it Android hands the app silence, so the honest thing is still to
+  // pause rather than show a REC light over a transcript that has stopped.
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
     let handle: { remove: () => void } | undefined
     import('@capacitor/app').then(({ App }) => {
       App.addListener('appStateChange', ({ isActive }) => {
-        if (!isActive && recordingRef.current) pauseRecording()
+        if (isActive || !recordingRef.current || holdRef.current === 'service') return
+        pauseRecording('VoTask could not keep the microphone while the app was in the background.')
       }).then((h) => { handle = h })
     }).catch(() => {})
     return () => { handle?.remove() }
   }, [])
+
+  // The microphone itself can go: a phone call takes it, a headset is pulled
+  // out, a laptop sleeps and wakes up with its audio devices re-enumerated. None
+  // of that is someone ending the meeting, so none of it should leave a Resume
+  // button waiting for them — a muted mic is waited out, and a lost one reopened.
+  const watchMic = (track: MediaStreamTrack | undefined) => {
+    if (!track) return
+    const gen = engineRef.current
+    const mine = () => gen === engineRef.current && recordingRef.current
+    track.onmute = () => { if (mine()) setLiveNote('Microphone in use elsewhere — recording picks up again when it is free') }
+    track.onunmute = () => { if (mine()) setLiveNote('') }
+    track.onended = () => { if (mine()) reopenMic() }
+  }
+  const micOpened = () => {
+    micRetryRef.current = 0
+    holdBackground()
+  }
+  const reopenMic = () => {
+    teardownEngines()
+    setTranscribing(false); setInterim('')
+    setLiveNote('Microphone lost — reconnecting…')
+    // Backs off: a device still waking up usually refuses the first attempt.
+    const n = ++micRetryRef.current
+    window.setTimeout(() => { if (recordingRef.current) beginCapture() }, 1000 * n)
+  }
+  // Opening the microphone failed. On a fresh start that is the answer (no
+  // permission, no device) and the recorder goes back to Ready. Mid-meeting it
+  // is usually only early, so it is retried a few times before pausing.
+  const micFailed = (msg: string) => {
+    if (!micRetryRef.current) { setErr(msg); stop(); return }
+    if (micRetryRef.current < 5) { reopenMic(); return }
+    micRetryRef.current = 0
+    pauseRecording('The microphone stopped and could not be reopened — check it is connected.')
+  }
 
   // Speech addressed to the voice assistant is not part of this meeting, and the
   // recording is the one place where that distinction is impossible to fix after
@@ -743,19 +828,19 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
 
   const startAuto = async () => {
     setErr('')
+    const gen = engineRef.current
     let stream: MediaStream
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
-    catch { setErr('Microphone permission denied. Allow mic access and try again.'); return }
+    catch { micFailed('Microphone permission denied. Allow mic access and try again.'); return }
+    // Stopped (or paused) while the permission prompt was up.
+    if (gen !== engineRef.current) { stream.getTracks().forEach((t) => t.stop()); return }
     streamRef.current = stream
-    // A phone call grabs the mic → the track mutes/ends; treat that as an interruption.
-    stream.getAudioTracks().forEach((t) => {
-      t.onmute = () => { if (recordingRef.current) pauseRecording() }
-      t.onended = () => { if (recordingRef.current) pauseRecording() }
-    })
+    watchMic(stream.getAudioTracks()[0])
     recordingRef.current = true
     setRecording(true)
+    micOpened()
     ;(async () => {
-      while (recordingRef.current) {
+      while (recordingRef.current && gen === engineRef.current) {
         const segmentStart = Date.now()
         const blob = await recordSegment(stream, 12000)
         // Drop the whole segment if the assistant was addressed at any point
@@ -781,6 +866,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     setErr('')
     recordingRef.current = true
     setRecording(true)
+    const gen = engineRef.current
+    let micOpening = false
 
     // The socket is disposable, the microphone is not.
     //
@@ -795,7 +882,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     // being touched (re-acquiring it would prompt for permission again and drop
     // audio while the device spun up).
     const connect = () => {
-      if (!recordingRef.current) return
+      if (!recordingRef.current || gen !== engineRef.current) return
       const ws = new WebSocket(wsUrl(`/api/meetings/live?token=${getToken()}&language=${encodeURIComponent(lang)}`))
       wsRef.current = ws
 
@@ -824,8 +911,10 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
         liveTriesRef.current = 0
         setTranscribing(true)
         setLiveNote('')
-        if (pcmRef.current) return                 // mic already running, just re-attached
-        pcmRef.current = await startPcmStream(
+        // Mic already running (or still opening), just re-attached.
+        if (pcmRef.current || micOpening) return
+        micOpening = true
+        const pcm = await startPcmStream(
           // Withhold the frames rather than the transcript: Sarvam never receives
           // the audio of a command, so there is nothing to filter downstream and
           // nothing billed for it either.
@@ -833,8 +922,13 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             const sock = wsRef.current
             if (sock && sock.readyState === WebSocket.OPEN && !agentHasMic()) sock.send(b64)
           },
-          (msg) => { setErr(msg); stop() },
+          micFailed,
         )
+        micOpening = false
+        // Stopped, paused or reopened while the mic was opening: it is not ours.
+        if (gen !== engineRef.current) { pcm.stop(); return }
+        pcmRef.current = pcm
+        if (pcm.track) { watchMic(pcm.track); micOpened() }
       }
     }
     connect()
@@ -862,23 +956,33 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
       setInterim(intr)
     }
     rec.onerror = (e: any) => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { setErr('Microphone permission denied.'); stop() } }
-    rec.onend = () => { if (recordingRef.current) { try { rec.start() } catch {} } }
+    const gen = engineRef.current
+    rec.onend = () => { if (recordingRef.current && gen === engineRef.current) { try { rec.start() } catch {} } }
     recRef.current = rec
     recordingRef.current = true
     setRecording(true)
     try { rec.start() } catch {}
+    // The recogniser opens its own mic, so there is no track to wait for.
+    micOpened()
   }
 
-  // Spin up the capture engine for the current mode (used by both start & resume).
+  // Spin up the capture engine for the current mode (used by start, resume and
+  // reopening a lost microphone).
   const beginCapture = () => {
     if (mode === 'auto') { provider === 'sarvam' ? startSarvamStream() : startAuto() }
     else startBrowser()
   }
   // Tear down the active capture engine without ending the session/transcript.
   const teardownEngines = () => {
+    engineRef.current++
     try { recRef.current?.stop() } catch {}
-    try { pcmRef.current?.stop(); pcmRef.current = null } catch {}
-    try { wsRef.current?.close(); wsRef.current = null } catch {}
+    try { pcmRef.current?.stop() } catch {}
+    pcmRef.current = null
+    const ws = wsRef.current
+    wsRef.current = null
+    // Detached first: its onclose would read this as a dropped connection and
+    // dial back in.
+    if (ws) { ws.onclose = null; try { ws.close() } catch {} }
     try { streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null } catch {}
   }
 
@@ -887,42 +991,48 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     // was interrupted is a continuation of the same one, and restarting its timer
     // would say the previous 40 minutes never happened.
     if (!transcript.trim()) setSeconds(0)
-    setPaused(false); pausedRef.current = false
-    keepScreenAwake(true)
+    setPaused(false); pausedRef.current = false; setPauseWhy('')
+    micRetryRef.current = 0
     beginCapture()
   }
 
-  // Interruption: stop capturing but keep the session + transcript; show Resume.
-  const pauseRecording = () => {
+  // Stop capturing but keep the session + transcript; show Resume. Asked for by
+  // voice, or the last resort when the mic cannot be got back.
+  const pauseRecording = (why = '') => {
     if (!recordingRef.current || pausedRef.current) return
     recordingRef.current = false   // halts capture loops / auto-restart
     pausedRef.current = true
     setPaused(true)
+    setPauseWhy(why)
     setTranscribing(false); setInterim(''); setLiveNote('')
     teardownEngines()
   }
-  // Resume after an interruption: spin a fresh engine (old mic/ws may be dead).
+  // Resume after a pause: spin a fresh engine (old mic/ws may be dead).
   const resumeRecording = () => {
     if (!pausedRef.current) return
     pausedRef.current = false
     setPaused(false)
-    keepScreenAwake(true)
+    setPauseWhy('')
+    micRetryRef.current = 0
     beginCapture()
   }
 
   const stop = () => {
-    // recordingRef goes false FIRST: the live socket's onclose reads it to decide
-    // whether a close was the user stopping or a drop worth reconnecting, and a
-    // stale true there would have it dial back in after the meeting ended.
+    // recordingRef goes false FIRST, so anything still in flight — a segment
+    // mid-upload, a reconnect timer, a mic being reopened — sees the meeting is
+    // over rather than starting it up again.
     recordingRef.current = false
     pausedRef.current = false
     liveTriesRef.current = 0
+    micRetryRef.current = 0
     setRecording(false)
     setPaused(false)
+    setPauseWhy('')
+    setTranscribing(false)
     setInterim('')
     setLiveNote('')
     teardownEngines()
-    keepScreenAwake(false)
+    releaseHold()
   }
 
   const mmss = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
@@ -935,7 +1045,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // a convenience but the only sensible control.
   //
   // Each capability calls the modal's own handler, which means the agent inherits
-  // every hard-won behaviour already in them: keepScreenAwake, the fresh-engine
+  // every hard-won behaviour already in them: the screen-off hold, the fresh-engine
   // restart on resume (an interrupted mic/websocket is usually dead), and the
   // teardown that releases the microphone.
   //
@@ -956,10 +1066,9 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     },
     pause: async () => {
       if (!recording || paused) return { skipped: true }
-      // No dedicated Pause button: pausing is what the app does for you on an
-      // interruption. Press Stop's neighbour is wrong, so just call the handler and
-      // let the amber "Meeting paused" banner be the visible feedback.
-      pauseRecording()
+      // No dedicated Pause button, so there is nothing to press: just call the
+      // handler and let the amber "Meeting paused" banner be the visible feedback.
+      pauseRecording('You asked VoTask to pause.')
       await pause(320)
       return { paused: true }
     },
@@ -1069,7 +1178,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           )}
           {recording && paused && (
             <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
-<b>Meeting paused</b> — recording was interrupted (e.g. a phone call, or the screen turned off). Tap <b>Resume meeting</b> to continue capturing.
+<b>Meeting paused</b> — {pauseWhy ? pauseWhy + ' ' : ''}Nothing is recorded until you tap <b>Resume meeting</b>.
             </div>
           )}
           <div className="row" style={{ gap: 10 }}>

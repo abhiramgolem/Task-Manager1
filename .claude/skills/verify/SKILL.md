@@ -29,7 +29,7 @@ import { db } from './src/db.js'
 import jwt from 'jsonwebtoken'
 const u = db.prepare('SELECT id,name,role,org_id FROM users LIMIT 1').get()
 console.log(jwt.sign({ sub: u.id, role: u.role, org_id: u.org_id, name: u.name },
-  process.env.JWT_SECRET || 'change-me-in-production-please', { expiresIn: '2h' }))
+  process.env.JWT_SECRET || 'dev-secret-change-me', { expiresIn: '2h' }))
 ```
 
 `server/data/app.db` holds REAL org data. Read from it; never write.
