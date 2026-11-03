@@ -33,6 +33,7 @@ import { attachLiveTranscribe, attachAssistantLive, attachCallLive } from './ws/
 import { attachChatHub } from './ws/chatHub.js'
 import { hasEmbeddings, embedModel } from './ai/embeddings.js'
 import { syncAll } from './ai/ragIndex.js'
+import { warmRagSearch } from './ai/ragRetrieve.js'
 
 initSchema()
 ensureSeed()
@@ -104,7 +105,15 @@ app.use('/mcp', mcpRoutes)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const clientDist = path.resolve(__dirname, '../../client/dist')
 if (fs.existsSync(path.join(clientDist, 'index.html'))) {
-  app.use(express.static(clientDist))
+  // Vite names everything under /assets after a hash of its content, so a file
+  // there never changes — cache it for a year instead of re-asking on every
+  // page load (index.html itself keeps the default revalidation, which is what
+  // picks up a new deploy).
+  app.use(express.static(clientDist, {
+    setHeaders: (res, file) => {
+      if (file.includes(`${path.sep}assets${path.sep}`)) res.set('Cache-Control', 'public, max-age=31536000, immutable')
+    },
+  }))
   // SPA fallback: any non-/api GET returns index.html so client-side routes
   // (BrowserRouter) survive a refresh or deep link. Unknown /api/* paths are
   // excluded so they still get a proper JSON 404 instead of the HTML shell.
@@ -138,9 +147,13 @@ const server = app.listen(PORT, () => {
 server.requestTimeout = 100 * 60 * 1000
 
 // RAG catch-up: on boot, index anything created while embeddings were off or the
-// server was down. Runs in the background (never blocks startup) and is cheap on
-// repeat — unchanged items are skipped, so it makes ~0 API calls when nothing's new.
+// server was down. Runs in the background and is cheap on repeat — unchanged
+// items are skipped, so it makes ~0 API calls when nothing's new. It walks every
+// source table, so it does so a page at a time (see syncAll): done in one go it
+// froze every request for ~15 s on the production server.
 if (hasEmbeddings()) {
+  // Build the search worker's copy of the index now, not on the first question.
+  warmRagSearch()
   syncAll()
     .then(({ embedded, skipped, pruned }) => {
       if (embedded || pruned) console.log(`  [rag] startup sync: embedded ${embedded} new, pruned ${pruned} orphan(s), ${skipped} already indexed`)

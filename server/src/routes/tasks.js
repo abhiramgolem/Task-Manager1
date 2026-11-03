@@ -145,6 +145,73 @@ function hydrate(t) {
   }
 }
 
+// rows.map(hydrate) without hydrate's ~11 queries per task: each related table
+// is read once for the whole list (ids passed as one JSON array, so there's no
+// bound-parameter limit) and handed out from memory. GET /tasks returns every
+// task a manager can see, so per-task queries made opening the Tasks page cost
+// ~1 s of the server's only thread at 5,000 tasks. The result is the same as
+// rows.map(hydrate), key order and missing-row `undefined`s included — change
+// one, change the other.
+function hydrateMany(rows) {
+  if (!rows.length) return []
+  const inList = (sql, ids) => db.prepare(sql).all(JSON.stringify([...ids]))
+  const groupBy = (list, key, pick = (r) => r) => {
+    const by = new Map()
+    for (const r of list) {
+      if (!by.has(r[key])) by.set(r[key], [])
+      by.get(r[key]).push(pick(r))
+    }
+    return by
+  }
+  const taskIds = rows.map((t) => t.id)
+
+  const userIds = new Set()
+  for (const t of rows) {
+    for (const k of ['assignee_id', 'assigned_by_id', 'reassigned_by_id', 'previous_assignee_id', 'completed_by_id']) {
+      if (t[k]) userIds.add(t[k])
+    }
+  }
+  const users = new Map(inList('SELECT id,name,avatar_color,role FROM users WHERE id IN (SELECT value FROM json_each(?))', userIds)
+    .map((u) => [u.id, u]))
+  const assigneeOf = (uid) => { if (!uid) return null; const u = users.get(uid); return u && { ...u } }
+  const briefOf = (uid) => { if (!uid) return null; const u = users.get(uid); return u && { id: u.id, name: u.name, avatar_color: u.avatar_color } }
+
+  const projects = new Map(inList('SELECT id,name FROM projects WHERE id IN (SELECT value FROM json_each(?))',
+    new Set(rows.map((t) => t.project_id).filter(Boolean))).map((p) => [p.id, p]))
+  const parents = new Map(inList('SELECT id,title,assignee_id FROM tasks WHERE id IN (SELECT value FROM json_each(?))',
+    new Set(rows.map((t) => t.parent_task_id).filter(Boolean))).map((p) => [p.id, p]))
+  const subtasks = groupBy(inList(`SELECT * FROM tasks WHERE parent_task_id IN (SELECT value FROM json_each(?))
+    ORDER BY parent_task_id, created_at, rowid`, taskIds), 'parent_task_id')
+  const comments = groupBy(inList(`SELECT c.*, u.name AS user_name, u.avatar_color FROM task_comments c JOIN users u ON u.id=c.user_id
+    WHERE c.task_id IN (SELECT value FROM json_each(?)) ORDER BY c.task_id, c.created_at, c.rowid`, taskIds), 'task_id')
+  const deps = groupBy(inList(`SELECT d.task_id AS of_task, d.depends_on_task_id AS id, t2.title, t2.status
+    FROM task_dependencies d JOIN tasks t2 ON t2.id=d.depends_on_task_id
+    WHERE d.task_id IN (SELECT value FROM json_each(?)) ORDER BY d.task_id, d.depends_on_task_id`, taskIds),
+  'of_task', (d) => ({ id: d.id, title: d.title, status: d.status }))
+  const attachments = groupBy(inList(`SELECT * FROM attachments WHERE task_id IN (SELECT value FROM json_each(?))
+    ORDER BY task_id, rowid`, taskIds), 'task_id')
+
+  return rows.map((t) => {
+    const subs = subtasks.get(t.id) || []
+    return {
+      ...t,
+      assignee: assigneeOf(t.assignee_id),
+      assignedBy: briefOf(t.assigned_by_id),
+      reassignedBy: briefOf(t.reassigned_by_id),
+      previousAssignee: briefOf(t.previous_assignee_id),
+      completedBy: briefOf(t.completed_by_id),
+      parent: t.parent_task_id ? parents.get(t.parent_task_id) && { ...parents.get(t.parent_task_id) } : null,
+      project: t.project_id ? projects.get(t.project_id) && { ...projects.get(t.project_id) } : null,
+      subtasks: subs,
+      comments: comments.get(t.id) || [],
+      dependencies: deps.get(t.id) || [],
+      attachments: attachments.get(t.id) || [],
+      origin: taskOrigin(t),
+      is_split_parent: subs.length > 0,
+    }
+  })
+}
+
 // WHO HEARS THAT A TASK IS DONE. Until this, finishing a task told nobody: only
 // "submitted for approval" and the approval verdict sent anything, so a task
 // closed directly — the ✓ tick, a board drag, the assistant — just turned green,
@@ -247,7 +314,7 @@ r.get('/', (req, res) => {
   }
   sql += " ORDER BY CASE t.priority WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, t.due_date IS NULL, t.due_date"
   const rows = db.prepare(sql).all(...args)
-  res.json(rows.map(hydrate))
+  res.json(hydrateMany(rows))
 })
 
 // ---- activity feed ----------------------------------------------------------
