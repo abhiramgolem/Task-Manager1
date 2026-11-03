@@ -1,17 +1,17 @@
-// LANDING PREVIEW — throwaway, for localhost only.
-//
-// The supplied mock, rebuilt as JSX so it can be seen inside the real app. It is
-// styled with Tailwind utility classes, which the rest of this codebase
-// deliberately does not use (CLAUDE.md: one hand-written styles.css, no
-// Tailwind) — the CDN and a scoped reset live in index.html, both marked as
-// preview-only. To throw the whole thing away: `git checkout abhiram`.
+// The landing page: the supplied mock, rebuilt as JSX inside the real app. It is
+// styled with Tailwind utility classes, which the rest of this codebase does not
+// use (it has one hand-written styles.css). Those utilities are compiled at
+// build time into landing.css and attached only while this page is mounted;
+// its scoped reset lives in index.html. See tailwind.config.js for why it is
+// not a global stylesheet — and never the play CDN again.
 //
 // Two deliberate departures from the mock:
 //   * the logo is the real /logo.png, not the mock's generic diamond mark
 //   * the calls to action route to the app's real /signup and /login, so the
 //     page can be walked through rather than only looked at
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import landingCss from './landing.css?inline'
 import { THEME_OPTIONS, ThemeChoice, getThemeChoice, applyTheme, resolveTheme, repaintTheme } from '../lib/theme'
 import { COPY, LANDING_LANGS, LandingLang, getLandingLang, setLandingLang } from '../lib/landingCopy'
 
@@ -129,6 +129,16 @@ function LanguagePicker({ lang, onPick }: { lang: LandingLang; onPick: (l: Landi
 }
 
 export default function Landing() {
+  // This page's Tailwind, present only while the page is. A layout effect, so
+  // it is in place before the first paint. Appended to the end of <head> —
+  // after the app's stylesheet, where the play CDN put its output — so rules
+  // that tie on specificity resolve the way the page was designed against.
+  useLayoutEffect(() => {
+    const style = document.createElement('style')
+    style.textContent = landingCss
+    document.head.append(style)
+    return () => style.remove()
+  }, [])
   const [lang, setLang] = useState<LandingLang>(getLandingLang())
   const t = COPY[lang]
   const pickLang = (l: LandingLang) => { setLandingLang(l); setLang(l) }

@@ -1,0 +1,9 @@
+/* The app-wide part of Tailwind (forms base styles, --tw-* defaults, the few
+   utilities app markup uses), compiled at build time — see tailwind.config.js.
+   The landing page's utilities are NOT here; they are pages/landing.css.
+   Imported after styles.css in main.tsx on purpose: the play CDN this replaces
+   appended its <style> at the end of <head>, after the app's stylesheet, so
+   wherever the two tie on specificity Tailwind has always won. Keep it last. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

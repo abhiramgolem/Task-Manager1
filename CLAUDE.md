@@ -63,6 +63,28 @@ inline schema, or older DBs fail on boot.
 `restore.js` must be imported **before** `db.js` in `index.js` — it copies a committed
 snapshot onto the Render disk on first boot of a version, and cannot run once the DB is open.
 
+## The server has one thread — keep every request and timer small
+
+Production is one Node process on Render's `starter` plan (half a CPU, 512 MB), and
+better-sqlite3 is synchronous: while any query or loop runs, every other user's request
+waits. In November 2026 this froze the live site for 7–17 s at a time — a 5-minute RAG timer
+and per-save hash checks that read the whole `embeddings` table, and assistant questions that
+loaded every vector into memory. The cost grew with the data, not the users, so it got worse
+every week. The rules that came out of it:
+
+- **No work proportional to a whole table on the request path.** Look rows up by key through
+  an index — and check it with `EXPLAIN QUERY PLAN`; SQLite will happily pick an index that
+  still reads the row (`ragIndex.js` pins `INDEXED BY idx_emb_hash` for that reason). A
+  column you filter or join on per row needs an index, added at the end of `initSchema()`.
+- **Lists don't query per row.** `GET /tasks` goes through `hydrateMany()`, one query per
+  related table for the whole list; per-task queries made it O(N²) (5.6 s at 5,000 tasks).
+- **Background walks over whole tables go a page at a time** and yield between pages
+  (`syncAll()` in `ragIndex.js`). One page must be milliseconds.
+- **CPU-heavy work runs off the main thread.** RAG ranking is `ai/ragSearchWorker.js`, which
+  keeps a compact copy of the index. `embeddings` is most of the database (~6 KB per row);
+  never select its `vector` column in bulk on the main thread.
+- **Polls skip hidden tabs** (`document.hidden`), and count no further than the UI shows.
+
 ## Architecture
 
 ### Server (`server/src`, Express, ESM, `type: module`)
@@ -159,9 +181,15 @@ risk — they live server-side as `suggested_tasks.status='pending'` until someo
 contact, link preview, call summary) and the chat's sheets and photo viewer live in
 `components/chat/`, with the API's shapes in `components/chat/types.ts`.
 
-**All styling is one global `styles.css`** — no CSS modules, no styled-components, no
-Tailwind. Class names are hand-namespaced by feature (`.lb-*` leaderboard, `.fb-*` feedback,
+**All app styling is one global `styles.css`** — no CSS modules, no styled-components.
+Class names are hand-namespaced by feature (`.lb-*` leaderboard, `.fb-*` feedback,
 `.va-*` voice assistant, `.bn-*` bottom nav). Add new rules next to their feature's block.
+The one exception is the signed-out landing page (`pages/Landing.tsx`), written in Tailwind
+utilities compiled at build time (`tailwind.config.js`): its utilities live in
+`pages/landing.css` and are attached only while it is mounted, and a small app-wide part
+(`src/tailwind.css` — the forms plugin's input/select/checkbox styles, which the app is laid
+out against) loads after `styles.css`. Never put Tailwind's play CDN (`cdn.tailwindcss.com`)
+back in `index.html`: it recompiled the page's CSS in the browser after every DOM change.
 
 Mobile is a `@media (max-width: 720px)` layer near the end of the file that re-lays-out the
 whole app (bottom tab bar, off-canvas sidebar, FABs). The bottom-right corner on phones is

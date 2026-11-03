@@ -1,3 +1,5 @@
+/* autoprefixer: off */
+/* (postcss.config.js runs autoprefixer for the Tailwind build; this file ships as written.) */
 :root {
   /* ============================================================================
      BEFACH DESIGN SYSTEM — warm, calm, enterprise. Every value below is a token;

@@ -1,0 +1,7 @@
+/* The landing page's Tailwind, compiled at build time from Landing.tsx alone and
+   attached by Landing only while it is mounted (imported with ?inline, so it is
+   not part of the app-wide stylesheet) — see tailwind.config.js. */
+@config "../../tailwind.landing.config.js";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
