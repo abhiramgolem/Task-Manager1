@@ -67,10 +67,40 @@ Respond with ONLY a JSON object, no markdown, matching this shape:
   }]
 }`
 
-export async function analyzeWithClaude(transcript, opts = {}) {
+// One system + user turn in, the JSON object in the reply out. Shared with the
+// live analysis (liveAnalysis.js), which asks with its own prompts.
+export async function claudeJson(system, userMsg, { maxTokens = 4096, timeoutMs } = {}) {
   const key = process.env.ANTHROPIC_API_KEY
   if (!key) throw new Error('No ANTHROPIC_API_KEY')
   const model = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8'
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: 'user', content: userMsg }],
+    }),
+  })
+
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`Claude API ${res.status}: ${body.slice(0, 300)}`)
+  }
+  const data = await res.json()
+  const text = (data.content || []).map((c) => c.text || '').join('')
+  const jsonStr = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
+  return JSON.parse(jsonStr)
+}
+
+export async function analyzeWithClaude(transcript, opts = {}) {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('No ANTHROPIC_API_KEY')
 
   // Attendees with role/department context; assignees must come from this list.
   const attendeeLines = (opts.attendees || []).length
@@ -85,29 +115,7 @@ Summary language requested: ${opts.summaryLanguage || 'en'}
 TRANSCRIPT:
 ${transcript}`
 
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMsg }],
-    }),
-  })
-
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Claude API ${res.status}: ${body.slice(0, 300)}`)
-  }
-  const data = await res.json()
-  const text = (data.content || []).map((c) => c.text || '').join('')
-  const jsonStr = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
-  const parsed = JSON.parse(jsonStr)
+  const parsed = await claudeJson(SYSTEM_PROMPT, userMsg)
 
   // normalize to internal shape (assignee_name_raw / assigned_by_name_raw)
   parsed.tasks = (parsed.tasks || []).map((t) => ({

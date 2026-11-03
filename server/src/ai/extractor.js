@@ -1,6 +1,7 @@
 // Orchestrator: choose Claude when configured, else the rule-based engine.
 // Then resolve spoken names to real user records and return a unified result.
-import { analyzeTranscript } from './rules.js'
+import { analyzeTranscript, detectLanguages } from './rules.js'
+import { finishFromStretches, liveAnalysisEnabled } from './liveAnalysis.js'
 import { attachEvidence } from './evidence.js'
 import { analyzeWithClaude } from './claude.js'
 import { analyzeWithOpenAI } from './openai.js'
@@ -133,7 +134,27 @@ export async function analyzeMeetingTranscript(transcript, opts = {}) {
   return cite(analyzeTranscript(transcript, opts), transcript)
 }
 
-// Every return path above goes through this, so a summary point can always be
+// A meeting recorded with live analysis on arrives with the stretches analysed
+// while it was going on (ai/liveAnalysis.js). Only what they do not cover is read
+// now. If none of them is still in the transcript, or finishing fails for any
+// reason, the whole transcript is analysed exactly as it would have been without
+// them — the stretches can make this faster, never make it fail.
+export async function analyzeMeetingTranscriptLive(transcript, stretches, opts = {}) {
+  if (stretches?.length && liveAnalysisEnabled()) {
+    try {
+      const result = await finishFromStretches(transcript, stretches, opts)
+      if (result) {
+        if (!result.detected_languages.length) result.detected_languages = detectLanguages(transcript)
+        return cite(result, transcript)
+      }
+    } catch (err) {
+      console.warn('[ai] live analysis could not finish, analysing the whole transcript:', err.message)
+    }
+  }
+  return analyzeMeetingTranscript(transcript, opts)
+}
+
+// Every return path goes through this, so a summary point can always be
 // traced back to the sentence behind it no matter which engine produced it —
 // and no model prompt has to be taught about citations.
 function cite(result, transcript) {

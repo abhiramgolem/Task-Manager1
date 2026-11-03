@@ -3,7 +3,8 @@ import multer from 'multer'
 import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
 import { id, now, audit, notify, dueDateForPriority } from '../util.js'
-import { analyzeMeetingTranscript, resolveUser, resolveUserAmong } from '../ai/extractor.js'
+import { analyzeMeetingTranscript, analyzeMeetingTranscriptLive, resolveUser, resolveUserAmong } from '../ai/extractor.js'
+import { liveAnalysisEnabled, liveIntervalSeconds, nextStretch, analyzeStretch, stretchColumns, liveProgress } from '../ai/liveAnalysis.js'
 import { restateRuleSummary } from '../ai/rules.js'
 import { resolveCategory, normalizeCategory } from '../categories.js'
 import { transcribeAudio } from '../ai/transcribe.js'
@@ -39,6 +40,12 @@ function recordAnalysisUsage(req, transcript, analysis) {
     inputTokens: estimateTokens(transcript),
     outputTokens: estimateTokens(JSON.stringify(analysis || {})),
   })
+}
+// The live analysis bills each call as it is made, since one meeting is many
+// small calls spread over hours rather than one at the end.
+const liveUsage = (orgId, userId) => ({ engine, input, output }) => {
+  const provider = ENGINE_PROVIDER[engine]
+  if (provider) recordUsage({ orgId, userId, provider, feature: 'meeting_analysis', inputTokens: estimateTokens(input), outputTokens: estimateTokens(output) })
 }
 
 // The app is scoped to these three languages. Any other detected code (the AI
@@ -267,6 +274,25 @@ r.patch('/draft/:id', requireRole('manager', 'admin'), (req, res) => {
     }
   }
   res.json({ ok: true })
+  nudgeLiveAnalysis(m.id, { seconds: Number(b.seconds) || 0, length: String(b.transcript || '').length })
+})
+
+// How far the AI has got with this recording, for the line under the recorder.
+r.get('/draft/:id/live', requireRole('manager', 'admin'), (req, res) => {
+  const m = db.prepare(`SELECT id, raw_transcript FROM meetings WHERE id=? AND org_id=? AND uploaded_by=? AND status='recording'`)
+    .get(req.params.id, req.user.org_id, req.user.id)
+  if (!m) return res.status(404).json({ error: 'No such recording' })
+  if (!liveAnalysisEnabled()) return res.json({ enabled: false })
+  const rows = db.prepare('SELECT text, end_seconds, tasks_json FROM meeting_live_chunks WHERE meeting_id=? ORDER BY seq').all(m.id)
+  res.json({
+    enabled: true,
+    interval_seconds: liveIntervalSeconds(),
+    ...liveProgress(m.raw_transcript || '', rows),
+    running: !!liveJobs.get(m.id)?.current,
+    // Not the provider's error text: it can carry account details, and all the
+    // recorder needs to say is that this will be caught up at the end.
+    behind: liveErrors.has(m.id),
+  })
 })
 
 // Thrown away, or finished — the real meeting is created by POST /meetings, and
@@ -276,12 +302,108 @@ r.delete('/draft/:id', requireRole('manager', 'admin'), (req, res) => {
     .get(req.params.id, req.user.org_id, req.user.id)
   if (!m) return res.json({ ok: true }) // already gone; deleting twice is not an error
   db.prepare('DELETE FROM meeting_participants WHERE meeting_id=?').run(m.id)
-  db.prepare('DELETE FROM meetings WHERE id=?').run(m.id)
+  db.prepare('DELETE FROM meetings WHERE id=?').run(m.id) // its live stretches cascade
+  liveErrors.delete(m.id); liveDue.delete(m.id)
   // Audited, unlike the patches: this is the one draft operation that destroys
   // something a person cannot get back by talking again.
   audit(req.user.org_id, req.user.id, 'meeting.draft_discard', 'meeting', m.id, `${(m.raw_transcript || '').length} chars`)
   res.json({ ok: true })
 })
+
+// ---- Analysing the recording while it happens (ai/liveAnalysis.js) ----------
+//
+// Driven by the pushes above rather than a timer of its own: a recording that is
+// not growing has nothing new to analyse, and one that is pushes every few
+// seconds anyway. At most one stretch per meeting is in flight, since each needs
+// the memory the one before it produced, and it runs after the response — the
+// push itself stays as cheap as it always was.
+const liveJobs = new Map()   // meeting id -> { current: { text, result } | null, again }
+const liveErrors = new Map() // meeting id -> { retryAt } after a failed stretch
+const liveDue = new Map()    // meeting id -> { seconds, length }: nothing to do before either
+
+// `seconds` / `length`: the recording clock and transcript length just pushed.
+function nudgeLiveAnalysis(meetingId, { seconds, length }) {
+  if (!liveAnalysisEnabled()) return
+  const job = liveJobs.get(meetingId)
+  if (job) { job.again = true; return }
+  // A push arrives every few seconds and a stretch is ten minutes long: until
+  // one could be due, the transcript is not even read.
+  const due = liveDue.get(meetingId)
+  if (due && seconds < due.seconds && length < due.length) return
+  const j = { current: null, again: true }
+  liveJobs.set(meetingId, j)
+  ;(async () => {
+    try {
+      while (j.again) {
+        j.again = false
+        // More than one stretch only when there is a backlog to work through.
+        while (await analyseNextStretch(meetingId, j)) { /* next */ }
+      }
+    } catch (err) {
+      console.error('[live-analysis]', err.message)
+    } finally {
+      liveJobs.delete(meetingId)
+    }
+  })()
+}
+
+// Analyse the next stretch of a recording if one is due. True when one was
+// saved, so the caller looks again at once.
+async function analyseNextStretch(meetingId, job) {
+  // A model that just failed is not asked again on the next push, a few seconds
+  // later. Whatever it misses is analysed when the meeting is finished.
+  if (Date.now() < (liveErrors.get(meetingId)?.retryAt || 0)) return false
+  const m = db.prepare(`SELECT id, org_id, uploaded_by, raw_transcript, draft_seconds, meeting_date
+    FROM meetings WHERE id=? AND status='recording'`).get(meetingId)
+  if (!m) return false
+  const rows = db.prepare('SELECT * FROM meeting_live_chunks WHERE meeting_id=? ORDER BY seq').all(m.id)
+  const next = nextStretch(m.raw_transcript || '', rows, m.draft_seconds || 0)
+  if (next.due) { liveDue.set(m.id, next.due); return false }
+  liveDue.delete(m.id)
+
+  const participantIds = db.prepare('SELECT user_id FROM meeting_participants WHERE meeting_id=?').all(m.id).map((p) => p.user_id)
+  const attendees = attendeesFor(m.org_id, participantIds)
+  const work = analyzeStretch(next.text, {
+    memory: next.memory, priorTasks: next.priorTasks, meetingDate: m.meeting_date,
+    attendees, knownNames: attendees.map((a) => a.name), onUsage: liveUsage(m.org_id, m.uploaded_by),
+  })
+  // Finishing the meeting while this is in flight waits for it rather than
+  // reading the same stretch again (see stretchesForFinish).
+  job.current = { text: next.text, result: work.catch(() => null) }
+  let result
+  try { result = await work }
+  catch (err) {
+    liveErrors.set(m.id, { retryAt: Date.now() + 60_000 })
+    console.warn(`[live-analysis] ${m.id}: stretch failed, will retry: ${err.message}`)
+    return false
+  } finally { job.current = null }
+  liveErrors.delete(m.id)
+
+  // Only onto a recording that is still a recording: finished or thrown away
+  // while the model was working, there is nothing left to attach it to.
+  const c = stretchColumns(result)
+  const saved = db.prepare(`INSERT INTO meeting_live_chunks
+    (id, meeting_id, seq, text, start_seconds, end_seconds, memory, notes_json, tasks_json, languages, engine, created_at)
+    SELECT ?, m.id, (SELECT COALESCE(MAX(seq), 0) + 1 FROM meeting_live_chunks WHERE meeting_id=m.id), ?, ?, ?, ?, ?, ?, ?, ?, ?
+    FROM meetings m WHERE m.id=? AND m.status='recording'`).run(
+    id('lch'), next.text, next.startSeconds, next.endSeconds, c.memory, c.notes_json, c.tasks_json, c.languages, c.engine, now(), m.id)
+  if (saved.changes) console.log(`[live-analysis] ${m.id}: analysed ${Math.round(next.startSeconds / 60)}–${Math.round(next.endSeconds / 60)} min (${next.text.length} chars, ${result.tasks.length} task(s))`)
+  return saved.changes > 0
+}
+
+// The stretches a finished recording can reuse: the caller's own draft only.
+// The one being analysed at this moment, if any, comes too, as a promise —
+// waited on alongside the last few minutes instead of being read again.
+function stretchesForFinish(draftId, user) {
+  if (!draftId || !liveAnalysisEnabled()) return []
+  const m = db.prepare(`SELECT id FROM meetings WHERE id=? AND org_id=? AND uploaded_by=? AND status='recording'`)
+    .get(String(draftId), user.org_id, user.id)
+  if (!m) return []
+  const rows = db.prepare('SELECT * FROM meeting_live_chunks WHERE meeting_id=? ORDER BY seq').all(m.id)
+  const cur = liveJobs.get(m.id)?.current
+  if (cur) rows.push({ text: cur.text, pending: cur.result })
+  return rows
+}
 
 // Meetings whose AI suggestions nobody has finished reviewing. Its own endpoint
 // rather than a filter over LIST because that one selects `m.*`, which drags the
@@ -353,21 +475,31 @@ r.delete('/:id', requireRole('manager', 'admin'), (req, res) => {
 })
 
 // CREATE from transcript text + process (managers/admins upload meetings)
+// draft_id: the live recording this transcript came from, whose stretches were
+// analysed while it was recorded — only the rest is read now.
 r.post('/', requireRole('manager', 'admin'), async (req, res) => {
-  const { title, description, meeting_date, transcript, summary_language, participant_ids } = req.body || {}
+  const { title, description, meeting_date, transcript, summary_language, participant_ids, draft_id } = req.body || {}
   if (!transcript || !transcript.trim()) return res.status(400).json({ error: 'transcript text required' })
   const meetingDate = (meeting_date || now()).slice(0, 10)
   const participantIds = Array.isArray(participant_ids) ? participant_ids.filter(Boolean) : []
   const attendees = attendeesFor(req.user.org_id, participantIds)
   try {
-    const analysis = await analyzeMeetingTranscript(transcript, {
-      meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: summary_language || 'en',
-    })
-    recordAnalysisUsage(req, transcript, analysis)
+    const opts = { meetingDate, knownNames: attendees.map((a) => a.name), attendees, summaryLanguage: summary_language || 'en' }
+    const started = Date.now()
+    const stretches = stretchesForFinish(draft_id, req.user)
+    const analysis = stretches.length
+      ? await analyzeMeetingTranscriptLive(transcript, stretches, { ...opts, onUsage: liveUsage(req.user.org_id, req.user.id) })
+      : await analyzeMeetingTranscript(transcript, opts)
+    if (analysis.live) {
+      const l = analysis.live
+      console.log(`[meetings] analysed in ${Date.now() - started} ms — ${l.reused} stretch(es) done while recording, ${l.in_flight} in flight, ${l.analysed_at_end} read at the end`)
+    } else {
+      recordAnalysisUsage(req, transcript, analysis) // the live path billed each call as it went
+    }
     const { mid, suggestionCount } = persistMeeting(
       { orgId: req.user.org_id, userId: req.user.id, title: title || 'Untitled Meeting', description, meetingDate, transcript, sourceType: 'transcript', participantIds },
       analysis)
-    res.status(201).json({ id: mid, suggestion_count: suggestionCount, engine: analysis.engine, fallback_reason: analysis.fallback_reason || null })
+    res.status(201).json({ id: mid, suggestion_count: suggestionCount, engine: analysis.engine, fallback_reason: analysis.fallback_reason || null, live: analysis.live || null })
   } catch (err) {
     console.error('[meetings] process error', err)
     res.status(500).json({ error: 'Processing failed: ' + err.message })

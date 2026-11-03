@@ -18,6 +18,7 @@ cd client && npx tsc --noEmit -p tsconfig.json   # faster type-check on its own
 
 cd server && npm run seed       # demo org + 2 multilingual meetings
 cd server && npm run rag:index  # backfill embeddings over existing tasks/meetings
+cd server && npm run eval:live  # live meeting analysis end to end, stand-in model, no key
 ```
 
 **There is no test suite and no linter** — no jest/vitest, no eslint config anywhere. The
@@ -145,6 +146,19 @@ leaderboard is counted live on every read.
 each tier tried only if its key is set and falling through on error. **The app must keep
 working with no API keys at all** — the rule-based engine is a real code path, not a stub,
 so don't make a feature depend unconditionally on an LLM response.
+
+A meeting being recorded is analysed while it happens (`liveAnalysis.js`), because meetings
+run for hours and reading five hours at the end took minutes. Every ten minutes of recording
+(`MEETING_LIVE_CHUNK_SECONDS`) the draft's newest stretch goes to the model with a running
+memory, driven by the recorder's own `PATCH /meetings/draft/:id` pushes, and the result is
+kept in `meeting_live_chunks`. `POST /meetings` with the `draft_id` then reads only the tail,
+plus one call that writes the summary and names duplicates by number. The stretches are a
+cache keyed by their exact text — reused only if still verbatim in the submitted transcript,
+so an edited one is re-read — and any failure falls back to analysing the whole transcript:
+never make a result depend on them. LLM tiers only; with no key it is off. After changing a
+meeting prompt run `npm run eval:live`: its stand-in model (`eval/mockModel.mjs`, also
+`npm run mock:model` for trying the recorder in a browser without a key) recognises the
+prompts by phrases in them.
 
 The voice assistant is a tool-dispatch agent: `voiceTools.js` declares the callable tools,
 `routes/assistant.js` dispatches them, and mutations always round-trip through an on-screen

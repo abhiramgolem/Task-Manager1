@@ -9,7 +9,9 @@
     "dev": "node --watch src/index.js",
     "seed": "node src/seed.js",
     "rag:index": "node src/ragBackfill.js",
-    "eval:voice": "node eval/voiceEval.mjs"
+    "eval:voice": "node eval/voiceEval.mjs",
+    "eval:live": "node eval/liveMeeting.mjs",
+    "mock:model": "node eval/mockModel.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
