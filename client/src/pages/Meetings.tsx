@@ -489,6 +489,58 @@ function recordSegment(stream: MediaStream, ms: number): Promise<Blob> {
   })
 }
 
+// GET /meetings/draft/:id/live
+interface LiveProgress {
+  enabled: boolean
+  interval_seconds?: number
+  parts?: number
+  analysed_seconds?: number
+  tasks?: { title: string; assignee: string | null }[]
+  running?: boolean
+  behind?: boolean
+}
+
+const spoken = (s: number) => {
+  const m = Math.round(s / 60)
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`
+}
+
+// How far the AI has got with the meeting being recorded. Says nothing until
+// there is something true to say: no AI key means no live analysis at all, and
+// then the recorder looks exactly as it always did.
+function LiveAnalysisNote({ live, recording }: { live: LiveProgress | null; recording: boolean }) {
+  if (!live?.enabled) return null
+  const parts = live.parts || 0
+  const tasks = live.tasks || []
+  if (!parts && !live.running) {
+    return recording
+      ? <div className="md-live-hint">AI analyses the meeting every {spoken(live.interval_seconds || 600)} while you record, so the summary is ready soon after you finish.</div>
+      : null
+  }
+  return (
+    <div className="md-live" role="status" data-va="meetings.live.analysis">
+      <div className="md-live-head">
+        <Ic name="ai" size={15} />
+        <span>
+          {parts
+            ? <><b>AI has analysed the first {spoken(live.analysed_seconds || 0)}</b> — {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'} so far.</>
+            : <b>AI is analysing the first part…</b>}
+          {parts > 0 && live.running && <span className="md-live-sub"> Analysing the next part…</span>}
+          {live.behind && <span className="md-live-sub"> Falling behind — anything it misses is analysed when you finish.</span>}
+        </span>
+      </div>
+      {tasks.length > 0 && (
+        <details>
+          <summary>Tasks found so far</summary>
+          <ul>
+            {tasks.map((t, i) => <li key={i}>{t.title}{t.assignee && <span className="md-live-who"> — {t.assignee}</span>}</li>)}
+          </ul>
+        </details>
+      )}
+    </div>
+  )
+}
+
 function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker: string; onClose: () => void; onDone: (id: string) => void }) {
   const { user } = useAuth()
   const uid = user?.id || 'anon'
@@ -568,6 +620,10 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const draftIdRef = useRef<string | null>(null)
   const [syncedAt, setSyncedAt] = useState<number | null>(null)
   const lastSentRef = useRef('')
+  // What the server has already made of this meeting. It analyses the recording
+  // as it grows, ten minutes at a time (server/src/ai/liveAnalysis.js), so that
+  // finishing a long meeting only has its last few minutes left to read.
+  const [live, setLive] = useState<LiveProgress | null>(null)
   useEffect(() => {
     // `interim` is the phrase being spoken right now, not yet promoted to a final
     // line. An interruption lands mid-sentence far more often than between them,
@@ -646,6 +702,20 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     tick()
     return () => clearInterval(h)
   }, [recording, transcript, title, seconds, participants])
+
+  // A stretch takes ten minutes to come due, so every 15 s is plenty — and only
+  // once the server holds this recording, and only while someone can see it.
+  useEffect(() => {
+    let dead = false
+    const poll = () => {
+      const id = draftIdRef.current
+      if (!id || document.hidden) return
+      api.get(`/meetings/draft/${id}/live`).then((d) => { if (!dead) setLive(d) }).catch(() => { /* offline; try again next time */ })
+    }
+    poll()
+    const h = window.setInterval(poll, 15000)
+    return () => { dead = true; window.clearInterval(h) }
+  }, [])
 
   // A refresh mid-meeting is now survivable, but it still costs the few seconds
   // since the last sync — and someone who hits it by accident deserves the chance
@@ -1102,7 +1172,8 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     stop()
     setBusy(true); setErr('')
     try {
-      const r = await api.post('/meetings', { title: title || 'Live Meeting', description, meeting_date: date, transcript, participant_ids: participants })
+      // draft_id lets the server reuse what it analysed while this was recorded.
+      const r = await api.post('/meetings', { title: title || 'Live Meeting', description, meeting_date: date, transcript, participant_ids: participants, draft_id: draftIdRef.current })
       // Only now is the meeting somewhere other than this device.
       clearMeetingDraft(uid)
       if (draftIdRef.current) { try { await api.del('/meetings/draft/' + draftIdRef.current) } catch { /* harmless leftover */ } }
@@ -1194,6 +1265,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
             )}
             {recording && !paused && transcribing && <span className="spinner" />}
           </div>
+          <LiveAnalysisNote live={live} recording={recording && !paused} />
 
           <div>
             <div className="spread">
@@ -1212,7 +1284,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           {err && <div style={{ color: 'var(--danger-ink)', fontSize: 13 }}>{err}</div>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={close}>Cancel</button>
-            <button data-va="meetings.live.finish" className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> Analyzing…</> : <span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}</button>
+            <button data-va="meetings.live.finish" className="btn btn-primary" onClick={process} disabled={busy || recording || !transcript.trim()}>{busy ? <><span className="spinner" /> {live?.parts ? `Analyzing the last ${Math.max(1, Math.ceil((seconds - (live.analysed_seconds || 0)) / 60))} min…` : 'Analyzing…'}</> :<span className="row" style={{ gap: 6 }}><Ic name="ai" size={15} /> Analyze & extract tasks</span>}</button>
           </div>
         </div>
       </div>
