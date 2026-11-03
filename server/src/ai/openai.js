@@ -60,10 +60,34 @@ Respond with ONLY a JSON object (no markdown) matching this shape:
   }]
 }`
 
-export async function analyzeWithOpenAI(transcript, opts = {}) {
+// One system + user turn in, the JSON object in the reply out. Shared with the
+// live analysis (liveAnalysis.js), which asks with its own prompts.
+export async function openaiJson(system, userMsg, { timeoutMs } = {}) {
   const key = process.env.OPENAI_API_KEY
   if (!key) throw new Error('No OPENAI_API_KEY')
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: userMsg }],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+    }),
+  })
+
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`OpenAI ${res.status}: ${body.slice(0, 300)}`)
+  }
+  const data = await res.json()
+  return JSON.parse(data.choices?.[0]?.message?.content || '{}')
+}
+
+export async function analyzeWithOpenAI(transcript, opts = {}) {
+  if (!process.env.OPENAI_API_KEY) throw new Error('No OPENAI_API_KEY')
 
   const attendeeLines = (opts.attendees || []).length
     ? opts.attendees.map((a) => `- ${a.name}${a.role ? ` (${a.role}` : ''}${a.department ? `, ${a.department}` : ''}${a.role || a.department ? ')' : ''}`).join('\n')
@@ -78,24 +102,7 @@ Write all summary fields and task text in ENGLISH. Keep source_quote in the orig
 TRANSCRIPT:
 ${transcript}`
 
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userMsg }],
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-    }),
-  })
-
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`OpenAI ${res.status}: ${body.slice(0, 300)}`)
-  }
-  const data = await res.json()
-  const text = data.choices?.[0]?.message?.content || '{}'
-  const parsed = JSON.parse(text)
+  const parsed = await openaiJson(SYSTEM_PROMPT, userMsg)
 
   parsed.tasks = (parsed.tasks || []).map((t) => ({
     title: t.title,

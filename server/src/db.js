@@ -572,6 +572,28 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_suggested_meeting ON suggested_tasks(meeting_id, status);
 
+  -- What the AI made of a meeting WHILE it was being recorded, a stretch at a
+  -- time (ai/liveAnalysis.js), so the end of a five-hour meeting has only its
+  -- last few minutes left to read. Belongs to the status='recording' draft row
+  -- and goes with it. A cache: a stretch is reused only if its exact text is
+  -- still in the transcript that is finally submitted.
+  CREATE TABLE IF NOT EXISTS meeting_live_chunks (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,                       -- order analysed
+    text TEXT NOT NULL,                         -- the transcript lines analysed, verbatim
+    start_seconds INTEGER DEFAULT 0,            -- recording clock at either end
+    end_seconds INTEGER DEFAULT 0,
+    memory TEXT,                                -- running memory through this stretch
+    notes_json TEXT,                            -- its summary, decisions, risks, blockers, follow-ups
+    tasks_json TEXT,                            -- tasks found in it
+    languages TEXT,
+    engine TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_live_chunks_meeting ON meeting_live_chunks(meeting_id, seq);
+
   -- Team invitations: a manager invites a teammate by email; the invitee follows
   -- a tokenized link to set their own password and join the org with the given role.
   CREATE TABLE IF NOT EXISTS invites (

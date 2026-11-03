@@ -20,12 +20,15 @@ import { detectLanguages } from './rules.js'
 // the model emits (ml, ta, kn, …) is dropped so other languages never leak through.
 import { CATEGORY_LABELS } from '../categories.js'
 const ALLOWED_LANGS = new Set(['en', 'hi', 'te'])
-const keepAllowedLangs = (val) =>
+export const keepAllowedLangs = (val) =>
   (Array.isArray(val) ? val : String(val || '').split('+'))
     .map((s) => s.trim().toLowerCase())
     .filter((l) => ALLOWED_LANGS.has(l))
 
-const API_URL = 'https://openrouter.ai/api/v1/chat/completions'
+// Read per call, so a base URL set in .env is honoured whenever this module was
+// first imported. Overridable for an OpenAI-compatible gateway, or for the
+// stand-in model eval/liveMeeting.mjs runs on localhost.
+const apiUrl = () => (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '') + '/chat/completions'
 
 // ~4 chars/token. Below SINGLE_SHOT_CHARS we send the whole transcript at once;
 // above it we map-reduce. Both are env-tunable for different models/limits.
@@ -38,11 +41,11 @@ const clampScore = (v, fallback) => {
   return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : fallback
 }
 
-const LANGUAGE_RULE = `The conversation may be in English, Hindi, Telugu, or any code-mixed combination (e.g. "Ravi, deployment documentation ready cheyyandi by tomorrow"). You MUST understand all of these, including regional accents, informal workplace phrasing, and mixed scripts.
+export const LANGUAGE_RULE = `The conversation may be in English, Hindi, Telugu, or any code-mixed combination (e.g. "Ravi, deployment documentation ready cheyyandi by tomorrow"). You MUST understand all of these, including regional accents, informal workplace phrasing, and mixed scripts.
 ALWAYS write summaries, decisions, action items, and every task title/description in ENGLISH, translating as needed. The ONLY field that stays in the original spoken language is source_quote (cite the exact transcript line verbatim).
 detected_languages MUST ONLY contain codes from this exact set: "en" (English), "hi" (Hindi), "te" (Telugu). Include a code only if that language is actually spoken in the transcript. NEVER output any other language code (no mr, pa, gu, bn, ml, etc.) — Hindi and Telugu are the only Indian languages to report; treat related Indian languages as Hindi.`
 
-const TASK_RULES = `Rules for task extraction:
+export const TASK_RULES = `Rules for task extraction:
 - A task exists whenever someone is asked to do something OR commits to doing something, even across mixed languages.
 - assignee_name = who must execute. assigned_by_name = who gave the task (usually the speaker).
 - Each task has exactly ONE assignee. If one sentence assigns DIFFERENT work to DIFFERENT people, output a SEPARATE task per person. Never merge two people's work into one task.
@@ -57,7 +60,7 @@ const TASK_RULES = `Rules for task extraction:
 - category = which business unit / brand the task belongs to, chosen ONLY from: ${CATEGORY_LABELS.join(', ')}. Use the meeting's overall topic as context. If it clearly fits none, set null. NEVER invent a category outside this list.
 - Ignore greetings, introductions, jokes, and casual side discussions. Extract ONLY actionable work items.`
 
-const TASK_SHAPE = `"tasks": [{
+export const TASK_SHAPE = `"tasks": [{
   "title":"... (English)","description":"... (English)","assignee_name":"...|null","assigned_by_name":"...|null",
   "assignee_reasoning":"... (English)","confidence":85,
   "due_date":"YYYY-MM-DD|null","due_date_raw":"...|null","priority":"High",
@@ -127,7 +130,10 @@ Respond with ONLY a JSON object (no markdown) matching this shape:
 
 // --- HTTP -------------------------------------------------------------------
 
-async function callOpenRouter(systemPrompt, userMsg) {
+// timeoutMs: the meeting paths below have never had one and keep it that way;
+// the live analysis (liveAnalysis.js) passes one, since a request that hangs
+// there would stall every later stretch of the same meeting behind it.
+export async function callOpenRouter(systemPrompt, userMsg, { timeoutMs } = {}) {
   const key = process.env.OPENROUTER_API_KEY
   if (!key) throw new Error('No OPENROUTER_API_KEY')
   // Deliberately NOT the generic OPENROUTER_MODEL: that var is tuned for voice
@@ -137,8 +143,9 @@ async function callOpenRouter(systemPrompt, userMsg) {
   // every meeting analysis again.
   const model = process.env.OPENROUTER_MEETING_MODEL || 'google/gemini-2.5-pro'
 
-  const res = await fetch(API_URL, {
+  const res = await fetch(apiUrl(), {
     method: 'POST',
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${key}`,
@@ -176,7 +183,7 @@ function parseJson(text) {
 }
 
 // Normalize a model task into the internal shape persistMeeting expects.
-function normalizeTask(t) {
+export function normalizeTask(t) {
   return {
     title: t.title,
     description: t.description || t.title,
@@ -219,7 +226,7 @@ function chunkTranscript(text) {
   return chunks
 }
 
-function attendeeBlock(opts) {
+export function attendeeBlock(opts) {
   const lines = (opts.attendees || []).length
     ? opts.attendees.map((a) => `- ${a.name}${a.role ? ` (${a.role}` : ''}${a.department ? `, ${a.department}` : ''}${a.role || a.department ? ')' : ''}`).join('\n')
     : (opts.knownNames || []).map((n) => `- ${n}`).join('\n') || 'none provided'
