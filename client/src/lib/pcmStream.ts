@@ -6,6 +6,8 @@
 
 export interface PcmStream {
   stop: () => void
+  /** The microphone track, so a long recording can notice the mic going away. Absent if it never opened. */
+  track?: MediaStreamTrack
 }
 
 // Float32 [-1,1] -> Int16 little-endian bytes -> base64 (browser-safe, no Buffer).
@@ -112,6 +114,13 @@ export async function startPcmStream(
   const processor = ctx.createScriptProcessor(4096, 1, 1)
   processor.onaudioprocess = (e) => {
     const input = e.inputBuffer.getChannelData(0)
+    // Never output exact digital silence. Chromium moves a context whose output
+    // is all zeros onto a stand-in, timer-driven sink after a few seconds, and
+    // once the window is minimised (or the phone's screen is off) that timer is
+    // throttled: the graph then runs slower than the microphone and about a
+    // third of a long recording's audio was being dropped. A -120 dB offset is
+    // inaudible and keeps the real device clock driving the capture.
+    e.outputBuffer.getChannelData(0).fill(1e-6)
     if (onLevel) {
       let sum = 0
       for (let i = 0; i < input.length; i++) sum += input[i] * input[i]
@@ -124,6 +133,7 @@ export async function startPcmStream(
   processor.connect(ctx.destination) // required for onaudioprocess to fire in some browsers
 
   return {
+    track: stream.getAudioTracks()[0],
     stop: () => {
       try { processor.disconnect() } catch {}
       try { source.disconnect() } catch {}

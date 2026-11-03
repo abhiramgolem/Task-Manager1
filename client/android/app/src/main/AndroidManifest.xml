@@ -48,6 +48,14 @@
             android:name="com.capacitorjs.plugins.pushnotifications.MessagingService"
             tools:node="remove" />
 
+        <!-- Keeps a meeting recording going with the screen off. Without a
+             microphone-type foreground service Android hands a backgrounded
+             app silence instead of audio. -->
+        <service
+            android:name=".MeetingRecordingService"
+            android:foregroundServiceType="microphone"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -63,6 +71,11 @@
     <!-- Microphone: live meeting recording / browser captions (getUserMedia + Web Speech). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Recording a meeting with the screen off (MeetingRecordingService). The
+         microphone type is its own permission from Android 14, and Play asks
+         for a declaration of it in the Console. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- Push notifications (Android 13+ runtime permission). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Calls. Without CAMERA the WebView's getUserMedia({video}) is refused
