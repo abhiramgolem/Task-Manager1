@@ -2269,6 +2269,40 @@ export default function Chats() {
   // image opens it, but a long-press on one selects the message, and the
   // phone's own long-press menu is kept out of the way. Mouse devices get none
   // of this: they have the hover tools.
+  // A chat in the list on a touch screen: holding it opens its options, as on
+  // WhatsApp, where a mouse has the ⋯ button that appears on hover.
+  const rowPressRef = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null)
+  const rowPressedRef = useRef(false)
+  const convoTouch = (cid: string) => (!touchUI ? {} : {
+    onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+      rowPressedRef.current = false
+      if ((e.target as HTMLElement).closest('button, .msg-menu')) return
+      const row = e.currentTarget
+      if (rowPressRef.current) clearTimeout(rowPressRef.current.timer)
+      rowPressRef.current = {
+        x: e.clientX, y: e.clientY,
+        timer: setTimeout(() => {
+          rowPressRef.current = null
+          rowPressedRef.current = true
+          try { navigator.vibrate?.(12) } catch { /* the menu says it */ }
+          setMenuAnchor(row.querySelector('.convo-menu-btn') as HTMLElement | null)
+          setConvoMenu(cid)
+        }, LONG_PRESS_MS),
+      }
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+      const p = rowPressRef.current
+      if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 10) { clearTimeout(p.timer); rowPressRef.current = null }
+    },
+    onPointerUp: () => { if (rowPressRef.current) { clearTimeout(rowPressRef.current.timer); rowPressRef.current = null } },
+    onPointerCancel: () => { if (rowPressRef.current) { clearTimeout(rowPressRef.current.timer); rowPressRef.current = null } },
+    onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => e.preventDefault(),
+    // The click a long-press ends with must neither open the chat nor reach
+    // the document, which would close the menu it just opened.
+    onClickCapture: (e: React.MouseEvent<HTMLDivElement>) => {
+      if (rowPressedRef.current) { rowPressedRef.current = false; e.preventDefault(); e.stopPropagation() }
+    },
+  })
   const bubbleTouch = (m: Msg) => (!touchUI || m.id.startsWith('tmp_') ? {} : {
     onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
       longPressedRef.current = false
@@ -2606,7 +2640,7 @@ export default function Chats() {
             <button className="ic-btn" onClick={() => setShowMentions(true)} title="Messages that mention me" aria-label="Messages that mention me"><Ic name="at" size={18} /></button>
             <button className="ic-btn" onClick={() => setShowStarred(true)} title="Starred messages" aria-label="Starred messages"><Ic name="star" size={18} /></button>
             <button className="ic-btn" onClick={() => setShowLater(true)} title="Reminders & scheduled messages" aria-label="Reminders and scheduled messages"><Ic name="clock" size={18} /></button>
-            <button className="btn btn-primary btn-sm row" style={{ gap: 5, marginLeft: 4 }} onClick={() => setShowNew(true)} title="New chat / group"><Ic name="plus" size={15} /> New</button>
+            <button className="btn btn-primary btn-sm row ch-new" style={{ gap: 5, marginLeft: 4 }} onClick={() => setShowNew(true)} title="New chat / group"><Ic name="plus" size={15} /> New</button>
           </div>
         </div>
         <input className="chat-contact-search" placeholder="Search chats…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -2670,15 +2704,15 @@ export default function Chats() {
             const lastTicks = c.last_from_me && c.last_kind !== 'system' && c.last_kind !== 'call' && c.last_kind !== 'meeting' && c.last_message && !/deleted this message$/.test(c.last_message)
               ? <Ticks state={c.last_seen ? 'read' : c.last_delivered ? 'delivered' : 'sent'} /> : null
             return (
-              <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '') + (hasUnread(c) && !c.muted ? ' has-unread' : '')} onClick={() => setActiveId(c.id)}>
+              <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '') + (hasUnread(c) && !c.muted ? ' has-unread' : '')} onClick={() => setActiveId(c.id)} {...convoTouch(c.id)}>
                 {/* The avatar is its own button, as on WhatsApp: it opens the
                     chat with its info already up, where the row opens just the chat. */}
                 <button type="button" className="ci-list-avatar" title={c.type === 'group' ? 'Group info' : 'Contact info'}
                   aria-label={`${c.name}: ${c.type === 'group' ? 'group' : 'contact'} info`}
                   onClick={(e) => { e.stopPropagation(); openInfoFor(c.id) }}>
                   {c.type === 'group'
-                    ? <GroupAvatar conv={c} size={38} />
-                    : <PresenceAvatar name={c.name} color={c.avatar_color} size={38} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
+                    ? <GroupAvatar conv={c} size={48} />
+                    : <PresenceAvatar name={c.name} color={c.avatar_color} size={48} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
                 </button>
                 <div className="convo-meta" style={{ minWidth: 0, flex: 1 }}>
                   <div className="row spread" style={{ gap: 6 }}>
@@ -2733,6 +2767,11 @@ export default function Chats() {
           })}
         </div>
         </>)}
+        {/* Phones: new chat is the round button over the list's corner, as on
+            WhatsApp; the toolbar's "New" gives way to it (styles.css). */}
+        {!showArchived && (
+          <button className="chat-fab" onClick={() => setShowNew(true)} title="New chat or group" aria-label="New chat or group"><Ic name="plus" size={24} /></button>
+        )}
       </aside>
 
       {/* ---- conversation pane ---- */}
@@ -3070,7 +3109,6 @@ export default function Chats() {
                   ) : (
                   <div className={'msg-line' + (mine ? ' mine' : '')}>
                     <div className="msg-body">
-                      {showSender && <div className="msg-sender" style={{ color: senderColor(m.sender_id) }}>{senderName(m.sender_id)}</div>}
                       {m.deleted ? (
                         <div className="bubble deleted row" style={{ gap: 6 }} {...bubbleTouch(m)}><Ic name="block" size={13} /> {mine ? 'You deleted this message' : 'This message was deleted'}<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
                       ) : (
@@ -3078,7 +3116,9 @@ export default function Chats() {
                           className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !m.uploading ? ' pic-bubble' : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
                           {...bubbleTouch(m)}
                         >
-                          {m.forwarded && <div className="forwarded-tag row" style={{ gap: 5 }}><Ic name="forward" size={12} /> Forwarded</div>}
+                          {/* In the bubble, as WhatsApp writes who said it. */}
+                          {showSender && <div className="msg-sender" style={{ color: senderColor(m.sender_id) }}>{senderName(m.sender_id)}</div>}
+                          {m.forwarded &&<div className="forwarded-tag row" style={{ gap: 5 }}><Ic name="forward" size={12} /> Forwarded</div>}
                           {m.reply && (
                             <button type="button" className="reply-quote" onClick={(e) => { e.stopPropagation(); jumpToReply(m.reply!) }} aria-label={`Replying to ${m.reply.sender_id === user!.id ? 'yourself' : m.reply.sender_name}: ${m.reply.text}. Show it`}>
                               <span className="reply-quote-main">
