@@ -84,6 +84,8 @@ interface StagedFile { id: string; file: File; url: string | null }
 const MAX_STAGED = 10
 // A message longer than this folds behind "Read more", as on WhatsApp — one
 // pasted log should not push a whole conversation off the screen.
+// Messages from one person this close together read as one turn (see `cont`).
+const RUN_GAP_MS = 5 * 60_000
 const FOLD_CHARS = 700
 const FOLD_LINES = 14
 // The folded part: whole lines up to the limit, then whole words, then "…".
@@ -2847,7 +2849,19 @@ export default function Chats() {
               const isTemp = m.id.startsWith('tmp_')
               const isImage = !!m.file && (m.file.type || '').startsWith('image/')
               const isCard = !!m.kind && !m.deleted
-              const showSender = active?.type === 'group' && !mine && !m.deleted
+              // A run: the same person again, straight after and within a few
+              // minutes. As in WhatsApp and Cliq, only its first message carries
+              // the name and the face, and the run sits closer together — a name
+              // over every line made a busy group read like a list of strangers.
+              const prevIt = logItems[idx - 1]
+              const prevM = prevIt && 'm' in prevIt ? prevIt.m : null
+              const plain = (x: Msg) => x.kind !== 'system' && !x.call && !x.meeting
+              const cont = !!prevM && plain(prevM) && plain(m) && !prevM.deleted && prevM.sender_id === m.sender_id
+                && new Date(m.created_at).getTime() - new Date(prevM.created_at).getTime() < RUN_GAP_MS
+              const inGroup = active?.type === 'group'
+              const withFace = inGroup && !mine && plain(m)
+              const showSender = inGroup && !mine && !m.deleted && !cont
+              const face = withFace && !cont ? active?.members.find((mm) => mm.id === m.sender_id) : null
               // A message that names me gets an accent stripe — in a busy group,
               // scrolling back for the one line that was actually aimed at you is
               // the whole reason mentions exist.
@@ -2881,7 +2895,7 @@ export default function Chats() {
               )
               return (
                 <div key={m.id} data-msg={m.id}
-                  className={'msg-wrap' + (flashId === m.id ? ' flash' : '') + (touchUI && selectedId === m.id && !m.deleted ? ' selected' : '') + (picked ? ' picked' : '') + (m.call || m.meeting ? ' centred' : mine ? ' mine' : '')}
+                  className={'msg-wrap' + (flashId === m.id ? ' flash' : '') + (touchUI && selectedId === m.id && !m.deleted ? ' selected' : '') + (picked ? ' picked' : '') + (m.call || m.meeting ? ' centred' : mine ? ' mine' : '') + (cont ? ' cont' : '') + (withFace ? ' has-face' : '')}
                   style={{ alignItems: m.call || m.meeting ? 'center' : mine ? 'flex-end' : 'flex-start' }}
                   // Desktop, picking messages: a click anywhere on the row picks
                   // it — caught on the way down, so a quote, a link or a button
@@ -2898,6 +2912,11 @@ export default function Chats() {
                     </button>
                   )}
                   {touchUI && !multi && !m.call && !m.meeting && <span className="swipe-ic" aria-hidden="true"><Ic name="reply" size={16} /></span>}
+                  {face && (
+                    <span className="msg-face" aria-hidden="true">
+                      <Avatar name={face.name} color={face.avatar_color} size={28} src={face.avatar_file ? userAvatarUrl(face.id, face.avatar_file) : undefined} />
+                    </span>
+                  )}
                   {m.meeting ? (
                     <CallSummaryCard
                       meeting={m.meeting}

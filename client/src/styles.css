@@ -2434,8 +2434,10 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 .file-bubble { padding: 8px 10px; }
 .chat-image { display: block; max-width: 240px; max-height: 240px; border-radius: 10px; cursor: pointer; }
 /* A picture's bubble is the picture's width, and a caption wraps under it, as
-   on WhatsApp — not a wide bubble with the picture parked at one end. */
-.bubble.pic-bubble { width: min-content; }
+   on WhatsApp — not a wide bubble with the picture parked at one end. The
+   floor is for the moment before a lazy picture loads: it is 0px wide then,
+   and the bubble shrank to the caption's longest word, one word a line. */
+.bubble.pic-bubble { width: min-content; min-width: 160px; }
 .chat-file { display: flex; align-items: center; gap: 10px; }
 .chat-file-icon { font-size: 22px; }
 .chat-file-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
@@ -3237,9 +3239,13 @@ body:has(.rv-center) .va-dock { display: none; }
   .btn { padding: 10px 16px; }
   .nav a { padding: 12px 12px; }
 
-  /* chat: roomier bubbles + full-width contact list on small screens */
-  .bubble { max-width: 85%; }
-  .msg-line { max-width: 92%; }
+  /* chat: roomier bubbles + full-width contact list on small screens. The row
+     (.msg-line) is what caps a bubble, at WhatsApp's ~85% of the screen. A
+     percentage on the bubble itself resolved against a row sized by the bubble,
+     so every message wrapped at 85% of its own width — thin, early-wrapping
+     bubbles with a dead gap beside them. */
+  .bubble { max-width: 100%; }
+  .msg-line { max-width: 85%; }
 
   /* composer: round attach tucked beside the input, input grows, tidy Send */
   .chat-input { gap: 7px; align-items: center; }
@@ -3523,7 +3529,7 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
      underneath — same tap targets, no competition for width.
      Each wrapped line holds one item, so row-reverse on .mine no longer reorders
      anything; flex-start alone lands the buttons under the side they belong to. */
-  .msg-line { flex-wrap: wrap; max-width: 96%; }
+  .msg-line { flex-wrap: wrap; max-width: 85%; }
   .msg-body { flex: 1 1 100%; }
   .msg-tools { flex: 0 0 auto; margin-top: 1px; }
 }
@@ -4352,6 +4358,15 @@ button.rx-row:hover { background: var(--bg); }
 .to-bottom svg { color: var(--primary); }
 .to-bottom-count { color: var(--primary); }
 
+/* Runs from one sender (Chats.tsx `cont`): closer together than separate turns.
+   In a group, others' messages keep a slot for the sender's face, filled on the
+   first of a run, so every bubble in the run lines up under it. */
+.msg-wrap.cont { margin-top: -4px; }
+.msg-wrap.has-face { position: relative; padding-left: 34px; }
+.msg-face { position: absolute; left: 0; top: 0; line-height: 0; }
+.chat-log.picking .msg-wrap.has-face { padding-left: 70px; }
+.chat-log.picking .msg-face { left: 36px; }
+
 /* Picking several messages: a check circle in front of each, the picked ones tinted. */
 .chat-log.picking .msg-wrap { position: relative; padding-left: 36px; }
 .chat-log.picking .msg-wrap.centred { padding-left: 0; }
@@ -4402,7 +4417,10 @@ button.reply-quote {
 .chat-file-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: color-mix(in srgb, currentColor 12%, transparent); flex-shrink: 0; }
 
 /* Cards inside a bubble: the bubble gives them room and keeps the time below. */
-.bubble.card-bubble { padding: 6px; min-width: 240px; max-width: 300px; }
+/* One width for every card, as WhatsApp and Cliq draw them: sized by its
+   content, a one-word task ("Call") came out a thin 240px strip beside a long
+   one's 300px, and the thread looked ragged. */
+.bubble.card-bubble { padding: 6px; width: 320px; max-width: 100%; }
 .bubble.card-bubble .bubble-foot { position: static; display: flex; justify-content: flex-end; margin: 4px 4px 0; }
 .bubble.card-bubble .reply-quote { margin-bottom: 6px; }
 
