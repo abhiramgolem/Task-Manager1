@@ -60,15 +60,18 @@ async function getAccessToken() {
   return cachedToken.access_token
 }
 
+// Whether this server can send pushes at all (FIREBASE_SERVICE_ACCOUNT set).
+export const pushEnabled = () => !!getServiceAccount()
+
 // Persist a device's FCM token for a user (idempotent: one row per token).
-export function saveDeviceToken(userId, token, platform = 'android', { callRing = false, chime = false } = {}) {
+export function saveDeviceToken(userId, token, platform = 'android', { callRing = false, chime = false, appBuild = null } = {}) {
   if (!userId || !token) return
   // A token can migrate between users (shared device / re-login) — keep it tied to
   // the latest user so pushes never leak to a previous account.
   db.prepare('DELETE FROM device_tokens WHERE token=?').run(token)
   db.prepare(
-    `INSERT INTO device_tokens (id, user_id, token, platform, created_at, call_ring, chime) VALUES (?,?,?,?,?,?,?)`
-  ).run(`dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, userId, token, platform, new Date().toISOString(), callRing ? 1 : 0, chime ? 1 : 0)
+    `INSERT INTO device_tokens (id, user_id, token, platform, created_at, call_ring, chime, app_build) VALUES (?,?,?,?,?,?,?,?)`
+  ).run(`dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, userId, token, platform, new Date().toISOString(), callRing ? 1 : 0, chime ? 1 : 0, appBuild)
 }
 
 export function removeDeviceToken(token) {
@@ -86,20 +89,37 @@ export function removeDeviceToken(token) {
 // channel playing it ('votask_chime', push.ts); Android takes the sound from
 // the channel. An older build has neither, so it keeps its default-tone one.
 export async function sendPushToUser(userId, { title, body, data, tag }) {
+  if (!userId) return
+  const rows = db.prepare('SELECT token, chime FROM device_tokens WHERE user_id=?').all(userId)
+  await sendToDevices(rows, { title, body, data, tag })
+}
+
+// "A new version is on the Play Store", to every phone whose app is older than
+// belowBuild (its versionCode). Builds before 4.5 do not report their version
+// (app_build is NULL), so they count as older. Returns how many phones it
+// went to. Sent from the platform console once a release is live on Play.
+export async function sendUpdatePush(belowBuild, { title, body }) {
+  const rows = db.prepare('SELECT token, chime FROM device_tokens WHERE app_build IS NULL OR app_build < ?').all(belowBuild)
+  const sent = await sendToDevices(rows, { title, body, data: { type: 'app_update' }, tag: 'app_update' })
+  return { devices: rows.length, sent }
+}
+
+// One notification to each of these devices (rows of token, chime). Returns
+// how many FCM accepted.
+async function sendToDevices(rows, { title, body, data, tag }) {
   const sa = getServiceAccount()
-  if (!sa || !userId) return
-  const tokens = db.prepare('SELECT token, chime FROM device_tokens WHERE user_id=?').all(userId)
-  if (!tokens.length) return
+  if (!sa || !rows.length) return 0
 
   let accessToken
-  try { accessToken = await getAccessToken() } catch (e) { console.warn('  [push] auth failed:', e.message); return }
-  if (!accessToken) return
+  try { accessToken = await getAccessToken() } catch (e) { console.warn('  [push] auth failed:', e.message); return 0 }
+  if (!accessToken) return 0
 
   const stringData = {}
   for (const [k, v] of Object.entries(data || {})) stringData[k] = v == null ? '' : String(v)
 
   const url = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`
-  await Promise.all(tokens.map(async ({ token: tok, chime }) => {
+  let sent = 0
+  await Promise.all(rows.map(async ({ token: tok, chime }) => {
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -118,20 +138,20 @@ export async function sendPushToUser(userId, { title, body, data, tag }) {
           },
         }),
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        const status = err?.error?.status || ''
-        // Prune tokens FCM says are gone/invalid so they don't pile up.
-        if (res.status === 404 || status === 'NOT_FOUND' || status === 'UNREGISTERED' || status === 'INVALID_ARGUMENT') {
-          db.prepare('DELETE FROM device_tokens WHERE token=?').run(tok)
-        } else {
-          console.warn('  [push] send failed', res.status, JSON.stringify(err).slice(0, 150))
-        }
+      if (res.ok) { sent++; return }
+      const err = await res.json().catch(() => ({}))
+      const status = err?.error?.status || ''
+      // Prune tokens FCM says are gone/invalid so they don't pile up.
+      if (res.status === 404 || status === 'NOT_FOUND' || status === 'UNREGISTERED' || status === 'INVALID_ARGUMENT') {
+        db.prepare('DELETE FROM device_tokens WHERE token=?').run(tok)
+      } else {
+        console.warn('  [push] send failed', res.status, JSON.stringify(err).slice(0, 150))
       }
     } catch (e) {
       console.warn('  [push] send error:', e.message)
     }
   }))
+  return sent
 }
 
 // An incoming call, WhatsApp-style. Two shapes, because two generations of the

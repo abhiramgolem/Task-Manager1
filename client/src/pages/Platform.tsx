@@ -84,6 +84,8 @@ export default function Platform() {
         <div className="kpi" style={{ ['--kc' as any]: '#a855f7' }}><div><div className="kpi-val">{fmtUsd(stats.ai_cost)}</div><div className="kpi-label">AI spend · {fmtNum(stats.ai_calls)} calls</div></div></div>
       </div>
 
+      <AppUpdateCard />
+
       <div className="toolbar">
         <input placeholder="Search organizations…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
         <div className="muted" style={{ marginLeft: 'auto' }}>{filtered.length} of {orgs.length} orgs</div>
@@ -247,6 +249,65 @@ function OrgDetailModal({ state, onClose, onRetry, onChanged }: {
             </>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------- phones: tell them a new version is out ----------
+// Once a release is live on Google Play, one push to every phone on an older
+// build ("VoTask update available"). Phones from 4.5 on report their build and
+// a tap opens Play's update screen; older ones just open the app, so the
+// message says where to go.
+function AppUpdateCard() {
+  const [info, setInfo] = useState<{ push: boolean; builds: { build: number | null; devices: number }[] } | null>(null)
+  const [build, setBuild] = useState('')
+  const [body, setBody] = useState('A new version of VoTask is on the Play Store. Open Play Store, find VoTask and tap Update.')
+  const [busy, setBusy] = useState(false)
+  const load = () => api.get('/platform/app-update').then((d) => {
+    setInfo(d)
+    const top = Math.max(0, ...d.builds.map((b: any) => b.build || 0))
+    setBuild((cur) => cur || (top ? String(top) : ''))
+  }).catch(() => setInfo({ push: false, builds: [] }))
+  useEffect(() => { load() }, [])
+  const n = Number(build)
+  const older = info ? info.builds.filter((b) => b.build == null || b.build < n).reduce((t, b) => t + b.devices, 0) : 0
+  const send = async () => {
+    const ok = await confirmDialog({
+      title: 'Tell phones to update',
+      message: `Send "VoTask update available" to ${older} phone${older === 1 ? '' : 's'} on a version older than ${n}? Only do this once version ${n} is live on Google Play.`,
+      confirmText: 'Send',
+    })
+    if (!ok) return
+    setBusy(true)
+    try {
+      const r = await api.post('/platform/app-update', { build: n, body })
+      toast.success(`Sent to ${r.sent} of ${r.devices} phone${r.devices === 1 ? '' : 's'}`)
+      load()
+    } catch (e: any) { toast.error(e.message) }
+    finally { setBusy(false) }
+  }
+  return (
+    <div className="card section">
+      <div className="card-head spread"><h3 className="row" style={{ gap: 7 }}><Ic name="bell" size={16} /> Phone app update</h3></div>
+      <div className="card-pad grid" style={{ gap: 10 }}>
+        {!info ? <span className="spinner" /> : (<>
+          <div className="muted" style={{ fontSize: 13 }}>
+            {info.builds.length === 0 ? 'No phones registered for notifications.' : info.builds.map((b) => `${b.build == null ? 'before 4.5' : `version ${b.build}`}: ${b.devices}`).join(' · ')}
+          </div>
+          {!info.push && <div className="muted" style={{ fontSize: 13 }}>Push notifications are not set up on this server.</div>}
+          <label className="grid" style={{ gap: 4, fontSize: 13 }}>New version code (the versionCode just released)
+            <input type="number" min={2} value={build} onChange={(e) => setBuild(e.target.value)} style={{ maxWidth: 160 }} />
+          </label>
+          <label className="grid" style={{ gap: 4, fontSize: 13 }}>Message
+            <textarea rows={2} maxLength={300} value={body} onChange={(e) => setBody(e.target.value)} />
+          </label>
+          <div className="row" style={{ gap: 10 }}>
+            <button className="btn btn-primary btn-sm" disabled={busy || !info.push || !Number.isInteger(n) || n < 2 || !older || !body.trim()} onClick={send}>
+              {busy ? 'Sending…' : `Notify ${older} phone${older === 1 ? '' : 's'} on older versions`}
+            </button>
+          </div>
+        </>)}
       </div>
     </div>
   )

@@ -10,11 +10,13 @@ r.use(authRequired)
 // Register this device's FCM token so the user gets native push. Called by the
 // app after it obtains a token (and on every login, in case the token rotated).
 r.post('/register-device', (req, res) => {
-  const { token, platform, call_ring: callRing, chime } = req.body || {}
+  const { token, platform, call_ring: callRing, chime, app_build: appBuild } = req.body || {}
   if (!token) return res.status(400).json({ error: 'token required' })
   // call_ring: this build can put up a full-screen incoming call (see sendCallPush).
   // chime: it has VoTask's own notification sound (see sendPushToUser).
-  saveDeviceToken(req.user.id, token, platform || 'android', { callRing: !!callRing, chime: !!chime })
+  // app_build: its versionCode (see sendUpdatePush).
+  const build = Number.isInteger(appBuild) && appBuild > 0 && appBuild < 1e7 ? appBuild : null
+  saveDeviceToken(req.user.id, token, platform || 'android', { callRing: !!callRing, chime: !!chime, appBuild: build })
   res.json({ ok: true })
 })
 

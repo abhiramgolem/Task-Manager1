@@ -26,12 +26,12 @@ android {
         // see, so it doesn't have to track versionCode. 14 shipped as "3.7",
         // 15 as "3.8", 16 as "3.9", 17 as "4.0" and 18 as "4.1". 19 was taken on
         // Play by an upload from elsewhere, so 25 shipped as "4.2" and 26 as
-        // "4.3"; this ships as "4.4" on a versionCode of 27.
+        // "4.3", "4.4" on 27; this ships as "4.5" on a versionCode of 28.
         // applicationId stays io.smarttask.app: changing it would register a
         // brand-new app on Play, orphaning the existing listing, reviews and
         // installs.
-        versionCode 27
-        versionName "4.4"
+        versionCode 28
+        versionName "4.5"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -78,6 +78,9 @@ dependencies {
     implementation "com.google.firebase:firebase-messaging:${rootProject.ext.has('firebaseMessagingVersion') ? rootProject.ext.firebaseMessagingVersion : '25.0.1'}"
     // NotificationCompat.CallStyle (androidx.core 1.9+); appcompat only pulls core in transitively.
     implementation "androidx.core:core:$androidxCoreVersion"
+    // Google Play's In-App Updates: the "new version available" prompt
+    // (AppUpdatePlugin).
+    implementation "com.google.android.play:app-update:2.1.0"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

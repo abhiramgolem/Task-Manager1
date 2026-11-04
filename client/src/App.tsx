@@ -7,6 +7,7 @@ import { savedAccounts, SavedAccount } from './accounts'
 import { runBackHandlers } from './back'
 import { setPushNavigator } from './push'
 import { startShareTarget, onShare, hasShare } from './lib/shareTarget'
+import { startUpdateCheck } from './lib/appUpdate'
 import { useEscape } from './lib/useEscape'
 import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
@@ -556,6 +557,8 @@ export default function App() {
   useAndroidBackButton()
   usePushNavigator()
   useShareTarget(!!user)
+  // Play has a newer build for this phone: offer it (lib/appUpdate).
+  useEffect(() => { startUpdateCheck() }, [])
   return (
     <>
     <ToastHost />

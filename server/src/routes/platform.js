@@ -3,6 +3,7 @@ import { db } from '../db.js'
 import { authRequired, requirePlatformAdmin } from '../auth.js'
 import { audit } from '../util.js'
 import { usageForOrg } from '../ai/usage.js'
+import { sendUpdatePush, pushEnabled } from '../push.js'
 
 // CROSS-ORG platform admin routes. The ONLY place that reads/writes across orgs —
 // gated to a flagged super-admin. Normal org isolation is untouched everywhere else.
@@ -106,6 +107,28 @@ r.delete('/orgs/:id', (req, res) => {
   }
   audit(req.user.org_id, req.user.id, 'platform.org_delete', 'organization', org.id, org.name)
   res.json({ ok: true })
+})
+
+// Phones and the app version each runs (versionCode; NULL = before 4.5, which
+// did not report it), for the "tell phones to update" card.
+r.get('/app-update', (req, res) => {
+  const builds = db.prepare('SELECT app_build AS build, COUNT(*) AS devices FROM device_tokens GROUP BY app_build ORDER BY app_build DESC').all()
+  res.json({ push: pushEnabled(), builds })
+})
+
+// "VoTask update available" to every phone on a build older than `build`.
+// Pressed once a release is live on Google Play, not before: a phone told to
+// update before Play offers it finds nothing to install.
+r.post('/app-update', async (req, res) => {
+  const build = Number(req.body?.build)
+  if (!Number.isInteger(build) || build < 2 || build > 1e7) return res.status(400).json({ error: 'build must be the new versionCode' })
+  if (!pushEnabled()) return res.status(503).json({ error: 'Push notifications are not configured on this server' })
+  const title = String(req.body?.title || '').trim().slice(0, 80) || 'VoTask update available'
+  const body = String(req.body?.body || '').trim().slice(0, 300) ||
+    'A new version of VoTask is on the Play Store. Open Play Store, find VoTask and tap Update.'
+  const out = await sendUpdatePush(build, { title, body })
+  audit(req.user.org_id, req.user.id, 'platform.app_update_push', 'app', String(build), `${out.sent} of ${out.devices} phones`)
+  res.json(out)
 })
 
 export default r

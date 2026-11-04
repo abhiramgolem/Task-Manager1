@@ -10,6 +10,7 @@ import { api, API_BASE } from './api'
 import { nativeCallsAvailable, configureNativeCalls } from './lib/nativeCall'
 import { notifTarget, replacesEntry } from './lib/notifTarget'
 import { shareTargetAvailable } from './lib/shareTarget'
+import { openUpdate } from './lib/appUpdate'
 
 let started = false
 let lastToken: string | null = null
@@ -77,10 +78,14 @@ export async function registerPush() {
     // send calls to it as silent data pushes (see sendCallPush). An older build
     // registers without it and keeps getting an ordinary notification.
     const callRing = nativeCallsAvailable()
+    // This build's versionCode, so an "update available" push skips phones
+    // already on the new one (the server's sendUpdatePush).
+    let appBuild: number | undefined
+    try { const { App } = await import('@capacitor/app'); appBuild = parseInt((await App.getInfo()).build, 10) || undefined } catch {}
     if (callRing) configureNativeCalls(API_BASE || location.origin)
     PushNotifications.addListener('registration', async (token) => {
       lastToken = token.value
-      try { await api.post('/notifications/register-device', { token: token.value, platform: 'android', call_ring: callRing, chime }) } catch {}
+      try { await api.post('/notifications/register-device', { token: token.value, platform: 'android', call_ring: callRing, chime, app_build: appBuild }) } catch {}
     })
     PushNotifications.addListener('registrationError', (e) => console.warn('[push] registration error', e))
 
@@ -90,6 +95,8 @@ export async function registerPush() {
       // A call: stay put. Opening the app is the point — the call screen asks
       // what is ringing as it comes up, wherever the app is.
       if (data.type === 'call' || data.type === 'call-cancel') return
+      // "VoTask update available": straight to Play's update screen.
+      if (data.type === 'app_update') { openUpdate(); return }
       // FCM data is all strings; an absent id arrives as ''.
       const dest = notifTarget({ type: data.type, conversationId: data.conversationId, messageId: data.messageId, taskId: data.taskId, commentId: data.commentId }) || '/tasks'
       if (go) go(dest, { replace: replacesEntry(dest, location.pathname) })
