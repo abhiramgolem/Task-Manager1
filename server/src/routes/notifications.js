@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired } from '../auth.js'
 import { saveDeviceToken, removeDeviceToken } from '../push.js'
+import { BELL_SKIPPED_TYPES } from '../util.js'
 
 const r = Router()
 r.use(authRequired)
@@ -9,10 +10,11 @@ r.use(authRequired)
 // Register this device's FCM token so the user gets native push. Called by the
 // app after it obtains a token (and on every login, in case the token rotated).
 r.post('/register-device', (req, res) => {
-  const { token, platform, call_ring: callRing } = req.body || {}
+  const { token, platform, call_ring: callRing, chime } = req.body || {}
   if (!token) return res.status(400).json({ error: 'token required' })
   // call_ring: this build can put up a full-screen incoming call (see sendCallPush).
-  saveDeviceToken(req.user.id, token, platform || 'android', { callRing: !!callRing })
+  // chime: it has VoTask's own notification sound (see sendPushToUser).
+  saveDeviceToken(req.user.id, token, platform || 'android', { callRing: !!callRing, chime: !!chime })
   res.json({ ok: true })
 })
 
@@ -23,9 +25,10 @@ r.post('/unregister-device', (req, res) => {
   res.json({ ok: true })
 })
 
-// My notifications, newest first.
+// My notifications, newest first — tasks and mentions; the rest of chat lives in Chats.
 r.get('/', (req, res) => {
-  const rows = db.prepare('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').all(req.user.id)
+  const rows = db.prepare(`SELECT * FROM notifications WHERE user_id=? AND type NOT IN (${BELL_SKIPPED_TYPES.map(() => '?').join(',')})
+    ORDER BY created_at DESC LIMIT 50`).all(req.user.id, ...BELL_SKIPPED_TYPES)
   const unread = rows.filter((n) => !n.read).length
   res.json({ items: rows, unread })
 })

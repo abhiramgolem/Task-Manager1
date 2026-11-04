@@ -936,8 +936,28 @@ function deliver(conv, msgRow, sender, mentioned = []) {
   const short = preview.length > 70 ? preview.slice(0, 70) + '…' : preview
   const pinged = new Set(mentioned)
   const at = { conversationId: conv.id, messageId: msgRow.id } // tapping it opens this line
+  // On the phone a chat is ONE notification, as in Cliq and WhatsApp: titled
+  // with the chat, saying how many lines are waiting, showing the newest. Each
+  // message replaces it (same tag) instead of stacking a fresh one per line.
+  const chatTitle = conv.type === 'group' ? (conv.name || 'Group') : sender.name
+  const tag = `chat_${conv.id}`
+  // Same rule as the sidebar's count, capped the same way so a long-unread
+  // chat costs at most UNREAD_CAP index steps per recipient.
+  const unreadOf = db.prepare(`
+    SELECT COUNT(*) c FROM (
+      SELECT 1 FROM chat_messages
+      WHERE conversation_id=? AND sender_id!=? AND deleted_for_all=0 AND created_at > ?
+        AND COALESCE(kind,'')<>'system'
+        AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+      LIMIT ${UNREAD_CAP})`)
+  const pushFor = (uid, lastReadAt, line) => {
+    const n = unreadOf.get(conv.id, uid, lastReadAt || '', uid).c
+    const count = n > 1 ? ` · ${n >= UNREAD_CAP ? `${UNREAD_CAP}+` : n} new messages` : ''
+    return { title: chatTitle + count, body: line, tag }
+  }
+  const groupLine = conv.type === 'group' ? `${sender.name}: ${short}` : short
   for (const uid of others) {
-    const p = db.prepare('SELECT muted, muted_until FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, uid)
+    const p = db.prepare('SELECT muted, muted_until, last_read_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, uid)
     // A timed mute that has run out is not a mute any more. Checked on read
     // rather than swept by a job: the answer is only ever needed right here.
     const muteLive = p?.muted && (!p.muted_until || p.muted_until > now())
@@ -947,7 +967,8 @@ function deliver(conv, msgRow, sender, mentioned = []) {
     // typing someone's name instead of just talking. Muting still silences every
     // other message in the thread.
     if (pinged.has(uid) && !dndLive) {
-      notify(conv.org_id, uid, 'chat_mention', `${sender.name} mentioned you${conv.type === 'group' ? ` in ${conv.name || 'Group'}` : ''}: ${short}`, null, at)
+      notify(conv.org_id, uid, 'chat_mention', `${sender.name} mentioned you${conv.type === 'group' ? ` in ${conv.name || 'Group'}` : ''}: ${short}`, null, at,
+        pushFor(uid, p?.last_read_at, `${sender.name} mentioned you: ${short}`))
       continue
     }
     // DND silences everything, including a direct mention — that is the contract
@@ -955,7 +976,7 @@ function deliver(conv, msgRow, sender, mentioned = []) {
     // make the setting useless. The message still arrives live in the thread.
     if (dndLive) continue
     if (muteLive) continue // muted: deliver the message live, but no notification
-    notify(conv.org_id, uid, 'chat_message', `${label}: ${short}`, null, at)
+    notify(conv.org_id, uid, 'chat_message', `${label}: ${short}`, null, at, pushFor(uid, p?.last_read_at, groupLine))
   }
   // Recipients with the app open have it now: that is the second tick. The
   // rest get theirs when a device of theirs next checks in (deliverPending).
@@ -1044,7 +1065,9 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file required (field "file")' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
   if (!canPost(conv, me.id)) { cleanup(); return res.status(403).json({ error: ADMINS_ONLY }) }
-  const caption = String(req.body?.body || '').trim().slice(0, 4000)
+  // A form sends its text with CRLF line breaks; stored as the JSON route
+  // stores a message, with LF, or a multi-line caption reads differently.
+  const caption = String(req.body?.body || '').replace(/\r\n?/g, '\n').trim().slice(0, 4000)
   const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
   const mid = id('msg')
   const ts = now()
@@ -1186,7 +1209,10 @@ r.post('/message/:id/reactions', (req, res) => {
   // reaction, only to the author, and only if they have not muted the chat.
   if (added && m.sender_id !== me.id && m.kind !== 'system' && member(m.conversation_id, m.sender_id) && wantsPing(m.conversation_id, m.sender_id)) {
     const what = snippet(m)
-    notify(m.org_id, m.sender_id, 'chat_message', `${me.name} reacted ${emoji} to: "${what.length > 50 ? what.slice(0, 50) + '…' : what}"`, null, { conversationId: m.conversation_id, messageId: m.id })
+    notify(m.org_id, m.sender_id, 'chat_message', `${me.name} reacted ${emoji} to: "${what.length > 50 ? what.slice(0, 50) + '…' : what}"`, null, { conversationId: m.conversation_id, messageId: m.id },
+      // Reactions in a chat collapse into one notification of their own — not
+      // the chat's, which they would otherwise overwrite with "reacted 👍".
+      { tag: `react_${m.conversation_id}` })
   }
   res.json({ reactions })
 })
@@ -2404,6 +2430,22 @@ r.get('/search', (req, res) => {
   const me = req.user
   const q = String(req.query.q || '').trim()
   if (q.length < 2) return res.json({ items: [] })
+  // Search inside one chat (the thread's own search bar): just the matching
+  // lines' ids, newest first, which the thread steps through in place as
+  // WhatsApp does — over the whole history, not only the page on screen. The
+  // scan is bounded to this chat's rows by idx_chat_convo.
+  if (req.query.conversationId) {
+    const cid = String(req.query.conversationId)
+    if (!member(cid, me.id)) return res.status(404).json({ error: 'Conversation not found' })
+    const ids = db.prepare(`
+      SELECT id FROM chat_messages
+      WHERE conversation_id=? AND deleted_for_all=0
+        AND (body LIKE ? OR file_name LIKE ? OR transcript LIKE ?)
+        AND COALESCE(kind,'')<>'system'
+        AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+      ORDER BY created_at DESC LIMIT 300`).all(cid, `%${q}%`, `%${q}%`, `%${q}%`, me.id).map((r) => r.id)
+    return res.json({ ids })
+  }
   const rows = db.prepare(`
     SELECT m.* FROM chat_messages m
     JOIN chat_participants p ON p.conversation_id=m.conversation_id AND p.user_id=?

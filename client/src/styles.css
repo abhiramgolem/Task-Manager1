@@ -2473,8 +2473,10 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 .file-bubble { padding: 8px 10px; }
 .chat-image { display: block; max-width: 240px; max-height: 240px; border-radius: 10px; cursor: pointer; }
 /* A picture's bubble is the picture's width, and a caption wraps under it, as
-   on WhatsApp — not a wide bubble with the picture parked at one end. */
-.bubble.pic-bubble { width: min-content; }
+   on WhatsApp — not a wide bubble with the picture parked at one end. The
+   floor is for the moment before a lazy picture loads: it is 0px wide then,
+   and the bubble shrank to the caption's longest word, one word a line. */
+.bubble.pic-bubble { width: min-content; min-width: 160px; }
 .chat-file { display: flex; align-items: center; gap: 10px; }
 .chat-file-icon { font-size: 22px; }
 .chat-file-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
@@ -2578,7 +2580,9 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 
 /* in-chat search bar + composer */
 .in-search { display: flex; gap: 6px; align-items: center; padding: 6px 0 10px; }
-.in-search input { flex: 1; padding: 7px 11px; border: 1px solid var(--border); border-radius: 9px; font-size: 13px; }
+.in-search input { flex: 1; min-width: 0; padding: 7px 11px; border: 1px solid var(--border); border-radius: 9px; font-size: 13px; }
+.in-search-count { font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.in-search .ic-btn:disabled { opacity: .4; cursor: default; }
 .composer { padding-top: 4px; }
 
 /* modals (new chat / group info) */
@@ -3276,9 +3280,13 @@ body:has(.rv-center) .va-dock { display: none; }
   .btn { padding: 10px 16px; }
   .nav a { padding: 12px 12px; }
 
-  /* chat: roomier bubbles + full-width contact list on small screens */
-  .bubble { max-width: 85%; }
-  .msg-line { max-width: 92%; }
+  /* chat: roomier bubbles + full-width contact list on small screens. The row
+     (.msg-line) is what caps a bubble, at WhatsApp's ~85% of the screen. A
+     percentage on the bubble itself resolved against a row sized by the bubble,
+     so every message wrapped at 85% of its own width — thin, early-wrapping
+     bubbles with a dead gap beside them. */
+  .bubble { max-width: 100%; }
+  .msg-line { max-width: 85%; }
 
   /* composer: round attach tucked beside the input, input grows, tidy Send */
   .chat-input { gap: 7px; align-items: center; }
@@ -3562,7 +3570,7 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
      underneath — same tap targets, no competition for width.
      Each wrapped line holds one item, so row-reverse on .mine no longer reorders
      anything; flex-start alone lands the buttons under the side they belong to. */
-  .msg-line { flex-wrap: wrap; max-width: 96%; }
+  .msg-line { flex-wrap: wrap; max-width: 85%; }
   .msg-body { flex: 1 1 100%; }
   .msg-tools { flex: 0 0 auto; margin-top: 1px; }
 }
@@ -4177,6 +4185,14 @@ body.chats-page .content { max-width: none; }
 .send-btn.mic { background: transparent; color: var(--muted); box-shadow: none; }
 .send-btn.mic svg { margin-left: 0; }
 .send-btn.mic:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--text); }
+/* Held voice note (Chats.tsx `micPress`): the browser must not scroll or open a
+   menu under the press, the held mic grows red like WhatsApp's, and the bar says
+   which way to slide. */
+.send-btn.mic { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.send-btn.mic.held { background: #dc2626; color: #fff; transform: scale(1.3); box-shadow: 0 4px 14px rgba(220,38,38,.4); transition: transform .12s ease; }
+.composer-box.recording { position: relative; }
+.voice-slide { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; margin-right: 8px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.voice-lock-hint { position: absolute; right: 8px; bottom: calc(100% + 10px); display: grid; justify-items: center; gap: 2px; padding: 8px 6px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); box-shadow: 0 2px 8px rgba(0,0,0,.18); }
 
 /* ---- files waiting for Send (pasted, dropped or picked) ---------------------
    A row of previews above the box: pictures as thumbnails, other files as a
@@ -4399,6 +4415,15 @@ button.rx-row:hover { background: var(--bg); }
 .to-bottom svg { color: var(--primary); }
 .to-bottom-count { color: var(--primary); }
 
+/* Runs from one sender (Chats.tsx `cont`): closer together than separate turns.
+   In a group, others' messages keep a slot for the sender's face, filled on the
+   first of a run, so every bubble in the run lines up under it. */
+.msg-wrap.cont { margin-top: -4px; }
+.msg-wrap.has-face { position: relative; padding-left: 34px; }
+.msg-face { position: absolute; left: 0; top: 0; line-height: 0; }
+.chat-log.picking .msg-wrap.has-face { padding-left: 70px; }
+.chat-log.picking .msg-face { left: 36px; }
+
 /* Picking several messages: a check circle in front of each, the picked ones tinted. */
 .chat-log.picking .msg-wrap { position: relative; padding-left: 36px; }
 .chat-log.picking .msg-wrap.centred { padding-left: 0; }
@@ -4457,7 +4482,10 @@ button.reply-quote {
 .chat-file-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: color-mix(in srgb, currentColor 12%, transparent); flex-shrink: 0; }
 
 /* Cards inside a bubble: the bubble gives them room and keeps the time below. */
-.bubble.card-bubble { padding: 6px; min-width: 240px; max-width: 300px; }
+/* One width for every card, as WhatsApp and Cliq draw them: sized by its
+   content, a one-word task ("Call") came out a thin 240px strip beside a long
+   one's 300px, and the thread looked ragged. */
+.bubble.card-bubble { padding: 6px; width: 320px; max-width: 100%; }
 .bubble.card-bubble .bubble-foot { position: static; display: flex; justify-content: flex-end; margin: 4px 4px 0; }
 .bubble.card-bubble .reply-quote { margin-bottom: 6px; }
 
@@ -5382,3 +5410,189 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 @media (max-width: 399px) {
   .composer-box .cb-later { display: none; }
 }
+
+/* "Send to…" for a share from another app: each chat is a button. */
+.modal-user.share-pick { width: 100%; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+
+/* ============================================================================
+   CHATS, SHAPED LIKE A MESSENGER
+   Chats read as a web page: the list a bordered card with a big "New" button
+   and small rows, the thread flat with saturated orange bubbles in white text,
+   the composer one outlined box. WhatsApp and Cliq read as messengers because
+   of a few things, and this block does those: a wallpaper behind the thread;
+   light bubbles of your own with dark text and a tail on the first of a run;
+   borderless bubbles from others with the sender's name inside; a pill to
+   type in with its own round send/mic button; big rows; and on a phone the
+   list edge to edge with a round new-chat button.
+   ========================================================================= */
+:root {
+  --chat-wall: #efe7dc;
+  --chat-wall-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='%239a6b43' stroke-opacity='.13' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 20h24a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6H30l-7 6v-6h-5a6 6 0 0 1-6-6V26a6 6 0 0 1 6-6z'/%3E%3Cpath d='M98 26l5 5 11-12'/%3E%3Ccircle cx='150' cy='30' r='8'/%3E%3Cpath d='M62 78l3 7 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z'/%3E%3Crect x='118' y='76' width='26' height='18' rx='3'/%3E%3Cpath d='M118 82h26'/%3E%3Cpath d='M16 116c6-8 14-8 20 0s14 8 20 0'/%3E%3Cpath d='M100 124h20M110 114v20'/%3E%3Ccircle cx='160' cy='140' r='3'/%3E%3Cpath d='M30 156l8 8 14-16'/%3E%3Ccircle cx='86' cy='160' r='8'/%3E%3C/g%3E%3C/svg%3E");
+  --bubble-mine: #ffe3d1;
+  --bubble-theirs: #ffffff;
+  --bubble-shadow: 0 1px .5px rgba(11, 20, 26, .13);
+  --bubble-meta: rgba(17, 24, 39, .52);
+  --chat-link: #0a66c2;
+  --chat-read: #2b8fd9;
+  --chat-fill: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+:root[data-theme="dark"] {
+  --chat-wall: #0b1014;
+  --chat-wall-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='.045' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 20h24a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6H30l-7 6v-6h-5a6 6 0 0 1-6-6V26a6 6 0 0 1 6-6z'/%3E%3Cpath d='M98 26l5 5 11-12'/%3E%3Ccircle cx='150' cy='30' r='8'/%3E%3Cpath d='M62 78l3 7 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z'/%3E%3Crect x='118' y='76' width='26' height='18' rx='3'/%3E%3Cpath d='M118 82h26'/%3E%3Cpath d='M16 116c6-8 14-8 20 0s14 8 20 0'/%3E%3Cpath d='M100 124h20M110 114v20'/%3E%3Ccircle cx='160' cy='140' r='3'/%3E%3Cpath d='M30 156l8 8 14-16'/%3E%3Ccircle cx='86' cy='160' r='8'/%3E%3C/g%3E%3C/svg%3E");
+  --bubble-mine: #5b2a13;
+  --bubble-theirs: #1c2632;
+  --bubble-shadow: 0 1px .5px rgba(0, 0, 0, .35);
+  --bubble-meta: rgba(241, 245, 249, .6);
+  --chat-link: #6cb6ff;
+  --chat-read: #53bdeb;
+}
+
+/* ---- the thread ---------------------------------------------------------- */
+.chat-layout .chat-log-wrap { background: var(--chat-wall) var(--chat-wall-art) repeat; }
+.chat-layout .chat-log { background: transparent; }
+.chat-layout .composer, .chat-layout .chat-input.chat-compose { background: var(--chat-wall); }
+
+.chat-layout .bubble {
+  font-size: 14.5px; line-height: 1.4; padding: 6px 9px 7px; border-radius: 10px;
+  box-shadow: var(--bubble-shadow);
+}
+.chat-layout .bubble.user { background: var(--bubble-mine); color: var(--text); border-bottom-right-radius: 10px; box-shadow: var(--bubble-shadow); }
+.chat-layout .bubble.ai { background: var(--bubble-theirs); border: 0; border-bottom-left-radius: 10px; }
+.chat-layout .bubble.deleted { background: var(--bubble-theirs); border: 0; }
+.chat-layout .bubble.mentions-me { border-left: 3px solid var(--primary); }
+/* The tail, on the first bubble of a run only, as WhatsApp draws it. */
+.chat-layout .msg-wrap:not(.cont) .bubble.user { border-top-right-radius: 0; }
+.chat-layout .msg-wrap:not(.cont) .bubble.ai { border-top-left-radius: 0; }
+.chat-layout .msg-wrap:not(.cont) .bubble.user::before,
+.chat-layout .msg-wrap:not(.cont) .bubble.ai::before {
+  content: ''; position: absolute; top: 0; width: 8px; height: 13px;
+}
+.chat-layout .msg-wrap:not(.cont) .bubble.user::before { right: -8px; background: var(--bubble-mine); clip-path: polygon(0 0, 100% 0, 0 100%); }
+.chat-layout .msg-wrap:not(.cont) .bubble.ai::before { left: -8px; background: var(--bubble-theirs); clip-path: polygon(0 0, 100% 0, 100% 100%); }
+.chat-layout .msg-wrap:not(.cont) .bubble.ai.mentions-me::before { left: -11px; background: var(--primary); }
+
+/* Who said it, inside the bubble. */
+.chat-layout .bubble .msg-sender { margin: 0 0 2px; font-size: 12.5px; line-height: 1.3; }
+
+/* Your own bubble is light now: what sat white on orange inside it goes back
+   to the ordinary ink. */
+.chat-layout .bubble.user .mention-chip { color: inherit; background: rgba(242, 98, 46, .18); }
+.chat-layout .bubble.user .voice-transcribe { background: rgba(0, 0, 0, .05); border-color: rgba(0, 0, 0, .14); color: inherit; }
+:root[data-theme="dark"] .chat-layout .bubble.user .voice-transcribe { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .18); }
+.chat-layout .bubble.user .voice-text { border-left-color: var(--primary); }
+.chat-layout .bubble.user .msg-code { background: rgba(100, 116, 139, .18); }
+.chat-layout .bubble.user .chat-file-dl { background: rgba(0, 0, 0, .08); }
+:root[data-theme="dark"] .chat-layout .bubble.user .chat-file-dl { background: rgba(255, 255, 255, .12); }
+.chat-layout .bubble .bubble-foot,
+.chat-layout .bubble.user .bubble-foot { color: var(--bubble-meta); font-size: 11px; }
+.chat-layout .bubble .bubble-foot-spacer { font-size: 11px; }
+/* Under a file's caption the time sits at the end, clear of the words. */
+.chat-layout .file-bubble .bubble-foot { float: right; margin: 4px 0 0 10px; }
+/* The dark theme fills every textarea; inside the pill it is the pill. */
+:root[data-theme="dark"] .chat-layout .composer-box .composer-input { background: transparent; }
+.chat-layout .bubble.user .ticks,
+.chat-layout .bubble.user .ticks.pending { color: var(--bubble-meta); }
+.chat-layout .bubble.user .ticks.read,
+.chat-layout .bubble.user .ticks[title="Seen"] { color: var(--chat-read); }
+.chat-layout .bubble .reply-quote,
+.chat-layout .bubble.user .reply-quote { background: rgba(0, 0, 0, .05); border-left-color: var(--primary); border-radius: 6px; }
+:root[data-theme="dark"] .chat-layout .bubble .reply-quote { background: rgba(255, 255, 255, .06); }
+.chat-layout .bubble.user .read-more { color: var(--chat-link); text-decoration: none; }
+.chat-layout .bubble.user .poll-card { color: var(--text); }
+.chat-layout .bubble.user .poll-bar span,
+.chat-layout .bubble.user .poll-opt.on .poll-check { background: #16a34a; border-color: #16a34a; color: #fff; }
+.chat-layout .bubble .msg-link { color: var(--chat-link); text-decoration: none; }
+.chat-layout .bubble .msg-link:hover { text-decoration: underline; }
+.chat-layout .vp.mine .vp-play { background: linear-gradient(135deg, #d2480a, #ea580c); color: #fff; }
+.chat-layout .vp.mine .vp-bar { background: currentColor; }
+
+/* Day and unread markers float on the wallpaper. */
+.chat-layout .date-sep span {
+  background: var(--bubble-theirs); color: var(--muted); border: 0; box-shadow: var(--bubble-shadow);
+  font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 8px;
+}
+.chat-layout .unread-sep span {
+  background: color-mix(in srgb, var(--bubble-theirs) 88%, transparent); color: var(--text);
+  text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 5px 14px;
+  box-shadow: var(--bubble-shadow);
+}
+
+/* ---- the composer: a pill, and the send/mic button its own circle --------- */
+.chat-layout .composer-box {
+  position: relative; margin-right: 54px; min-height: 48px; padding: 4px;
+  border: 0; border-radius: 24px; background: var(--bubble-theirs); box-shadow: var(--bubble-shadow);
+}
+.chat-layout .composer-box:focus-within { border: 0; box-shadow: var(--bubble-shadow); }
+.chat-layout .composer-box > .send-btn {
+  position: absolute; right: -54px; bottom: 0; width: 48px; height: 48px;
+  background: linear-gradient(135deg, #d2480a, #ea580c); color: #fff; box-shadow: 0 1px 3px rgba(11, 20, 26, .25);
+}
+.chat-layout .composer-box > .send-btn.mic:hover:not(:disabled) { background: linear-gradient(135deg, #b93d08, #d2480a); color: #fff; }
+.chat-layout .composer-box > .send-btn.mic.held { background: #dc2626; }
+.chat-layout .composer-box > .send-btn:disabled { opacity: 1; filter: saturate(.6) brightness(1.05); }
+.chat-layout .composer-box .voice-lock-hint { right: -50px; }
+
+/* ---- the list -------------------------------------------------------------- */
+.chat-layout .chat-contact-search {
+  border: 0; border-radius: 999px; background-color: var(--chat-fill); padding: 10px 14px 10px 40px; font-size: 14.5px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: 14px center;
+}
+:root[data-theme="dark"] .chat-layout .chat-contact-search {
+  background-color: var(--chat-fill);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: 14px center; border: 0;
+}
+.chat-layout .chat-contact-search:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent); }
+.chat-layout .status-row { border: 0; background: transparent; margin: 0; padding: 4px 6px; color: var(--muted); }
+.chat-layout .chat-tab { flex: 0 0 auto; border: 0; background: var(--chat-fill); color: var(--muted); font-weight: 600; font-size: 13px; padding: 6px 14px; }
+.chat-layout .chat-tab.active { background: color-mix(in srgb, var(--primary) 18%, var(--surface)); color: var(--text); border: 0; }
+
+.chat-layout .convo-item { position: relative; gap: 12px; padding: 10px 12px; border-radius: 10px; }
+.chat-layout .convo-title { font-size: 15.5px; font-weight: 600; }
+.chat-layout .convo-item.has-unread .convo-title { font-weight: 700; }
+.chat-layout .convo-time { font-size: 12px; }
+.chat-layout .chat-contact-preview { font-size: 13.5px; margin-top: 3px; padding-right: 34px; }
+/* The unread count sits under the time, at the row's end. */
+.chat-layout .convo-trailing { position: absolute; right: 12px; bottom: 11px; }
+.chat-layout .chat-unread-badge { min-width: 21px; height: 21px; border-radius: 11px; font-size: 11.5px; }
+/* No hover on a touch screen: the row is held for its options instead. */
+@media (hover: none) { .chat-layout .convo-menu-btn { display: none; } }
+
+.chat-fab { display: none; }
+
+/* ---- phones and narrow windows: the list edge to edge ---------------------- */
+@media (max-width: 860px) {
+  body.chats-page:not(.chat-thread-open) .content { padding: 0; }
+  .chat-layout .chat-history {
+    height: calc(100dvh - 72px - 76px - env(safe-area-inset-bottom, 0px));
+    border: 0; border-radius: 0; box-shadow: none; padding: 8px 0 0; gap: 8px;
+  }
+  .chat-layout .chat-history > :not(.convo-list) { margin-inline: 14px; width: auto; }
+  .chat-layout .convo-item { border-radius: 0; padding: 10px 16px; }
+  .chat-layout .convo-trailing { right: 16px; }
+  .chat-layout .ch-new { display: none; }
+  .chat-layout .chat-fab {
+    display: grid; place-items: center; position: fixed; z-index: 20;
+    right: 16px; bottom: calc(76px + 16px + env(safe-area-inset-bottom, 0px));
+    width: 56px; height: 56px; border: 0; border-radius: 16px; cursor: pointer;
+    background: linear-gradient(135deg, #d2480a, #ea580c); color: #fff;
+    box-shadow: 0 4px 12px rgba(11, 20, 26, .28);
+  }
+  .chat-layout .chat-fab:active { transform: scale(.95); }
+  .chat-layout.chat-open .chat-fab { display: none; }
+  /* Room under the last row so the round button never covers it. */
+  .chat-layout .convo-list { padding-bottom: 84px; }
+}
+
+/* Photos at one width, as WhatsApp shows them. Sized only by "at most
+   240x240", a tall phone screenshot came out ~108px wide, and its bubble (and
+   the caption in it, which wraps at the photo's width) a thin strip. Now a
+   photo is 260px wide (less on a narrow screen); a tall one is cropped to
+   340px high, and tapping it still opens the whole picture. Videos too. */
+.chat-layout .chat-image { width: min(260px, 68vw); max-width: none; height: auto; max-height: 340px; object-fit: cover; object-position: top; }
+.chat-layout .chat-video { width: min(260px, 68vw); max-width: none; max-height: 340px; }
+.chat-layout .bubble.pic-bubble { min-width: 0; }
+/* A tall photo is mostly a phone screenshot: its top is what matters. In dark
+   the generic rule paints the unread label's text for an orange pill. */
+:root[data-theme="dark"] .chat-layout .unread-sep span { color: var(--text); }

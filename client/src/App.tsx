@@ -6,6 +6,7 @@ import { confirmLogout } from './lib/confirm'
 import { savedAccounts, SavedAccount } from './accounts'
 import { runBackHandlers } from './back'
 import { setPushNavigator } from './push'
+import { startShareTarget, onShare, hasShare } from './lib/shareTarget'
 import { useEscape } from './lib/useEscape'
 import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
@@ -534,10 +535,27 @@ function usePushNavigator() {
   }, [navigate])
 }
 
+// Something shared to VoTask from another app goes to Chats, which asks which
+// chat it is for (lib/shareTarget). Signed out, it waits for the sign-in.
+function useShareTarget(signedIn: boolean) {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const pathRef = useRef(location.pathname)
+  pathRef.current = location.pathname
+  const signedInRef = useRef(signedIn)
+  signedInRef.current = signedIn
+  useEffect(() => {
+    startShareTarget()
+    return onShare(() => { if (signedInRef.current && pathRef.current !== '/chats') navigate('/chats') })
+  }, [navigate])
+  useEffect(() => { if (signedIn && hasShare() && pathRef.current !== '/chats') navigate('/chats') }, [signedIn])
+}
+
 export default function App() {
   const { user } = useAuth()
   useAndroidBackButton()
   usePushNavigator()
+  useShareTarget(!!user)
   return (
     <>
     <ToastHost />

@@ -4,6 +4,8 @@ import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '.
 import { useAuth } from '../auth'
 import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
+import { clearChatNotifications } from '../push'
+import { takeShare, onShare, type Shared } from '../lib/shareTarget'
 import { toast } from '../lib/toast'
 import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
@@ -85,6 +87,13 @@ interface StagedFile { id: string; file: File; url: string | null }
 const MAX_STAGED = 10
 // A message longer than this folds behind "Read more", as on WhatsApp — one
 // pasted log should not push a whole conversation off the screen.
+// Messages from one person this close together read as one turn (see `cont`).
+const RUN_GAP_MS = 5 * 60_000
+// A held voice note: slide this far left to cancel, this far up to lock; a
+// press shorter than HOLD_TAP_MS is a tap.
+const SLIDE_CANCEL_PX = 110
+const SLIDE_LOCK_PX = 70
+const HOLD_TAP_MS = 400
 const FOLD_CHARS = 700
 const FOLD_LINES = 14
 // The folded part: whole lines up to the limit, then whole words, then "…".
@@ -377,6 +386,10 @@ export default function Chats() {
   const [search, setSearch] = useState('')       // sidebar people search
   const [inSearch, setInSearch] = useState('')   // in-conversation message search
   const [inSearchOpen, setInSearchOpen] = useState(false)
+  // The search's matches over the chat's whole history, newest first, and the
+  // one on screen — WhatsApp's "3 of 12" with ⌃ ⌄ to step between them.
+  const [searchHits, setSearchHits] = useState<string[] | null>(null)
+  const [hitAt, setHitAt] = useState(0)
   const [replyTo, setReplyTo] = useState<Msg | null>(null)
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [loading, setLoading] = useState(true)
@@ -410,6 +423,10 @@ export default function Chats() {
   // box with a preview first, as WhatsApp does before it sends a picture; the
   // text in the box goes with them as the caption. A screenshot pasted by
   // accident is one ✕ away rather than already in front of the whole team.
+  // Shared in from another app, waiting for the chat it goes to (lib/shareTarget).
+  const [sharing, setSharing] = useState<Shared | null>(null)
+  // ...and once one is picked, waiting for that chat to open.
+  const pendingShareRef = useRef<Shared | null>(null)
   const [staged, setStaged] = useState<StagedFile[]>([])
   const stagedRef = useRef<StagedFile[]>([])
   stagedRef.current = staged
@@ -493,6 +510,15 @@ export default function Chats() {
   const [forkFrom, setForkFrom] = useState<Msg | null>(null)
   const [recording, setRecording] = useState(false)
   const [recSecs, setRecSecs] = useState(0)
+  // A voice note held down on a touch screen, as in WhatsApp: how far the finger
+  // has slid left (null when nothing is held). Release sends, slide left
+  // cancels, slide up locks it to carry on hands-free. A quick tap still starts
+  // a hands-free note, which is how it worked before and what a mouse gets.
+  const [holdDx, setHoldDx] = useState<number | null>(null)
+  const holdRef = useRef<{ x: number; y: number; t: number } | null>(null)
+  const touchPressRef = useRef(false)
+  // Cancelled before the microphone had opened (a quick slide on a slow start).
+  const pendingCancelRef = useRef(false)
   const [transcribing, setTranscribing] = useState<string | null>(null)
   const [summarising, setSummarising] = useState<string | null>(null)
   const [flashId, setFlashId] = useState<string | null>(null)
@@ -574,6 +600,15 @@ export default function Chats() {
   // Text that was in the box when an edit began, put back when the edit ends.
   const editStashRef = useRef('')
   useEffect(() => { activeIdRef.current = activeId }, [activeId])
+  // The open chat's phone notification goes once you can see it — on opening
+  // it, and on coming back to the app with it still open.
+  useEffect(() => {
+    if (!activeId) return
+    const clear = () => { if (!document.hidden) void clearChatNotifications(activeId) }
+    clear()
+    document.addEventListener('visibilitychange', clear)
+    return () => document.removeEventListener('visibilitychange', clear)
+  }, [activeId])
 
   const active = useMemo(() => convos.find((c) => c.id === activeId) || null, [convos, activeId])
   // The signed-in user as the info panel reads them (the ORG role: it gates
@@ -666,6 +701,11 @@ export default function Chats() {
 
   const pingNav = () => window.dispatchEvent(new Event('chat-unread-changed'))
   const loadConvos = () => api.get('/chat/conversations').then((d) => { setConvos(d.conversations); pingNav() }).catch(() => {})
+
+  // An upload's "Sending…" line becomes the message the server returned —
+  // unless the socket delivered that message first and it is already shown.
+  const settleTmp = (prev: Msg[], tmpId: string, m: Msg) =>
+    prev.some((x) => x.id === m.id) ? prev.filter((x) => x.id !== tmpId) : prev.map((x) => (x.id === tmpId ? m : x))
 
   const mergeIncoming = (m: Msg) => setMessages((prev) => {
     if (prev.some((x) => x.id === m.id)) return prev
@@ -849,6 +889,8 @@ export default function Chats() {
     if (stagedRef.current.length) { stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)); setStaged([]) }
     // ...but what you were typing does: each chat keeps its own unsent text.
     setInput(activeId ? (readDrafts()[activeId] || '') : '')
+    // A share sent here goes in on top of what was already typed.
+    if (activeId && pendingShareRef.current) { applyShare(pendingShareRef.current); pendingShareRef.current = null }
     setPicked([]); setMentionQ(null); setSlashQ(null)
     // The thread of the chat being left does not linger behind the list.
     setMessages([])
@@ -902,6 +944,30 @@ export default function Chats() {
     forceScrollRef.current = false
     if (!scrollToMessage(id)) void seekOlder(activeId, id, messages, hasMore)
   }, [landOn, active?.id, messages])
+  // In-chat search asks the server, which sees the whole history rather than
+  // the page loaded, a moment after typing stops — then lands on the newest match.
+  useEffect(() => {
+    const q = inSearch.trim()
+    if (!inSearchOpen || q.length < 2 || !activeId) { setSearchHits(null); setHitAt(0); return }
+    let live = true
+    const t = setTimeout(() => {
+      api.get(`/chat/search?conversationId=${encodeURIComponent(activeId)}&q=${encodeURIComponent(q)}`).then((d) => {
+        if (!live) return
+        const ids: string[] = d.ids || []
+        setSearchHits(ids)
+        setHitAt(0)
+        if (ids.length) setLandOn(ids[0])
+      }).catch(() => {})
+    }, 250)
+    return () => { live = false; clearTimeout(t) }
+  }, [inSearch, inSearchOpen, activeId])
+  // ⌃ goes back in time (the hits run newest first), ⌄ forward; both wrap.
+  const stepHit = (older: boolean) => {
+    if (!searchHits?.length) return
+    const n = (hitAt + (older ? 1 : searchHits.length - 1)) % searchHits.length
+    setHitAt(n)
+    setLandOn(searchHits[n])
+  }
   // The line is older than the page that loaded — a busy group can bury a
   // notification under hundreds of newer messages. Fetch back a page at a time
   // until it is there. Bounded: a line deleted or cleared from this chat is
@@ -932,7 +998,7 @@ export default function Chats() {
     if (!el) return
     const away = el.scrollHeight - el.scrollTop - el.clientHeight > 300
     if (away !== awayRef.current) { awayRef.current = away; setAwayFromBottom(away); if (!away) setNewBelow(0) }
-    if (el.scrollTop < 120 && hasMore && !loadingOlder && !inSearch.trim()) loadOlder()
+    if (el.scrollTop < 120 && hasMore && !loadingOlder) loadOlder()
   }
   // From far back in a long chat, a jump (as WhatsApp does) — gliding past
   // hundreds of messages takes long enough to look like nothing happened.
@@ -1225,6 +1291,29 @@ export default function Chats() {
   }
   useEffect(() => () => stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)), [])
 
+  // ---- shared from another app --------------------------------------------
+  // As WhatsApp does: pick the chat, and what was shared waits in its box —
+  // files in the tray, a link or text as the message (or the files' caption).
+  useEffect(() => {
+    const take = () => { const s = takeShare(); if (s) setSharing(s) }
+    take()
+    return onShare(take)
+  }, [])
+  const applyShare = (s: Shared) => {
+    if (s.skipped) toast.info(s.skipped === 1 ? "One item couldn't be shared" : `${s.skipped} items couldn't be shared`)
+    stageFiles(s.files)
+    if (s.text) setInput((cur) => (cur.trim() ? cur + '\n' + s.text : s.text))
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
+  const shareTo = (cid: string) => {
+    const s = sharing
+    setSharing(null)
+    if (!s) return
+    setShowArchived(false)
+    if (cid === activeIdRef.current) applyShare(s)
+    else { pendingShareRef.current = s; setActiveId(cid) }
+  }
+
   // A file's optimistic "Sending…" line, put in the thread the moment it is
   // sent rather than when its turn in the upload queue comes, so the thread
   // reads in the order things were sent.
@@ -1277,7 +1366,7 @@ export default function Chats() {
       const data: Msg = uploadId
         ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions })
         : await sendWhole(conv, file, caption, rep, capMentions, progress)
-      setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x)))
+      setMessages((prev) => settleTmp(prev, tmpId, data))
       return true
     } catch (err: any) {
       setMessages((m) => m.filter((x) => x.id !== tmpId)); toast.error(`Could not send ${file.name}: ${err.message}`)
@@ -1401,6 +1490,7 @@ export default function Chats() {
       }
       rec.start()
       voiceRecRef.current = rec
+      if (pendingCancelRef.current) { pendingCancelRef.current = false; voiceCancelRef.current = true; rec.stop(); return }
       voiceTextRef.current = []
       // Listen alongside the recorder. The two are independent: if speech
       // recognition is unavailable the note still sends, just without text.
@@ -1429,6 +1519,50 @@ export default function Chats() {
     else releaseVoice()
   }
 
+  const cancelHeldNote = () => {
+    if (voiceRecRef.current) finishVoiceNote(true)
+    else pendingCancelRef.current = true
+  }
+  const micPress = {
+    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (e.pointerType === 'mouse' || busy || recording) return
+      e.preventDefault()
+      touchPressRef.current = true
+      try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+      holdRef.current = { x: e.clientX, y: e.clientY, t: Date.now() }
+      pendingCancelRef.current = false
+      setHoldDx(0)
+      void startVoiceNote()
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLButtonElement>) => {
+      const h = holdRef.current
+      if (!h) return
+      const dx = Math.min(0, e.clientX - h.x)
+      if (dx < -SLIDE_CANCEL_PX) { holdRef.current = null; setHoldDx(null); cancelHeldNote(); return }
+      // Locked: the bar's discard and send buttons take over, as for a tap.
+      if (e.clientY - h.y < -SLIDE_LOCK_PX) { holdRef.current = null; setHoldDx(null); return }
+      setHoldDx(dx)
+    },
+    onPointerUp: () => {
+      const h = holdRef.current
+      if (!h) return
+      holdRef.current = null
+      setHoldDx(null)
+      // A tap, or a release before the microphone opened (the first-time
+      // permission prompt): leave it recording hands-free rather than drop it.
+      if (Date.now() - h.t < HOLD_TAP_MS || !voiceRecRef.current) return
+      finishVoiceNote(false)
+    },
+    // The press was taken away (a system gesture): keep what was recorded,
+    // hands-free — losing a note to a stray swipe is worse than one more tap.
+    onPointerCancel: () => { holdRef.current = null; setHoldDx(null) },
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+    onClick: () => {
+      if (touchPressRef.current) { touchPressRef.current = false; return }
+      void startVoiceNote()
+    },
+  }
+
   const sendVoiceNote = async (blob: Blob, spoken = '') => {
     if (!active) return
     setBusy(true)
@@ -1444,7 +1578,7 @@ export default function Chats() {
       const res = await fetch(`${API_BASE}/api/chat/conversations/${active.id}/upload`, { method: 'POST', headers, body: form })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Upload failed')
-      setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x)))
+      setMessages((prev) => settleTmp(prev, tmpId, data))
       loadConvos()
     } catch (e: any) {
       setMessages((m) => m.filter((x) => x.id !== tmpId))
@@ -1748,7 +1882,11 @@ export default function Chats() {
     //
     // isComposing guard: with Indic (Telugu/Hindi) and other IME keyboards,
     // Enter first COMMITS the composition — that keystroke must not send.
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    //
+    // On a touch screen Enter is the newline, as in WhatsApp and Cliq on a
+    // phone: a soft keyboard has no Shift+Enter, so sending on Enter left no way
+    // at all to write a second line. The send button is how a phone sends.
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !touchUI) {
       e.preventDefault()
       send()
     }
@@ -2166,6 +2304,40 @@ export default function Chats() {
   // image opens it, but a long-press on one selects the message, and the
   // phone's own long-press menu is kept out of the way. Mouse devices get none
   // of this: they have the hover tools.
+  // A chat in the list on a touch screen: holding it opens its options, as on
+  // WhatsApp, where a mouse has the ⋯ button that appears on hover.
+  const rowPressRef = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null)
+  const rowPressedRef = useRef(false)
+  const convoTouch = (cid: string) => (!touchUI ? {} : {
+    onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+      rowPressedRef.current = false
+      if ((e.target as HTMLElement).closest('button, .msg-menu')) return
+      const row = e.currentTarget
+      if (rowPressRef.current) clearTimeout(rowPressRef.current.timer)
+      rowPressRef.current = {
+        x: e.clientX, y: e.clientY,
+        timer: setTimeout(() => {
+          rowPressRef.current = null
+          rowPressedRef.current = true
+          try { navigator.vibrate?.(12) } catch { /* the menu says it */ }
+          setMenuAnchor(row.querySelector('.convo-menu-btn') as HTMLElement | null)
+          setConvoMenu(cid)
+        }, LONG_PRESS_MS),
+      }
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+      const p = rowPressRef.current
+      if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 10) { clearTimeout(p.timer); rowPressRef.current = null }
+    },
+    onPointerUp: () => { if (rowPressRef.current) { clearTimeout(rowPressRef.current.timer); rowPressRef.current = null } },
+    onPointerCancel: () => { if (rowPressRef.current) { clearTimeout(rowPressRef.current.timer); rowPressRef.current = null } },
+    onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => e.preventDefault(),
+    // The click a long-press ends with must neither open the chat nor reach
+    // the document, which would close the menu it just opened.
+    onClickCapture: (e: React.MouseEvent<HTMLDivElement>) => {
+      if (rowPressedRef.current) { rowPressedRef.current = false; e.preventDefault(); e.stopPropagation() }
+    },
+  })
   const bubbleTouch = (m: Msg) => (!touchUI || m.id.startsWith('tmp_') ? {} : {
     onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
       longPressedRef.current = false
@@ -2462,9 +2634,9 @@ export default function Chats() {
   // me, chat cleared, touch turned off), or the next Escape or Back would be
   // spent letting go of a message no longer there.
   useEffect(() => { if (selectedId && !selMsg) setSelectedId(null) }, [selectedId, selMsg])
-  const shownMessages = inSearch.trim()
-    ? messages.filter((m) => !m.deleted && m.kind !== 'system' && `${m.body || ''} ${m.transcript || ''} ${m.file?.name || ''}`.toLowerCase().includes(inSearch.trim().toLowerCase()))
-    : messages
+  // Searching no longer filters the thread: matches are highlighted in place and
+  // stepped through (searchHits), so each one is read with what was said around it.
+  const shownMessages = messages
   // Interleave date separators (Today / Yesterday / date) + an "unread" divider,
   // which says how many, as WhatsApp's does.
   const isUnreadForMe = (m: Msg) => !!threadLastRead && m.created_at > threadLastRead && m.sender_id !== user?.id && m.kind !== 'system'
@@ -2503,7 +2675,7 @@ export default function Chats() {
             <button className="ic-btn" onClick={() => setShowMentions(true)} title="Messages that mention me" aria-label="Messages that mention me"><Ic name="at" size={18} /></button>
             <button className="ic-btn" onClick={() => setShowStarred(true)} title="Starred messages" aria-label="Starred messages"><Ic name="star" size={18} /></button>
             <button className="ic-btn" onClick={() => setShowLater(true)} title="Reminders & scheduled messages" aria-label="Reminders and scheduled messages"><Ic name="clock" size={18} /></button>
-            <button className="btn btn-primary btn-sm row" style={{ gap: 5, marginLeft: 4 }} onClick={() => setShowNew(true)} title="New chat / group"><Ic name="plus" size={15} /> New</button>
+            <button className="btn btn-primary btn-sm row ch-new" style={{ gap: 5, marginLeft: 4 }} onClick={() => setShowNew(true)} title="New chat / group"><Ic name="plus" size={15} /> New</button>
           </div>
         </div>
         <input className="chat-contact-search" placeholder="Search chats…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -2567,15 +2739,15 @@ export default function Chats() {
             const lastTicks = c.last_from_me && c.last_kind !== 'system' && c.last_kind !== 'call' && c.last_kind !== 'meeting' && c.last_message && !/deleted this message$/.test(c.last_message)
               ? <Ticks state={c.last_seen ? 'read' : c.last_delivered ? 'delivered' : 'sent'} /> : null
             return (
-              <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '') + (hasUnread(c) && !c.muted ? ' has-unread' : '')} onClick={() => setActiveId(c.id)}>
+              <div key={c.id} className={'convo-item chat-contact' + (c.id === activeId ? ' active' : '') + (hasUnread(c) && !c.muted ? ' has-unread' : '')} onClick={() => setActiveId(c.id)} {...convoTouch(c.id)}>
                 {/* The avatar is its own button, as on WhatsApp: it opens the
                     chat with its info already up, where the row opens just the chat. */}
                 <button type="button" className="ci-list-avatar" title={c.type === 'group' ? 'Group info' : 'Contact info'}
                   aria-label={`${c.name}: ${c.type === 'group' ? 'group' : 'contact'} info`}
                   onClick={(e) => { e.stopPropagation(); openInfoFor(c.id) }}>
                   {c.type === 'group'
-                    ? <GroupAvatar conv={c} size={38} />
-                    : <PresenceAvatar name={c.name} color={c.avatar_color} size={38} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
+                    ? <GroupAvatar conv={c} size={48} />
+                    : <PresenceAvatar name={c.name} color={c.avatar_color} size={48} online={!!c.other_user_id && online.has(c.other_user_id)} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
                 </button>
                 <div className="convo-meta" style={{ minWidth: 0, flex: 1 }}>
                   <div className="row spread" style={{ gap: 6 }}>
@@ -2630,6 +2802,11 @@ export default function Chats() {
           })}
         </div>
         </>)}
+        {/* Phones: new chat is the round button over the list's corner, as on
+            WhatsApp; the toolbar's "New" gives way to it (styles.css). */}
+        {!showArchived && (
+          <button className="chat-fab" onClick={() => setShowNew(true)} title="New chat or group" aria-label="New chat or group"><Ic name="plus" size={24} /></button>
+        )}
       </aside>
 
       {/* ---- conversation pane ---- */}
@@ -2822,7 +2999,18 @@ export default function Chats() {
 
           {inSearchOpen && (
             <div className="in-search">
-              <input autoFocus placeholder="Search messages…" value={inSearch} onChange={(e) => setInSearch(e.target.value)} />
+              <input autoFocus placeholder="Search messages…" value={inSearch} onChange={(e) => setInSearch(e.target.value)}
+                enterKeyHint="search"
+                // Enter steps to the next older match, Shift+Enter back — the
+                // keyboard's search key on a phone does the same.
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); stepHit(!e.shiftKey) } }} />
+              {searchHits && (
+                <span className="in-search-count" aria-live="polite">
+                  {searchHits.length ? `${hitAt + 1} of ${searchHits.length}${searchHits.length >= 300 ? '+' : ''}` : 'No results'}
+                </span>
+              )}
+              <button className="ic-btn" aria-label="Older match" title="Older match" disabled={!searchHits?.length} onClick={() => stepHit(true)}><Ic name="chevronUp" size={16} /></button>
+              <button className="ic-btn" aria-label="Newer match" title="Newer match" disabled={!searchHits?.length} onClick={() => stepHit(false)}><Ic name="chevronDown" size={16} /></button>
               <button className="btn btn-ghost btn-sm" aria-label="Close search" onClick={() => { setInSearch(''); setInSearchOpen(false) }}>✕</button>
             </div>
           )}
@@ -2851,13 +3039,13 @@ export default function Chats() {
                 />
               </div>
             )}
-            {active && hasMore && !inSearch.trim() && (
+            {active && hasMore && (
               <div className="older-row">
                 {loadingOlder ? <span className="spinner" /> : <button className="btn btn-ghost btn-sm" onClick={loadOlder}>Load earlier messages</button>}
               </div>
             )}
             {active && threadLoading && messages.length === 0 && <div style={{ margin: 'auto' }}><span className="spinner" /></div>}
-            {active && !threadLoading && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}>{inSearch ? 'No matching messages' : <>No messages yet.<br />Say hello</>}</div>}
+            {active && !threadLoading && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}><>No messages yet.<br />Say hello</></div>}
             {logItems.map((it, idx) => {
               if ('sep' in it) return <div key={'sep' + idx} className="date-sep"><span>{it.sep}</span></div>
               if ('unread' in it) return <div key={'unread' + idx} className="unread-sep"><span>{it.unread} unread message{it.unread === 1 ? '' : 's'}</span></div>
@@ -2868,7 +3056,19 @@ export default function Chats() {
               const isTemp = m.id.startsWith('tmp_')
               const isImage = !!m.file && (m.file.type || '').startsWith('image/')
               const isCard = !!m.kind && !m.deleted
-              const showSender = active?.type === 'group' && !mine && !m.deleted
+              // A run: the same person again, straight after and within a few
+              // minutes. As in WhatsApp and Cliq, only its first message carries
+              // the name and the face, and the run sits closer together — a name
+              // over every line made a busy group read like a list of strangers.
+              const prevIt = logItems[idx - 1]
+              const prevM = prevIt && 'm' in prevIt ? prevIt.m : null
+              const plain = (x: Msg) => x.kind !== 'system' && !x.call && !x.meeting
+              const cont = !!prevM && plain(prevM) && plain(m) && !prevM.deleted && prevM.sender_id === m.sender_id
+                && new Date(m.created_at).getTime() - new Date(prevM.created_at).getTime() < RUN_GAP_MS
+              const inGroup = active?.type === 'group'
+              const withFace = inGroup && !mine && plain(m)
+              const showSender = inGroup && !mine && !m.deleted && !cont
+              const face = withFace && !cont ? active?.members.find((mm) => mm.id === m.sender_id) : null
               // A message that names me gets an accent stripe — in a busy group,
               // scrolling back for the one line that was actually aimed at you is
               // the whole reason mentions exist.
@@ -2902,7 +3102,7 @@ export default function Chats() {
               )
               return (
                 <div key={m.id} data-msg={m.id}
-                  className={'msg-wrap' + (flashId === m.id ? ' flash' : '') + (touchUI && selectedId === m.id && !m.deleted ? ' selected' : '') + (picked ? ' picked' : '') + (m.call || m.meeting ? ' centred' : mine ? ' mine' : '')}
+                  className={'msg-wrap' + (flashId === m.id ? ' flash' : '') + (touchUI && selectedId === m.id && !m.deleted ? ' selected' : '') + (picked ? ' picked' : '') + (m.call || m.meeting ? ' centred' : mine ? ' mine' : '') + (cont ? ' cont' : '') + (withFace ? ' has-face' : '')}
                   style={{ alignItems: m.call || m.meeting ? 'center' : mine ? 'flex-end' : 'flex-start' }}
                   // Desktop, picking messages: a click anywhere on the row picks
                   // it — caught on the way down, so a quote, a link or a button
@@ -2919,6 +3119,11 @@ export default function Chats() {
                     </button>
                   )}
                   {touchUI && !multi && !m.call && !m.meeting && <span className="swipe-ic" aria-hidden="true"><Ic name="reply" size={16} /></span>}
+                  {face && (
+                    <span className="msg-face" aria-hidden="true">
+                      <Avatar name={face.name} color={face.avatar_color} size={28} src={face.avatar_file ? userAvatarUrl(face.id, face.avatar_file) : undefined} />
+                    </span>
+                  )}
                   {m.meeting ? (
                     <CallSummaryCard
                       meeting={m.meeting}
@@ -2939,7 +3144,6 @@ export default function Chats() {
                   ) : (
                   <div className={'msg-line' + (mine ? ' mine' : '')}>
                     <div className="msg-body">
-                      {showSender && <div className="msg-sender" style={{ color: senderColor(m.sender_id) }}>{senderName(m.sender_id)}</div>}
                       {m.deleted ? (
                         <div className="bubble deleted row" style={{ gap: 6 }} {...bubbleTouch(m)}><Ic name="block" size={13} /> {mine ? 'You deleted this message' : 'This message was deleted'}<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
                       ) : (
@@ -2947,7 +3151,9 @@ export default function Chats() {
                           className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !m.uploading ? ' pic-bubble' : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
                           {...bubbleTouch(m)}
                         >
-                          {m.forwarded && <div className="forwarded-tag row" style={{ gap: 5 }}><Ic name="forward" size={12} /> Forwarded</div>}
+                          {/* In the bubble, as WhatsApp writes who said it. */}
+                          {showSender && <div className="msg-sender" style={{ color: senderColor(m.sender_id) }}>{senderName(m.sender_id)}</div>}
+                          {m.forwarded &&<div className="forwarded-tag row" style={{ gap: 5 }}><Ic name="forward" size={12} /> Forwarded</div>}
                           {m.reply && (
                             <button type="button" className="reply-quote" onClick={(e) => { e.stopPropagation(); jumpToReply(m.reply!) }} aria-label={`Replying to ${m.reply.sender_id === user!.id ? 'yourself' : m.reply.sender_name}: ${m.reply.text}. Show it`}>
                               <span className="reply-quote-main">
@@ -3221,8 +3427,15 @@ export default function Chats() {
                     <div className="voice-recording">
                       <span className="voice-rec-dot" />
                       <span className="voice-rec-time">{Math.floor(recSecs / 60)}:{String(recSecs % 60).padStart(2, '0')}</span>
-                      <span className="muted" style={{ fontSize: 12.5 }}>Recording…</span>
-                      <button className="ic-btn cb-discard" title="Discard" aria-label="Discard the voice note" onClick={() => finishVoiceNote(true)}><Ic name="trash" size={18} /></button>
+                      {holdDx !== null ? (<>
+                        <span className="voice-slide" style={{ transform: `translateX(${holdDx * 0.6}px)`, opacity: Math.max(0.25, 1 + holdDx / SLIDE_CANCEL_PX) }}>
+                          <Ic name="arrowLeft" size={14} /> Slide to cancel
+                        </span>
+                        <span className="voice-lock-hint" aria-hidden="true"><Ic name="lock" size={14} /><Ic name="chevronUp" size={14} /></span>
+                      </>) : (<>
+                        <span className="muted" style={{ fontSize: 12.5 }}>Recording…</span>
+                        <button className="ic-btn cb-discard" title="Discard" aria-label="Discard the voice note" onClick={() => finishVoiceNote(true)}><Ic name="trash" size={18} /></button>
+                      </>)}
                     </div>
                   ) : (<>
                     <div className="emoji-wrap">
@@ -3254,6 +3467,9 @@ export default function Chats() {
                       value={input}
                       onChange={onComposerChange}
                       onKeyDown={onComposerKey}
+                      // The keyboard's action key shows the return arrow it now
+                      // performs on a phone, not a send arrow it no longer does.
+                      enterKeyHint={touchUI ? 'enter' : 'send'}
                       // A screenshot (or any copied file) pasted here goes into the
                       // tray above; a paste of words is still just words.
                       onPaste={(e) => {
@@ -3288,10 +3504,11 @@ export default function Chats() {
                       ><Ic name="attach" size={19} /></button>
                     )}
                   </>)}
-                  {recording
+                  {recording && holdDx === null
                     ? <button className="send-btn" title="Send voice note" aria-label="Send the voice note" onClick={() => finishVoiceNote(false)}><Ic name="send" size={18} /></button>
-                    : !editing && !input.trim() && !staged.length
-                      ? <button className="send-btn mic" title="Record a voice note" aria-label="Record a voice note" disabled={busy} onClick={startVoiceNote}><Ic name="mic" size={20} /></button>
+                    : holdDx !== null || (!editing && !input.trim() && !staged.length)
+                      // Stays this same button while held: it holds the pointer capture.
+                      ? <button className={'send-btn mic' + (holdDx !== null ? ' held' : '')} title="Record a voice note (hold on a phone)" aria-label="Record a voice note" disabled={busy} {...micPress}><Ic name="mic" size={20} /></button>
                       : <button
                           data-va="chats.send"
                           className="send-btn"
@@ -3363,6 +3580,7 @@ export default function Chats() {
         />
       )}
       {showNew && <NewChatModal user={user!} convos={convos} onClose={() => setShowNew(false)} onOpen={(cid) => { setShowNew(false); setActiveId(cid); loadConvos() }} />}
+      {sharing && <ShareModal shared={sharing} convos={convos} onPick={shareTo} onClose={() => setSharing(null)} />}
       {forwardMsgs && <ForwardModal messages={forwardMsgs} convos={convos} onClose={() => setForwardMsgs(null)} onDone={() => { setForwardMsgs(null); loadConvos() }} />}
       {assignFor && active && (
         <TaskAssignSheet
@@ -3527,6 +3745,34 @@ function ForwardModal({ messages, convos, onClose, onDone }: { messages: Msg[]; 
           {list.length === 0 && <div className="empty" style={{ padding: 16 }}>No chats</div>}
         </div>
         <button className="btn btn-primary" style={{ width: '100%', marginTop: 10 }} disabled={busy || !sel.size} onClick={go}>Forward ({sel.size})</button>
+      </div>
+    </div>
+  )
+}
+
+// ---------- Send to… (shared from another app) ----------
+function ShareModal({ shared, convos, onPick, onClose }: { shared: Shared; convos: Conversation[]; onPick: (cid: string) => void; onClose: () => void }) {
+  const cardRef = useDialog<HTMLDivElement>(onClose)
+  const [q, setQ] = useState('')
+  // Groups only their admins may write to are left out for everyone else.
+  const list = convos.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()) && !(c.type === 'group' && c.admins_only && c.role !== 'admin'))
+  const n = shared.files.length
+  const what = n > 1 ? `${n} files` : n === 1 ? shared.files[0].name : shared.text
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" ref={cardRef} role="dialog" aria-modal="true" aria-label="Send to a chat" onClick={(e) => e.stopPropagation()}>
+        <div className="card-head spread"><h3 style={{ margin: 0, fontSize: 16 }}>Send to…</h3><button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">✕</button></div>
+        <div className="fwd-preview row" style={{ gap: 5 }}>{n > 0 && <Ic name="attach" size={13} />} {what}</div>
+        <input className="chat-contact-search" placeholder="Search chats…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="modal-list">
+          {list.map((c) => (
+            <button key={c.id} type="button" className="modal-user share-pick" onClick={() => onPick(c.id)}>
+              {c.type === 'group' ? <GroupAvatar conv={c} size={34} /> : <Avatar name={c.name} color={c.avatar_color} size={34} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 13.5 }}>{c.name}</div><div className="muted" style={{ fontSize: 11.5 }}>{c.type === 'group' ? `${c.member_count} members` : 'Direct'}</div></div>
+            </button>
+          ))}
+          {list.length === 0 && <div className="empty" style={{ padding: 16 }}>No chats</div>}
+        </div>
       </div>
     </div>
   )
