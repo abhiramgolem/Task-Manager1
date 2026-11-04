@@ -109,8 +109,9 @@ export function deviceLabel(ua = '') {
 
 // Notification types that belong to Chats, not to the bell. Rows of these
 // filed before the bell went task-only are still in the table, so readers of
-// it filter them out by this list too.
-export const CHAT_NOTIF_TYPES = ['chat_message', 'chat_mention', 'chat_call', 'chat_reminder']
+// it filter them out by this list too. A mention is the one chat event that
+// does go to the bell: it is addressed to you by name, like a task is.
+export const BELL_SKIPPED_TYPES = ['chat_message', 'chat_call', 'chat_reminder']
 
 // Which notification categories a person still wants. Every type maps to one
 // category so a toggle governs a whole family rather than a single message.
@@ -158,10 +159,10 @@ export function notify(orgId, userId, type, message, taskId = null, link = null,
   const conversationId = link?.conversationId || null
   const messageId = (conversationId && link?.messageId) || null
   const commentId = (taskId && link?.commentId) || null
-  // The bell is for tasks. Chat already has its own unread counts, mentions
-  // and list, and filing every message there too buried the task updates
-  // among them — so a chat event is pushed to the phone but never filed.
-  if (!CHAT_NOTIF_TYPES.includes(type)) {
+  // The bell is for tasks and mentions. Chat already has its own unread
+  // counts and list, and filing every message there too buried the task
+  // updates among them — so other chat events are pushed but never filed.
+  if (!BELL_SKIPPED_TYPES.includes(type)) {
     db.prepare(
       `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, conversation_id, message_id, comment_id, read, created_at)
        VALUES (?,?,?,?,?,?,?,?,?,0,?)`
