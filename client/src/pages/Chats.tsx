@@ -692,6 +692,11 @@ export default function Chats() {
   const pingNav = () => window.dispatchEvent(new Event('chat-unread-changed'))
   const loadConvos = () => api.get('/chat/conversations').then((d) => { setConvos(d.conversations); pingNav() }).catch(() => {})
 
+  // An upload's "Sending…" line becomes the message the server returned —
+  // unless the socket delivered that message first and it is already shown.
+  const settleTmp = (prev: Msg[], tmpId: string, m: Msg) =>
+    prev.some((x) => x.id === m.id) ? prev.filter((x) => x.id !== tmpId) : prev.map((x) => (x.id === tmpId ? m : x))
+
   const mergeIncoming = (m: Msg) => setMessages((prev) => {
     if (prev.some((x) => x.id === m.id)) return prev
     const ti = prev.findIndex((x) => x.id.startsWith('tmp_') && x.sender_id === m.sender_id && x.body === m.body && !!x.file === !!m.file)
@@ -1310,7 +1315,7 @@ export default function Chats() {
         xhr.onerror = () => reject(new Error('the connection was lost'))
         xhr.send(form)
       })
-      setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x)))
+      setMessages((prev) => settleTmp(prev, tmpId, data))
       return true
     } catch (err: any) {
       setMessages((m) => m.filter((x) => x.id !== tmpId)); toast.error(`Could not send ${file.name}: ${err.message}`)
@@ -1516,7 +1521,7 @@ export default function Chats() {
       const res = await fetch(`${API_BASE}/api/chat/conversations/${active.id}/upload`, { method: 'POST', headers, body: form })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Upload failed')
-      setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x)))
+      setMessages((prev) => settleTmp(prev, tmpId, data))
       loadConvos()
     } catch (e: any) {
       setMessages((m) => m.filter((x) => x.id !== tmpId))

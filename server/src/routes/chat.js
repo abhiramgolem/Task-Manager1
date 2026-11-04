@@ -1065,7 +1065,9 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file required (field "file")' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
   if (!canPost(conv, me.id)) { cleanup(); return res.status(403).json({ error: ADMINS_ONLY }) }
-  const caption = String(req.body?.body || '').trim().slice(0, 4000)
+  // A form sends its text with CRLF line breaks; stored as the JSON route
+  // stores a message, with LF, or a multi-line caption reads differently.
+  const caption = String(req.body?.body || '').replace(/\r\n?/g, '\n').trim().slice(0, 4000)
   const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
   const mid = id('msg')
   const ts = now()
