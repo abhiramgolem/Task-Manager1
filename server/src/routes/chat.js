@@ -34,7 +34,7 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true })
 // free-disk check that GET /upload-room asks before a big file is sent — shared
 // with task attachments, which land on the same disk.
 const CHAT_FILE_MAX = 1024 * MB
-const chatFiles = bigFileUpload({ dir: UPLOAD_DIR, prefix: 'cf', max: CHAT_FILE_MAX, tooBig: 'File too large (max 1 GB)' })
+const chatFiles = bigFileUpload({ kind: 'chat', dir: UPLOAD_DIR, prefix: 'cf', max: CHAT_FILE_MAX, tooBig: 'File too large (max 1 GB)' })
 const receiveChatFile = chatFiles.receive
 // A group photo and a piece of call audio keep the old ceiling: one is only
 // ever a picture, the other is read whole into memory to be transcribed.
@@ -1080,9 +1080,11 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   // input: it is display text, and it is capped.
   const supplied = String(req.body?.transcript || '').trim().slice(0, 5000)
   if (supplied) db.prepare('UPDATE chat_messages SET transcript=? WHERE id=?').run(supplied, mid)
-  // multipart carries no arrays, so the caption's mentions arrive as a JSON string.
+  // multipart carries no arrays, so there the caption's mentions arrive as a
+  // JSON string; a file sent in chunks finishes with a JSON body and a real one.
   let capMentions = []
-  try { capMentions = JSON.parse(req.body?.mentions || '[]') } catch {}
+  if (Array.isArray(req.body?.mentions)) capMentions = req.body.mentions
+  else try { capMentions = JSON.parse(req.body?.mentions || '[]') } catch {}
   const mentioned = saveMentions(conv.id, mid, capMentions, me.id)
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
   deliver(conv, row, me, mentioned)

@@ -43,13 +43,14 @@ export function useDialog<T extends HTMLElement>(onClose: () => void, enabled = 
 
     const onKey = (e: KeyboardEvent) => {
       // A dialog raised over this one owns the keyboard: a confirmation
-      // (remove? delete?) or a chat dialog opened from inside it (Mute, from the
-      // chat info panel). This listener runs first (capture), so without the
+      // (remove? delete?), a chat dialog opened from inside it (Mute, from the
+      // chat info panel) or a photo viewer (a task's attachment, opened from
+      // the task drawer). This listener runs first (capture), so without the
       // check Escape would close the dialog underneath and Tab would pull focus
       // back into it. Its own wrapping overlay is not "over" it, nor is
       // anything inside it.
       const self = ref.current
-      const over = Array.from(document.querySelectorAll('.confirm-center, .modal-overlay'))
+      const over = Array.from(document.querySelectorAll('.confirm-center, .modal-overlay, .mv-overlay, .ci-lb'))
         .some((el) => !el.contains(self) && !self?.contains(el))
       if (over) return
       if (e.key === 'Escape') { e.preventDefault(); closeRef.current(); return }

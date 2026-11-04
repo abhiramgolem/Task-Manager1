@@ -40,13 +40,13 @@ type Copy = Record<string, string>
 
 const en: Copy = {
   navProduct: 'Product', navSolutions: 'Solutions', navPricing: 'Pricing', navResources: 'Resources',
-  signIn: 'Sign in', getStarted: 'Get Started',
+  signIn: 'Log in', getStarted: 'Get Started',
   heroBadge: '100% Voice-Driven Productivity',
   heroTitleA: 'Run Your Entire Workflow With', heroTitleB: 'Just Your Voice',
   heroSay: 'Say', heroQuote1: '“Schedule follow-up”', heroQuote2: '“Assign review to Priya”',
   heroBodyMid: ', or speak naturally in 50+ languages —',
   heroBodyEnd: 'listens, transcribes, and executes your workflow in real time.',
-  tryFree: 'Try VoTask Free', joinCode: 'Join with a code',
+  createAccount: 'Create account', joinCode: 'Join with a code',
   simulator: 'Voice Prompt Simulator', simulatorQuote: '“Create a task to review Q3 deck by Friday”',
   trySaying: 'Try saying:', chip1: '“Summarize meeting”', chip2: '“Assign sprint tasks”', chip3: '“Send recap to Slack”',
   availableOn: 'Available on', webApp: 'Web App',
@@ -87,13 +87,13 @@ const en: Copy = {
 
 const hi: Copy = {
   navProduct: 'उत्पाद', navSolutions: 'समाधान', navPricing: 'मूल्य', navResources: 'संसाधन',
-  signIn: 'साइन इन', getStarted: 'शुरू करें',
+  signIn: 'लॉग इन करें', getStarted: 'शुरू करें',
   heroBadge: '100% आवाज़-आधारित उत्पादकता',
   heroTitleA: 'अपना पूरा वर्कफ़्लो चलाएँ', heroTitleB: 'सिर्फ़ अपनी आवाज़ से',
   heroSay: 'कहिए', heroQuote1: '“फ़ॉलो-अप शेड्यूल करो”', heroQuote2: '“समीक्षा प्रिया को दो”',
   heroBodyMid: ', या 50+ भाषाओं में सहज बोलिए —',
   heroBodyEnd: 'सुनता है, लिखता है, और आपका काम तुरंत पूरा करता है।',
-  tryFree: 'VoTask मुफ़्त आज़माएँ', joinCode: 'कोड से जुड़ें',
+  createAccount: 'अकाउंट बनाएँ', joinCode: 'कोड से जुड़ें',
   simulator: 'वॉइस प्रॉम्प्ट सिम्युलेटर', simulatorQuote: '“शुक्रवार तक Q3 डेक की समीक्षा का टास्क बनाओ”',
   trySaying: 'ऐसे कहें:', chip1: '“मीटिंग का सारांश दो”', chip2: '“स्प्रिंट टास्क बाँटो”', chip3: '“Slack पर रीकैप भेजो”',
   availableOn: 'उपलब्ध है', webApp: 'वेब ऐप',
@@ -134,13 +134,13 @@ const hi: Copy = {
 
 const te: Copy = {
   navProduct: 'ఉత్పత్తి', navSolutions: 'పరిష్కారాలు', navPricing: 'ధరలు', navResources: 'వనరులు',
-  signIn: 'సైన్ ఇన్', getStarted: 'ప్రారంభించండి',
+  signIn: 'లాగిన్ అవ్వండి', getStarted: 'ప్రారంభించండి',
   heroBadge: '100% వాయిస్ ఆధారిత ఉత్పాదకత',
   heroTitleA: 'మీ పని మొత్తాన్ని నడపండి', heroTitleB: 'కేవలం మీ గొంతుతో',
   heroSay: 'చెప్పండి', heroQuote1: '“ఫాలో-అప్ షెడ్యూల్ చెయ్”', heroQuote2: '“రివ్యూ ప్రియకి ఇవ్వు”',
   heroBodyMid: ', లేదా 50+ భాషల్లో సహజంగా మాట్లాడండి —',
   heroBodyEnd: 'వింటుంది, రాస్తుంది, మీ పనిని వెంటనే చేస్తుంది.',
-  tryFree: 'VoTask ఉచితంగా ప్రయత్నించండి', joinCode: 'కోడ్‌తో చేరండి',
+  createAccount: 'ఖాతా సృష్టించండి', joinCode: 'కోడ్‌తో చేరండి',
   simulator: 'వాయిస్ ప్రాంప్ట్ సిమ్యులేటర్', simulatorQuote: '“శుక్రవారానికి Q3 డెక్ రివ్యూ టాస్క్ పెట్టు”',
   trySaying: 'ఇలా చెప్పండి:', chip1: '“మీటింగ్ సారాంశం చెప్పు”', chip2: '“స్ప్రింట్ టాస్క్‌లు ఇవ్వు”', chip3: '“Slackకి రీక్యాప్ పంపు”',
   availableOn: 'ఇక్కడ లభ్యం', webApp: 'వెబ్ యాప్',

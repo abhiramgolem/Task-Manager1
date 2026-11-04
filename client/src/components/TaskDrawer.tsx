@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api, Task, User, Attachment, taskAttachmentUrl } from '../api'
 import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, CategoryBadge, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
 import CategorySelect from './CategorySelect'
+import PhotoViewer from './PhotoViewer'
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { useDialog } from '../lib/useDialog'
@@ -165,6 +167,9 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   // takes minutes, and the rest of the drawer should not lock for all of them.
   const attachInput = useRef<HTMLInputElement>(null)
   const [upload, setUpload] = useState<{ taskId: string; name: string; pct: number; n: number; of: number } | null>(null)
+  // The attached picture open full size, where it can be zoomed into. It used
+  // to open in a new browser tab, which on the phone app left the app.
+  const [photoAt, setPhotoAt] = useState<string | null>(null)
   // The task on screen now. The modal drawer is reused when another task opens,
   // so a file that lands after that must not put its old task back on screen.
   const taskIdRef = useRef(taskId)
@@ -563,7 +568,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                 )}
               </>
             ) : task.status === 'Done' ? (
-              <div className="card-pad" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, color: '#047857' }}>
+              <div className="dr-done-note">
                 {task.completedBy
                   ? `✓ Completed — ${task.approval_status === 'approved' ? 'approved' : 'marked done'} by ${task.completedBy.id === user?.id ? 'you' : task.completedBy.name}.`
                   : '✓ Completed.'}
@@ -637,14 +642,19 @@ This cannot be undone — comments are not kept in the recycle bin.`,
           )}
 
           {(isManager || isAssigner) && task.approval_status === 'pending' && (
-            <div className="card-pad" style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, marginBottom: 16 }}>
-              <strong>Approval requested</strong>
-              <p className="muted" style={{ margin: '4px 0 10px' }}>
-                {isManager ? 'This task is in review and awaiting your approval.' : 'You handed this task out — it\'s submitted and waiting for you to accept the work.'}
-              </p>
-              <div className="row">
-                <button className="btn btn-primary btn-sm" onClick={() => approve('approved')}>✓ Approve & close</button>
-                <button className="btn btn-sm btn-danger" onClick={() => approve('rejected')} title="Send back to the owner to keep working">Send back for changes</button>
+            <div className="dr-approve" role="region" aria-label="Approval requested">
+              <div className="dr-approve-head">
+                <span className="dr-approve-ic" aria-hidden="true"><Ic name="clock" size={16} /></span>
+                <div className="dr-approve-body">
+                  <strong className="dr-approve-title">Approval requested</strong>
+                  <p className="dr-approve-text">
+                    {isManager ? 'This task is in review and awaiting your approval.' : 'You handed this task out — it\'s submitted and waiting for you to accept the work.'}
+                  </p>
+                </div>
+              </div>
+              <div className="dr-approve-actions">
+                <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => approve('approved')}><Ic name="check" size={14} /> Approve &amp; close</button>
+                <button className="btn btn-sm" disabled={busy} onClick={() => approve('rejected')} title="Send back to the owner to keep working"><Ic name="reply" size={14} /> Send back for changes</button>
               </div>
             </div>
           )}
@@ -680,9 +690,9 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                   return (
                     <div key={a.id} className="attach-item">
                       {isImg ? (
-                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb">
-                          <img src={taskAttachmentUrl(a.id)} alt={a.filename} loading="lazy" />
-                        </a>
+                        <button type="button" className="attach-thumb attach-thumb-pic" onClick={() => setPhotoAt(a.id)} aria-label={`View ${a.filename}`}>
+                          <img src={taskAttachmentUrl(a.id)} alt="" loading="lazy" />
+                        </button>
                       ) : isVid ? (
                         <video className="attach-thumb" src={taskAttachmentUrl(a.id)} controls preload="metadata" />
                       ) : (
@@ -693,8 +703,16 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                         </a>
                       )}
                       <div className="attach-meta">
-                        <a href={taskAttachmentUrl(a.id, true)} className="attach-name" title={`Download ${a.filename}`}>{a.filename}</a>
-                        <span className="muted" style={{ fontSize: 11 }}>{fmtBytes(a.file_size)}</span>
+                        <div className="attach-meta-text">
+                          <a href={taskAttachmentUrl(a.id, true)} download={a.filename} className="attach-name" title={`Download ${a.filename}`}>{a.filename}</a>
+                          <span className="muted" style={{ fontSize: 11 }}>{fmtBytes(a.file_size)}</span>
+                        </div>
+                        {/* Its own button: the file name was the only way to save a
+                            file, and nobody read a name as a download link — every
+                            thumbnail opens or plays the file instead. */}
+                        <a href={taskAttachmentUrl(a.id, true)} download={a.filename} className="attach-dl" title={`Download ${a.filename}`} aria-label={`Download ${a.filename}`}>
+                          <Ic name="download" size={14} />
+                        </a>
                       </div>
                       {canRemove && <button className="attach-item-x" disabled={busy} onClick={() => removeAttachment(a)} aria-label={`Remove ${a.filename}`}>✕</button>}
                     </div>
@@ -806,6 +824,28 @@ This cannot be undone — comments are not kept in the recycle bin.`,
               </div>
             </div>
           </div>
+        )}
+
+        {/* Into <body>: inside the drawer it would share the drawer's stacking
+            context and sit under the bottom nav. Closes by itself if the
+            attachment is removed, or another task opens in the drawer. */}
+        {photoAt && createPortal(
+          <PhotoViewer
+            label="Attachment viewer"
+            items={(task.attachments || []).filter((a) => (a.file_type || '').startsWith('image/')).map((a) => ({
+              id: a.id, src: taskAttachmentUrl(a.id), alt: a.filename, title: a.filename,
+              subtitle: [fmtBytes(a.file_size), a.created_at ? fmtDateTime(a.created_at) : ''].filter(Boolean).join(' · '),
+            }))}
+            startId={photoAt}
+            onClose={() => setPhotoAt(null)}
+            actions={(it) => (
+              <>
+                <a className="mv-btn" href={taskAttachmentUrl(it.id)} target="_blank" rel="noreferrer" aria-label="Open in a new tab" title="Open in a new tab"><Ic name="external" size={19} /></a>
+                <a className="mv-btn" href={taskAttachmentUrl(it.id, true)} download={it.title} aria-label="Download" title="Download"><Ic name="download" size={19} /></a>
+              </>
+            )}
+          />,
+          document.body,
         )}
       </>
   ))
