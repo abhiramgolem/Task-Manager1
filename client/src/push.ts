@@ -9,6 +9,7 @@ import { Capacitor } from '@capacitor/core'
 import { api, API_BASE } from './api'
 import { nativeCallsAvailable, configureNativeCalls } from './lib/nativeCall'
 import { notifTarget, replacesEntry } from './lib/notifTarget'
+import { shareTargetAvailable } from './lib/shareTarget'
 
 let started = false
 let lastToken: string | null = null
@@ -45,6 +46,24 @@ export async function registerPush() {
         visibility: 1,
       })
     } catch {}
+    // VoTask's own sound (res/raw/votask_chime.wav), as Cliq has its own.
+    // It comes in the same build as the share target, so that plugin being
+    // there says the sound is too; the server then sends this build's pushes
+    // to this channel (register-device's chime flag, push.js).
+    const chime = shareTargetAvailable()
+    if (chime) {
+      try {
+        await PushNotifications.createChannel({
+          id: 'votask_chime',
+          name: 'VoTask notifications',
+          description: 'Task updates, mentions and new messages',
+          importance: 5,
+          visibility: 1,
+          sound: 'votask_chime',
+          vibration: true,
+        })
+      } catch {}
+    }
 
     let perm = await PushNotifications.checkPermissions()
     if (perm.receive === 'prompt' || perm.receive === 'prompt-with-rationale') {
@@ -61,7 +80,7 @@ export async function registerPush() {
     if (callRing) configureNativeCalls(API_BASE || location.origin)
     PushNotifications.addListener('registration', async (token) => {
       lastToken = token.value
-      try { await api.post('/notifications/register-device', { token: token.value, platform: 'android', call_ring: callRing }) } catch {}
+      try { await api.post('/notifications/register-device', { token: token.value, platform: 'android', call_ring: callRing, chime }) } catch {}
     })
     PushNotifications.addListener('registrationError', (e) => console.warn('[push] registration error', e))
 

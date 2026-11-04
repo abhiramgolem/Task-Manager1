@@ -61,14 +61,14 @@ async function getAccessToken() {
 }
 
 // Persist a device's FCM token for a user (idempotent: one row per token).
-export function saveDeviceToken(userId, token, platform = 'android', { callRing = false } = {}) {
+export function saveDeviceToken(userId, token, platform = 'android', { callRing = false, chime = false } = {}) {
   if (!userId || !token) return
   // A token can migrate between users (shared device / re-login) — keep it tied to
   // the latest user so pushes never leak to a previous account.
   db.prepare('DELETE FROM device_tokens WHERE token=?').run(token)
   db.prepare(
-    `INSERT INTO device_tokens (id, user_id, token, platform, created_at, call_ring) VALUES (?,?,?,?,?,?)`
-  ).run(`dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, userId, token, platform, new Date().toISOString(), callRing ? 1 : 0)
+    `INSERT INTO device_tokens (id, user_id, token, platform, created_at, call_ring, chime) VALUES (?,?,?,?,?,?,?)`
+  ).run(`dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, userId, token, platform, new Date().toISOString(), callRing ? 1 : 0, chime ? 1 : 0)
 }
 
 export function removeDeviceToken(token) {
@@ -81,10 +81,14 @@ export function removeDeviceToken(token) {
 //
 // `tag`: a notification with the same tag replaces the one already in the
 // tray rather than adding another — one notification per chat, not per line.
+//
+// A build that registered with chime=1 has VoTask's own sound in res/raw and a
+// channel playing it ('votask_chime', push.ts); Android takes the sound from
+// the channel. An older build has neither, so it keeps its default-tone one.
 export async function sendPushToUser(userId, { title, body, data, tag }) {
   const sa = getServiceAccount()
   if (!sa || !userId) return
-  const tokens = db.prepare('SELECT token FROM device_tokens WHERE user_id=?').all(userId).map((r) => r.token)
+  const tokens = db.prepare('SELECT token, chime FROM device_tokens WHERE user_id=?').all(userId)
   if (!tokens.length) return
 
   let accessToken
@@ -95,7 +99,7 @@ export async function sendPushToUser(userId, { title, body, data, tag }) {
   for (const [k, v] of Object.entries(data || {})) stringData[k] = v == null ? '' : String(v)
 
   const url = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`
-  await Promise.all(tokens.map(async (tok) => {
+  await Promise.all(tokens.map(async ({ token: tok, chime }) => {
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -105,7 +109,12 @@ export async function sendPushToUser(userId, { title, body, data, tag }) {
             token: tok,
             notification: { title, body },
             data: stringData,
-            android: { priority: 'high', notification: { sound: 'default', channel_id: 'smarttask_v2', ...(tag ? { tag } : {}) } },
+            android: {
+              priority: 'high',
+              notification: chime
+                ? { sound: 'votask_chime', channel_id: 'votask_chime', ...(tag ? { tag } : {}) }
+                : { sound: 'default', channel_id: 'smarttask_v2', ...(tag ? { tag } : {}) },
+            },
           },
         }),
       })

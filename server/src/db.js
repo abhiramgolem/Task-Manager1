@@ -997,6 +997,9 @@ export function initSchema() {
   // get the call as a silent data push; an older app would drop that push on
   // the floor, so it gets an ordinary "is calling you" notification instead.
   ensureColumn('device_tokens', 'call_ring', 'INTEGER DEFAULT 0')
+  // chime: this build ships VoTask's own notification sound and its channel
+  // (push.js). Older builds lack both and stay on the default-tone channel.
+  ensureColumn('device_tokens', 'chime', 'INTEGER DEFAULT 0')
   // WHERE A MEETING CAME FROM. A meeting filed out of a chat — a call's
   // transcript, a recording posted in the thread — kept its only trail on the
   // chat side (chat_calls.meeting_id, the "Summary of …" card), so nothing on

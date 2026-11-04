@@ -93,27 +93,25 @@ export default function NotificationBell() {
   const soundOnRef = useRef(soundOn)
   useEffect(() => { soundOnRef.current = soundOn }, [soundOn])
 
-  // Synthesize a short two-note "ding-dong" chime (no audio file needed).
+  // VoTask's own chime, the same file the phone's notifications play
+  // (android res/raw/votask_chime.wav), decoded once and replayed.
+  const chimeBuf = useRef<Promise<AudioBuffer> | null>(null)
   const playChime = () => {
     try {
       const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
       if (!Ctx) return
-      const ctx = audioCtx.current || (audioCtx.current = new Ctx())
+      const ctx: AudioContext = audioCtx.current || (audioCtx.current = new Ctx())
       if (ctx.state === 'suspended') ctx.resume()
-      const t0 = ctx.currentTime
-      for (const n of [{ f: 880, at: 0 }, { f: 1174.7, at: 0.13 }]) {
-        const osc = ctx.createOscillator()
+      const buf = chimeBuf.current || (chimeBuf.current = fetch(`${import.meta.env.BASE_URL}sounds/votask_chime.wav`)
+        .then((r) => r.arrayBuffer()).then((b) => ctx.decodeAudioData(b)))
+      buf.then((b) => {
+        const src = ctx.createBufferSource()
         const gain = ctx.createGain()
-        osc.type = 'sine'
-        osc.frequency.value = n.f
-        osc.connect(gain); gain.connect(ctx.destination)
-        const start = t0 + n.at
-        gain.gain.setValueAtTime(0, start)
-        gain.gain.linearRampToValueAtTime(0.2, start + 0.02)
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.4)
-        osc.start(start)
-        osc.stop(start + 0.42)
-      }
+        src.buffer = b
+        gain.gain.value = 0.5
+        src.connect(gain); gain.connect(ctx.destination)
+        src.start()
+      }).catch(() => { chimeBuf.current = null })
     } catch { /* autoplay blocked or unsupported — fail silently */ }
   }
 
