@@ -1713,6 +1713,45 @@ tbody tr:hover { background: var(--n-50); }
 .dr-field--tall { align-items: stretch; }
 .dr-field--tall .dr-field-val { display: block; }
 .dr-field--tall .dr-field-val .row { justify-content: flex-start; }
+/* The reviewer's approve / send-back panel. It was a raw cream #fffbeb box
+   whose text follows the theme, so on dark it put near-white words on a
+   near-white card. Everything here is mixed from tokens against --surface: a
+   faint amber wash on light, a barely-warm slate on dark, never a bright slab. */
+.dr-approve {
+  margin-bottom: 16px; padding: 14px 16px; border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warning) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, var(--border));
+}
+.dr-approve-ic {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--warning-bg); color: var(--warning-ink);
+}
+/* The buttons sit under the icon and the text, not beside the icon: in the
+   drawer's width, the icon's column was what pushed "Send back" onto a line of
+   its own. */
+.dr-approve-head { display: flex; gap: 12px; align-items: flex-start; }
+.dr-approve-body { flex: 1; min-width: 0; }
+.dr-approve-title { display: block; font-size: 14px; font-weight: 700; color: var(--text); }
+.dr-approve-text { margin: 2px 0 0; font-size: 13px; line-height: 1.5; color: var(--n-600); }
+.dr-approve-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* Approve is the outcome "Completed" turns green for, so it is green here too —
+   emerald-700, flat and without the coral glow: deep enough that white text
+   holds 5.5:1, and quiet on both themes. Send back stays the app's ordinary
+   secondary button rather than an alarm-red one: it returns work, it deletes
+   nothing. */
+.dr-approve .btn-primary { background: #047857; border-color: #047857; color: #fff; box-shadow: none; }
+.dr-approve .btn-primary:hover { background: #065f46; border-color: #065f46; box-shadow: 0 3px 10px rgba(4,120,87,.28); }
+@media (max-width: 720px) {
+  .dr-approve-actions .btn { flex: 1 1 auto; }
+}
+/* "Completed — approved by …". Mixed against the surface for the same reason. */
+.dr-done-note {
+  padding: 12px 14px; border-radius: var(--r-md); font-weight: 600;
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
+  color: var(--success-ink);
+}
 @keyframes slideIn { from { transform: translateX(30px); opacity: .6; } to { transform: none; opacity: 1; } }
 .modal-center { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 50; display: grid; place-items: center; padding: 20px; }
 .modal { background: #fff; border-radius: 14px; box-shadow: var(--shadow-lg); width: 600px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
@@ -3725,9 +3764,15 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
 .attach-item { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
 .attach-thumb { display: block; width: 100%; height: 84px; object-fit: cover; background: var(--n-100); }
 .attach-thumb img, .attach-thumb video { width: 100%; height: 84px; object-fit: cover; display: block; }
+/* A picture opens in the photo viewer, where it can be zoomed into. */
+.attach-thumb-pic { border: 0; padding: 0; cursor: zoom-in; }
 .attach-thumb-file { display: grid; place-items: center; align-content: center; gap: 3px; color: var(--muted); text-decoration: none; }
 .attach-ext { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; }
-.attach-meta { padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; }
+.attach-meta { padding: 6px 8px; display: flex; align-items: center; gap: 6px; }
+.attach-meta-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* Download, on every tile: the thumbnail above opens or plays the file. */
+.attach-dl { flex-shrink: 0; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); text-decoration: none; }
+.attach-dl:hover { background: color-mix(in srgb, var(--primary) 18%, transparent); }
 /* A big file going up from the drawer: its name, a percentage, a bar. */
 .attach-progress { margin-top: 8px; display: grid; gap: 5px; }
 .attach-progress-line { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
@@ -4143,6 +4188,8 @@ body.chats-page .content { max-width: none; }
 }
 .stage-item.pic { width: 64px; padding: 0; overflow: hidden; }
 .stage-item.pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A picture's thumbnail opens it full size, to check before it is sent. */
+.stage-open { display: block; width: 100%; height: 100%; border: 0; padding: 0; background: none; cursor: zoom-in; }
 .stage-ic {
   width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 9px;
   background: color-mix(in srgb, var(--primary) 14%, var(--surface)); color: var(--primary); font-size: 10px; font-weight: 800; letter-spacing: .03em;
@@ -4399,6 +4446,14 @@ button.reply-quote {
 .bubble.user .read-more { color: #fff; text-decoration: underline; }
 .chat-image-btn { display: block; border: 0; padding: 0; background: transparent; cursor: zoom-in; border-radius: 10px; line-height: 0; }
 .chat-video { display: block; max-width: 260px; max-height: 260px; border-radius: 10px; background: #000; }
+/* Download over a photo or video, in the top corner: the bottom is the video's
+   own controls. On hover with a mouse; always there on a touch screen, which
+   has no hover to reveal it. */
+.chat-media { position: relative; width: fit-content; }
+.chat-media-dl { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.chat-media:hover .chat-media-dl, .chat-media-dl:focus-visible { opacity: 1; }
+.chat-media-dl:hover { background: rgba(0,0,0,.75); }
+@media (hover: none) { .chat-media-dl { opacity: .9; } }
 .chat-file-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: color-mix(in srgb, currentColor 12%, transparent); flex-shrink: 0; }
 
 /* Cards inside a bubble: the bubble gives them room and keeps the time below. */
@@ -4631,20 +4686,29 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .cl-sum { border: 1px solid var(--border); background: var(--surface); color: var(--primary); font: inherit; font-size: 11.5px; font-weight: 700; padding: 4px 9px; border-radius: 999px; cursor: pointer; }
 .cl-call { color: var(--primary); }
 
-/* The photo viewer: the picture on black, full screen, over everything. */
-.mv-overlay { position: fixed; inset: 0; z-index: 1400; display: flex; flex-direction: column; background: rgba(8,10,14,.96); color: #fff; animation: overlay-fade .16s ease; }
-.mv-head { display: flex; align-items: center; gap: 4px; padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px; }
+/* The photo viewer (PhotoViewer): the picture on black, full screen, over
+   everything — a chat's photos, pictures waiting to be sent, a task's
+   attachments. Gestures inside it are the viewer's own (ZoomMedia): no
+   browser panning or page zoom, and no overscroll that could become the
+   browser's swipe-to-go-Back. Only a long caption scrolls. Opaque: at 96%
+   the chat's own header (a name, the call buttons) ghosted through the bar. */
+.mv-overlay { position: fixed; inset: 0; z-index: 1400; display: flex; flex-direction: column; background: rgb(8,10,14); color: #fff; touch-action: none; overscroll-behavior: none; animation: overlay-fade .16s ease; }
+.mv-head { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px; }
 .mv-who { flex: 1; min-width: 0; }
-.mv-name { font-weight: 700; font-size: 14.5px; }
-.mv-when { font-size: 12px; opacity: .7; }
-.mv-btn { width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #fff; cursor: pointer; }
+.mv-name { font-weight: 700; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mv-when { font-size: 12px; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Some are links (a task attachment's Download), so no underline either. */
+.mv-btn { width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #fff; cursor: pointer; text-decoration: none; }
 .mv-btn:hover { background: rgba(255,255,255,.12); }
-.mv-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
-.mv-media { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
-.mv-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 46px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; }
+.mv-btn:focus-visible, .mv-nav:focus-visible { outline-color: #fff; }
+/* Clips a zoomed picture, so it never spreads over the bar or the caption;
+   dragging it around never starts a text selection. */
+.mv-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; -webkit-user-select: none; user-select: none; }
+/* Above the picture's box, which fills the stage. */
+.mv-nav { position: absolute; top: 50%; z-index: 1; transform: translateY(-50%); width: 46px; height: 46px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; }
 .mv-nav:hover { background: rgba(255,255,255,.22); }
 .mv-nav.prev { left: 12px; } .mv-nav.next { right: 12px; }
-.mv-caption { padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); text-align: center; font-size: 14px; white-space: pre-wrap; background: rgba(0,0,0,.35); }
+.mv-caption { flex-shrink: 0; max-height: 28vh; overflow-y: auto; padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); text-align: center; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; background: rgba(0,0,0,.35); touch-action: pan-y; overscroll-behavior: contain; }
 @media (hover: none) { .mv-nav { display: none; } }
 
 /* ---- Chat info panel (WhatsApp-style group / contact info) ----------------
@@ -5019,6 +5083,33 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .ci-media-foot { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 16px 18px; }
 .ci-media-loading { font-size: 12.5px; color: var(--muted); }
 
+/* ---- A picture or video in a full-screen viewer (ZoomMedia) ----
+   Shared by the media viewer below and the photo viewer (.mv-*); each frame
+   gives it a stage with position: relative and overflow: hidden. Filling the
+   stage absolutely gives the picture a definite box, so its max-height: 100%
+   resolves and a tall image fits instead of spilling. The box takes every
+   touch itself (touch-action: none), whatever frame it is in. */
+.zm-box { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 8px 72px 16px; touch-action: none; }
+.zm-img,
+.zm-video { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+/* Zoom: double-click or pinch the picture; drag it around once zoomed; a
+   click on the dark ground zooms back out. */
+.zm-img { cursor: zoom-in; }
+.zm-box.zoomed { cursor: zoom-out; }
+.zm-box.zoomed .zm-img { cursor: grab; }
+.zm-box.zoomed.dragging .zm-img { cursor: grabbing; }
+/* Double-tap zooms and let-go snap-backs ease; fingers move it directly. */
+.zm-anim { transition: transform .2s ease; }
+@media (prefers-reduced-motion: reduce) { .zm-anim { transition: none; } }
+/* Fades in only after 300ms, so an image already cached by a grid or a
+   thumbnail never flashes a spinner. */
+.spinner.zm-spin { position: absolute; top: 50%; left: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-color: rgba(255, 255, 255, .25); border-top-color: #fff; animation: spin .7s linear infinite, overlay-fade .2s ease .3s both; }
+.zm-missing { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 320px; text-align: center; font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, .85); }
+.zm-missing-sub { font-size: 12.5px; font-weight: 400; color: rgba(255, 255, 255, .6); }
+/* The whole screen on a phone: the picture uses every pixel and the arrows
+   float over it. */
+@media (max-width: 720px) { .zm-box { padding: 0; } }
+
 /* ---- Media viewer (lightbox) ----
    Above everything that floats over the page (the voice pill, 1200), below
    the voice panel (1300) and a call (1400), which must stay reachable.
@@ -5026,8 +5117,8 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
    panel's stacking context (z-index 30) and sit under the bottom nav.
    Black in both themes; it is a picture frame, not a page. Opaque: even at
    97% the panel's title still ghosted through behind the viewer's own bar.
-   Gestures inside it are the viewer's own (ChatMedia's LbMedia handles them):
-   no browser panning or page zoom, and no overscroll that could become the
+   Gestures inside it are the viewer's own (ZoomMedia handles them): no
+   browser panning or page zoom, and no overscroll that could become the
    browser's swipe-to-go-Back. Only a long caption scrolls. */
 .ci-lb { position: fixed; inset: 0; z-index: 1250; display: flex; flex-direction: column; overflow: hidden; padding-bottom: env(safe-area-inset-bottom, 0px); background: #000; color: #fff; touch-action: none; overscroll-behavior: none; animation: ci-lb-in .16s ease; }
 .ci-lb[tabindex]:focus-visible { outline: none; }
@@ -5045,23 +5136,6 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 /* Clips a zoomed picture, so it never spreads over the bar or the caption;
    dragging it around never starts a text selection. */
 .ci-lb-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; -webkit-user-select: none; user-select: none; }
-/* Filling the stage absolutely gives the picture a definite box, so its
-   max-height: 100% resolves and a tall image fits instead of spilling. */
-.ci-lb-media { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 8px 72px 16px; }
-.ci-lb-img,
-.ci-lb-video { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
-/* Zoom: double-click or pinch the picture; drag it around once zoomed; a
-   click on the dark ground zooms back out. */
-.ci-lb-img { cursor: zoom-in; }
-.ci-lb-media.zoomed { cursor: zoom-out; }
-.ci-lb-media.zoomed .ci-lb-img { cursor: grab; }
-.ci-lb-media.zoomed.dragging .ci-lb-img { cursor: grabbing; }
-/* Double-tap zooms and let-go snap-backs ease; fingers move it directly. */
-.ci-lb-anim { transition: transform .2s ease; }
-@media (prefers-reduced-motion: reduce) { .ci-lb-anim { transition: none; } }
-/* Fades in only after 300ms, so an image already cached by the grid never
-   flashes a spinner. */
-.spinner.ci-lb-spin { position: absolute; top: 50%; left: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-color: rgba(255, 255, 255, .25); border-top-color: #fff; animation: spin .7s linear infinite, ci-lb-in .2s ease .3s both; }
 .ci-lb-nav { position: absolute; top: 50%; z-index: 1; width: 46px; height: 46px; margin-top: -23px; border: 0; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .12); color: #fff; cursor: pointer; transition: opacity .15s, background .15s; }
 .ci-lb-nav:hover { background: rgba(255, 255, 255, .22); }
 .ci-lb-prev { left: 14px; }
@@ -5072,8 +5146,6 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .ci-lb-nav-off,
 .ci-lb-nav-off:hover { opacity: .25; cursor: default; background: rgba(255, 255, 255, .12); }
 .ci-lb-caption { flex-shrink: 0; max-height: 28vh; overflow-y: auto; padding: 10px 24px 14px; text-align: center; font-size: 13.5px; line-height: 1.45; color: rgba(255, 255, 255, .92); white-space: pre-wrap; overflow-wrap: anywhere; touch-action: pan-y; overscroll-behavior: contain; }
-.ci-lb-missing { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 320px; text-align: center; font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, .85); }
-.ci-lb-missing-sub { font-size: 12.5px; font-weight: 400; color: rgba(255, 255, 255, .6); }
 
 @media (max-width: 720px) {
   /* Thumb-sized targets. */
@@ -5087,7 +5159,6 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
   .ci-lb-bar { gap: 6px; padding: calc(6px + env(safe-area-inset-top, 0px)) 4px 6px 14px; }
   .ci-lb-acts { gap: 0; }
   .ci-lb-btn { width: 42px; height: 42px; }
-  .ci-lb-media { padding: 0; }
   .ci-lb-nav { width: 40px; height: 40px; margin-top: -20px; background: rgba(0, 0, 0, .45); }
   .ci-lb-nav-off,
   .ci-lb-nav-off:hover { background: rgba(0, 0, 0, .45); }

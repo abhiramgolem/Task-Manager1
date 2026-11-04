@@ -67,7 +67,12 @@ const utf8Name = (name) => {
 // browser will not read that answer mid-upload — it sees a dropped connection —
 // which is why the app asks the route's upload-room first. multer's own errors
 // come back as a status, not the global 500.
-export function bigFileUpload({ dir, prefix, max, tooBig }) {
+//
+// `kind` also lets the same route take a file sent in chunks (below): a JSON
+// body naming a finished upload stands in for the multipart one, and the
+// handler after it sees the same req.file either way. Multipart stays for small
+// files, where one request beats three, and for app builds already installed.
+export function bigFileUpload({ kind, dir, prefix, max, tooBig }) {
   // +1 because busboy counts reaching the limit as going over it, and a file of
   // exactly `max` is one the app says it takes.
   const upload = multer({ storage: streamingStorage(dir, prefix), limits: { fileSize: max + 1 } })
@@ -75,7 +80,15 @@ export function bigFileUpload({ dir, prefix, max, tooBig }) {
   // The MB of slack is the multipart wrapping around the file itself.
   const refusal = (len) => (len > max + MB ? [413, tooBig]
     : len && freeBytes(dir) - reserved - len < DISK_HEADROOM ? [507, NO_ROOM] : null)
+  if (kind) registerKind(kind, { dir, prefix, max, tooBig })
   function receive(req, res, next) {
+    if (kind && req.is('application/json')) {
+      if (!req.body?.uploadId) return next() // the handler answers "file required"
+      const got = claimUpload(req.body.uploadId, req.user, kind)
+      if (got.error) return res.status(got.status).json({ error: got.error })
+      req.file = got.file
+      return next()
+    }
     const len = Number(req.headers['content-length']) || 0
     const refuse = (status, error) => { if (!res.headersSent) res.status(status).set('Connection', 'close').json({ error }) }
     const no = refusal(len)
@@ -95,6 +108,147 @@ export function bigFileUpload({ dir, prefix, max, tooBig }) {
     })
   }
   return { receive, refusal }
+}
+
+// ---- Chunked uploads ------------------------------------------------------
+// A big file in one request is at the mercy of one connection. Over a phone
+// link that drops for a moment at 80%, all of it is lost and sent again from
+// zero; and one TCP stream on a lossy, high-latency path (India to the
+// Singapore server) rarely fills the uplink it has. So a file over a few MB
+// goes up as fixed-size chunks, several at once, each retried on its own, and
+// the route it was meant for is then called with the upload's id instead of
+// the file. A chunk is a raw body written at its offset. (It is not cheaper
+// for the server than multipart — measured, both cost about the same CPU per
+// GB; busboy is not the bottleneck. What it buys is a dropped connection
+// costing one chunk, and several streams filling a link one stream cannot.)
+//
+// Sessions live in memory: there is one process, and a restart (a deploy)
+// costs an upload in flight no more than it did before. What a lost session
+// leaves on disk — its part file — is cleared when the kind registers at boot.
+export const CHUNK_SIZE = 8 * MB
+// Long enough for a chunk crawling up a 2G link, short enough that an upload
+// abandoned with the app gives its disk reservation back the same hour.
+const IDLE_MS = 60 * 60 * 1000
+// Reservations are taken when an upload opens, before any byte arrives, so
+// one account cannot open enough of them to claim the disk.
+const MAX_OPEN_PER_USER = 8
+
+const kinds = new Map()     // 'chat' | 'task' → where its files go and its limit
+const sessions = new Map()  // upload id → session
+
+function registerKind(kind, { dir, prefix, max, tooBig }) {
+  // Part files sit in their own folder on the same disk: the rename into place
+  // at the end is then atomic, and the boot sweep reads this folder alone, not
+  // one holding every file ever sent.
+  const partDir = path.join(dir, '.partial')
+  fs.mkdirSync(partDir, { recursive: true })
+  for (const f of fs.readdirSync(partDir)) fs.unlink(path.join(partDir, f), () => {})
+  kinds.set(kind, { dir, partDir, prefix, max, tooBig })
+}
+
+function dropSession(s) {
+  if (!sessions.delete(s.id)) return
+  reserved -= s.size
+  for (const w of s.writers) w.destroy()
+  fs.unlink(s.abs, () => {})
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - IDLE_MS
+  for (const s of sessions.values()) if (s.touched < cutoff && !s.writers.size) dropSession(s)
+}, 5 * 60 * 1000).unref()
+
+// POST /api/uploads — { kind, size, name, type } → { id, chunkSize, chunks }.
+// The same limit and disk-room verdict as the multipart route, given before
+// anything is sent, so this also answers what /upload-room used to be asked.
+export function openUpload(user, { kind, size, name, type } = {}) {
+  const k = kinds.get(kind)
+  if (!k) return { status: 400, error: 'Unknown upload kind' }
+  size = Number(size)
+  if (!Number.isSafeInteger(size) || size <= 0) return { status: 400, error: 'size required' }
+  if (size > k.max) return { status: 413, error: k.tooBig }
+  if (freeBytes(k.dir) - reserved - size < DISK_HEADROOM) return { status: 507, error: NO_ROOM }
+  let open = 0
+  for (const s of sessions.values()) if (s.userId === user.id) open++
+  if (open >= MAX_OPEN_PER_USER) return { status: 429, error: 'Too many files going up at once — wait for one to finish' }
+  const uid = id('up')
+  const abs = path.join(k.partDir, uid)
+  fs.closeSync(fs.openSync(abs, 'w'))
+  const chunks = Math.ceil(size / CHUNK_SIZE)
+  const s = {
+    id: uid, kind, userId: user.id, size, abs, chunks,
+    // The name and type the browser gave the file, as multer would have had
+    // them — but JSON is UTF-8 already, so no Latin-1 repair is needed.
+    name: String(name || 'file').replace(/[\x00-\x1f\\/]/g, '_').slice(0, 255) || 'file',
+    type: /^[\w.+-]+\/[\w.+-]+$/.test(String(type || '')) ? String(type).slice(0, 127) : 'application/octet-stream',
+    got: new Uint8Array(chunks), left: chunks, writers: new Set(), touched: Date.now(),
+  }
+  sessions.set(uid, s)
+  reserved += size
+  return { upload: { id: uid, chunkSize: CHUNK_SIZE, chunks } }
+}
+
+// PUT /api/uploads/:id with X-Chunk-Index — one chunk, raw. The index rides in
+// a header, not the path, so every chunk of a file shares one URL: a browser
+// caches a CORS preflight per URL, and the Android app is cross-origin.
+// Writing a chunk twice is harmless (a retry whose first answer was lost): the
+// bytes are the same, at the same place.
+export function receiveChunk(req, res) {
+  const s = sessions.get(req.params.id)
+  if (!s || s.userId !== req.user.id) return res.status(404).json({ error: 'Upload not found — send the file again' })
+  const index = Number(req.get('x-chunk-index'))
+  if (!Number.isInteger(index) || index < 0 || index >= s.chunks) return res.status(400).json({ error: 'Bad chunk index' })
+  const start = index * CHUNK_SIZE
+  const expect = Math.min(CHUNK_SIZE, s.size - start)
+  // Content-Length is what node's parser holds the body to, so checking it
+  // here means a chunk of the wrong size never reaches the disk.
+  if (Number(req.headers['content-length']) !== expect) return res.status(400).json({ error: `Chunk ${index} must be ${expect} bytes` })
+  s.touched = Date.now()
+  const out = fs.createWriteStream(s.abs, { flags: 'r+', start })
+  s.writers.add(out)
+  pipeline(req, out, (err) => {
+    s.writers.delete(out)
+    // A sender who went away mid-chunk is retrying it, or has given up; the
+    // bytes it left at this offset are overwritten or deleted with the part.
+    if (err) { if (!res.headersSent && !req.destroyed) res.status(500).json({ error: 'Could not save the chunk' }); return }
+    if (!sessions.has(s.id)) return res.status(404).json({ error: 'Upload not found — send the file again' })
+    if (out.bytesWritten !== expect) return res.status(400).json({ error: 'Chunk incomplete' })
+    if (!s.got[index]) { s.got[index] = 1; s.left-- }
+    s.touched = Date.now()
+    res.json({ ok: true, left: s.left })
+  })
+}
+
+// DELETE /api/uploads/:id — the sender gave up; free its room now rather than
+// in an hour.
+export function cancelUpload(user, uploadId) {
+  const s = sessions.get(uploadId)
+  if (s && s.userId === user.id) dropSession(s)
+}
+
+// A finished upload, moved into place and shaped like the req.file multer
+// gives, for the route the file was meant for. Its kind must match the route,
+// so a file sent for a task (500 MB cap) cannot be posted into a chat and the
+// other way round.
+function claimUpload(uploadId, user, kind) {
+  const s = sessions.get(String(uploadId))
+  if (!s || s.userId !== user?.id || s.kind !== kind) return { status: 404, error: 'Upload not found — send the file again' }
+  if (s.left) return { status: 409, error: `Upload incomplete: ${s.left} of ${s.chunks} parts still to come` }
+  const k = kinds.get(kind)
+  sessions.delete(s.id)
+  reserved -= s.size
+  // Only duplicates of chunks already in can still be writing; stop them.
+  for (const w of s.writers) w.destroy()
+  const filename = id(k.prefix) + path.extname(s.name).slice(0, 12)
+  const abs = path.join(k.dir, filename)
+  try {
+    fs.renameSync(s.abs, abs)
+    if (fs.statSync(abs).size !== s.size) throw new Error('size mismatch')
+  } catch {
+    fs.unlink(abs, () => {}); fs.unlink(s.abs, () => {})
+    return { status: 500, error: 'The file could not be put together — send it again' }
+  }
+  return { file: { originalname: s.name, filename, path: abs, destination: k.dir, mimetype: s.type, size: s.size } }
 }
 
 // Sent with res.sendFile rather than piped, because a media player needs more

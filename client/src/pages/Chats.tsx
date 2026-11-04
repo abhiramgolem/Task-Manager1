@@ -9,6 +9,7 @@ import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
 import { clipboardFiles, droppedFiles, dragHasFiles, canReadClipboardImages, readClipboardImages } from '../lib/pasteFiles'
 import { stashTaskDraft } from '../lib/taskDraft'
+import { CHUNKED_FROM, sendInChunks } from '../lib/chunkedUpload'
 import { startCall } from '../lib/call'
 import { useCallAnalyses, inProgress } from '../lib/callAnalysis'
 import EmojiPicker, { rememberEmoji } from '../components/EmojiPicker'
@@ -28,6 +29,7 @@ import TaskAssignSheet, { Draft } from '../components/chat/TaskAssignSheet'
 import { TaskCard, PollCard, PollVotesSheet, LocationCard, ContactCard, LinkPreview, CallSummaryCard } from '../components/chat/MessageCards'
 import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPicker, CallsSheet, DescriptionEditor } from '../components/chat/ChatDialogs'
 import MediaViewer from '../components/chat/MediaViewer'
+import PhotoViewer from '../components/PhotoViewer'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
 import ChatInfoPanel from '../components/ChatInfoPanel'
 import type { InfoView, Me } from '../lib/chatInfo'
@@ -514,6 +516,9 @@ export default function Chats() {
   const [contactOpen, setContactOpen] = useState(false)
   const [callsOpen, setCallsOpen] = useState(false)
   const [viewerAt, setViewerAt] = useState<string | null>(null)
+  // A picture still in the tray above the box, open full size so it can be
+  // checked (zoomed into) before it goes.
+  const [stagedAt, setStagedAt] = useState<string | null>(null)
   const [descOpen, setDescOpen] = useState(false)
   // Older pages of a long chat, fetched on scrolling to the top.
   const [hasMore, setHasMore] = useState(false)
@@ -985,7 +990,7 @@ export default function Chats() {
     // remove, delete), and ConfirmHost has no back handler of its own — without
     // this, back would step the panel and leave the question hanging.
     if (document.querySelector('.confirm-center')) { resolveConfirm(false); return true }
-    if (viewerAt) { setViewerAt(null); return true }
+    if (viewerAt || stagedAt) { setViewerAt(null); setStagedAt(null); return true }
     if (openTaskId) { setOpenTaskId(null); return true }
     if (emojiFor) { setEmojiFor(null); return true }
     if (attachMenu) { setAttachMenu(false); return true }
@@ -1011,7 +1016,7 @@ export default function Chats() {
     if (activeId) { setActiveId(''); return true } // open chat → back to the list
     if (showArchived) { setShowArchived(false); return true }
     return false
-  }), [viewerAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
+  }), [viewerAt, stagedAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
 
   // Escape closes the top-most of this page's own popups — a menu or picker,
   // then the selected message — one layer per press. Dialogs, the emoji picker
@@ -1220,42 +1225,58 @@ export default function Chats() {
   }
   useEffect(() => () => stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)), [])
 
-  // One file to the thread, with an optimistic "Sending…" line until it lands.
-  // XHR rather than fetch for the upload progress: a file can be 1 GB, minutes
-  // on a phone, and a "Sending…" line that never moves reads as stuck.
-  const uploadOne = async (conv: Conversation, file: File, caption: string, rep: Msg | null, capMentions: string[]) => {
+  // A file's optimistic "Sending…" line, put in the thread the moment it is
+  // sent rather than when its turn in the upload queue comes, so the thread
+  // reads in the order things were sent.
+  const addPending = (conv: Conversation, file: File, caption: string) => {
     const tmpId = 'tmp_' + Date.now() + Math.random().toString(36).slice(2, 6)
     setMessages((m) => [...m, { id: tmpId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }])
+    return tmpId
+  }
+
+  // The old way: the whole file in one multipart request, for a small file or
+  // an older server. XHR rather than fetch for the upload progress. A big file
+  // asks first whether the server has room for it: a refusal sent mid-upload
+  // never reaches us (the browser reads no answer until it has sent
+  // everything) and would surface as a dropped connection.
+  const sendWhole = async (conv: Conversation, file: File, caption: string, rep: Msg | null, capMentions: string[], progress: (pct: number) => void) => {
+    if (file.size > 10 * 1024 * 1024) await api.get(`/chat/upload-room?size=${file.size}`)
+    const form = new FormData(); form.append('file', file)
+    if (caption) form.append('body', caption)
+    if (rep) form.append('replyTo', rep.id)
+    if (capMentions.length) form.append('mentions', JSON.stringify(capMentions))
+    return new Promise<Msg>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_BASE}/api/chat/conversations/${conv.id}/upload`)
+      const t = getToken(); if (t) xhr.setRequestHeader('authorization', `Bearer ${t}`)
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress(Math.floor((e.loaded / e.total) * 100)) }
+      xhr.onload = () => {
+        let body: any = null
+        try { body = JSON.parse(xhr.responseText) } catch {}
+        if (xhr.status >= 200 && xhr.status < 300 && body) resolve(body)
+        else reject(new Error(body?.error || `Upload failed (${xhr.status})`))
+      }
+      xhr.onerror = () => reject(new Error('the connection was lost'))
+      xhr.send(form)
+    })
+  }
+
+  // One file to the thread, replacing its "Sending…" line when it lands. The
+  // line counts up: a file can be 1 GB, minutes on a phone, and a line that
+  // never moves reads as stuck. A big file goes up in chunks
+  // (lib/chunkedUpload), which rides out the connection dropping.
+  const uploadOne = async (conv: Conversation, tmpId: string, file: File, caption: string, rep: Msg | null, capMentions: string[]) => {
+    let shown = -1
+    const progress = (pct: number) => {
+      if (pct === shown) return
+      shown = pct
+      setMessages((prev) => prev.map((x) => (x.id === tmpId ? { ...x, progress: pct } : x)))
+    }
     try {
-      // A big file asks first whether the server has room for it: a refusal
-      // sent mid-upload never reaches us (the browser reads no answer until it
-      // has sent everything) and would surface as a dropped connection.
-      if (file.size > 10 * 1024 * 1024) await api.get(`/chat/upload-room?size=${file.size}`)
-      const form = new FormData(); form.append('file', file)
-      if (caption) form.append('body', caption)
-      if (rep) form.append('replyTo', rep.id)
-      if (capMentions.length) form.append('mentions', JSON.stringify(capMentions))
-      const data = await new Promise<Msg>((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        xhr.open('POST', `${API_BASE}/api/chat/conversations/${conv.id}/upload`)
-        const t = getToken(); if (t) xhr.setRequestHeader('authorization', `Bearer ${t}`)
-        let shown = -1
-        xhr.upload.onprogress = (e) => {
-          if (!e.lengthComputable) return
-          const pct = Math.floor((e.loaded / e.total) * 100)
-          if (pct === shown) return
-          shown = pct
-          setMessages((prev) => prev.map((x) => (x.id === tmpId ? { ...x, progress: pct } : x)))
-        }
-        xhr.onload = () => {
-          let body: any = null
-          try { body = JSON.parse(xhr.responseText) } catch {}
-          if (xhr.status >= 200 && xhr.status < 300 && body) resolve(body)
-          else reject(new Error(body?.error || `Upload failed (${xhr.status})`))
-        }
-        xhr.onerror = () => reject(new Error('the connection was lost'))
-        xhr.send(form)
-      })
+      const uploadId = file.size > CHUNKED_FROM ? await sendInChunks(file, 'chat', progress) : null
+      const data: Msg = uploadId
+        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions })
+        : await sendWhole(conv, file, caption, rep, capMentions, progress)
       setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x)))
       return true
     } catch (err: any) {
@@ -1264,21 +1285,29 @@ export default function Chats() {
     }
   }
 
+  // Files go up one at a time, in the order they were sent — behind the
+  // composer, not in front of it. It used to stay locked until the last byte
+  // was in, so a big video shut the chat for as long as the uplink took. Now
+  // text and voice notes go while it climbs, and files sent meanwhile queue
+  // behind it, each getting the whole uplink in turn rather than a share.
+  const uploadQueue = useRef<Promise<void>>(Promise.resolve())
+
   // Send what is staged: one message per file, in order, the caption (and the
   // reply, and its @mentions) on the first. A file that fails goes back into
   // the tray to try again, and the caption with it if it was riding on that one.
-  const sendStaged = async () => {
+  const sendStaged = () => {
     const conv = active
     if (!conv || busy) return
     const items = stagedRef.current
     const caption = input.trim(); const rep = replyTo
     const capMentions = caption ? resolveMentions(caption, picked, conv.members, user!.id) : []
-    setStaged([]); setInput(''); setBusy(true); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
-    const failed: StagedFile[] = []
-    try {
+    setStaged([]); setInput(''); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
+    const pending = items.map((it, i) => addPending(conv, it.file, i === 0 ? caption : ''))
+    uploadQueue.current = uploadQueue.current.then(async () => {
+      const failed: StagedFile[] = []
       for (let i = 0; i < items.length; i++) {
         const first = i === 0
-        if (await uploadOne(conv, items[i].file, first ? caption : '', first ? rep : null, first ? capMentions : [])) {
+        if (await uploadOne(conv, pending[i], items[i].file, first ? caption : '', first ? rep : null, first ? capMentions : [])) {
           if (items[i].url) URL.revokeObjectURL(items[i].url!)
         } else {
           failed.push(items[i])
@@ -1286,10 +1315,8 @@ export default function Chats() {
         }
       }
       loadConvos()
-    } finally {
       if (failed.length && activeIdRef.current === conv.id) setStaged((cur) => [...failed, ...cur])
-      setBusy(false)
-    }
+    }).catch(() => {}) // one batch going wrong must not stall every one after it
   }
 
   // Phones have no Ctrl+V: the clip's "Paste from clipboard" reads the picture
@@ -1907,6 +1934,14 @@ export default function Chats() {
     const a = document.createElement('a'); a.href = fileUrl(m, true); a.download = m.file?.name || 'file'
     document.body.appendChild(a); a.click(); a.remove()
   }
+  // Over a photo or video in the thread. Files had their own Download, but a
+  // picture's was in the ⋯ menu or behind a long-press, and a video's nowhere
+  // else, so "there is no way to download it" was the report. stopPropagation
+  // keeps the tap off the bubble, which would otherwise select the message.
+  const mediaDl = (m: Msg) => (
+    <button type="button" className="chat-media-dl" title="Download" aria-label={`Download ${m.file?.name || 'file'}`}
+      onClick={(e) => { e.stopPropagation(); download(m) }}><Ic name="download" size={15} /></button>
+  )
   const togglePin = async (m: Msg) => {
     setMenuId(null)
     const next = !m.pinned_at
@@ -2946,11 +2981,17 @@ export default function Chats() {
                               </div>
                             </div>
                           ) : m.file && (isImage && !m.uploading
-                            ? <button type="button" className="chat-image-btn" onClick={(e) => { e.stopPropagation(); setViewerAt(m.id) }} aria-label={`Open photo${m.body ? `: ${m.body}` : ''}`}>
-                                <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy" />
-                              </button>
+                            ? <div className="chat-media">
+                                <button type="button" className="chat-image-btn" onClick={(e) => { e.stopPropagation(); setViewerAt(m.id) }} aria-label={`Open photo${m.body ? `: ${m.body}` : ''}`}>
+                                  <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy" />
+                                </button>
+                                {mediaDl(m)}
+                              </div>
                             : isVideo(m.file) && !m.uploading
-                              ? <video className="chat-video" src={fileUrl(m)} controls preload="metadata" playsInline />
+                              ? <div className="chat-media">
+                                  <video className="chat-video" src={fileUrl(m)} controls preload="metadata" playsInline />
+                                  {mediaDl(m)}
+                                </div>
                               : <div className="chat-file">
                                   <span className="chat-file-icon">{m.uploading ? <Ic name="clock" size={18} /> : <DocGlyph size={20} />}</span>
                                   <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
@@ -3089,12 +3130,13 @@ export default function Chats() {
                 </div>
               )}
               {/* What will go with the next Send: pictures as thumbnails, other
-                  files by name. ✕ takes one back out. */}
+                  files by name. A picture opens full size, to be checked
+                  before it goes; ✕ takes one back out. */}
               {staged.length > 0 && (
                 <div className="stage-strip" role="group" aria-label={`${staged.length} file${staged.length === 1 ? '' : 's'} ready to send`}>
                   {staged.map((s) => (
                     <div key={s.id} className={'stage-item' + (s.url ? ' pic' : '')} title={s.file.name}>
-                      {s.url ? <img src={s.url} alt={s.file.name} />
+                      {s.url ? <button type="button" className="stage-open" onClick={() => setStagedAt(s.id)} aria-label={`View ${s.file.name}`}><img src={s.url} alt="" /></button>
                         : (<>
                           <span className={'stage-ic' + (isAudio({ name: s.file.name, type: s.file.type }) ? ' audio' : '')}>
                             {isAudio({ name: s.file.name, type: s.file.type }) ? <Ic name="mic" size={16} /> : (/\.([a-z0-9]{1,5})$/i.exec(s.file.name)?.[1] || 'FILE').toUpperCase()}
@@ -3402,6 +3444,16 @@ export default function Chats() {
           onClose={() => setViewerAt(null)}
           onForward={(m) => { setViewerAt(null); setForwardMsgs([m]) }}
           onShowInChat={(m) => { setViewerAt(null); requestAnimationFrame(() => scrollToMessage(m.id)) }}
+        />
+      )}
+      {/* Closes by itself once the picture leaves the tray (sent, removed, or
+          the chat switched). */}
+      {stagedAt && (
+        <PhotoViewer
+          label="Picture to send"
+          items={staged.filter((s) => s.url).map((s) => ({ id: s.id, src: s.url!, alt: s.file.name, title: s.file.name, subtitle: `Not sent yet · ${fmtSize(s.file.size)}` }))}
+          startId={stagedAt}
+          onClose={() => setStagedAt(null)}
         />
       )}
       {showStarred && <StarredModal onClose={() => setShowStarred(false)} onOpen={(cid, mid) => { setShowStarred(false); openMessage(cid, mid) }} />}

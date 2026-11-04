@@ -169,10 +169,10 @@ export default function Landing() {
           <div className="flex items-center gap-2 sm:gap-5 shrink-0">
             <LanguagePicker lang={lang} onPick={pickLang} />
             <ThemeSwitch />
-            {/* "Sign in" is the one thing here with a home elsewhere — Get Started
-                leads to the same signup flow, and the login page carries its own
-                link back. So it steps aside on a phone rather than squeezing the
-                two controls that have nowhere else to appear. */}
+            {/* "Log in" is the one thing here with a home elsewhere — the hero
+                leads with its own Log in button, on the first screen of a phone.
+                So it steps aside on a phone rather than squeezing the two
+                controls that have nowhere else to appear. */}
             <Link className="hidden sm:inline text-sm font-semibold text-slate-700 dark:text-slate-300 hover:text-brand-600 px-2 py-1" to="/login">{t.signIn}</Link>
             <Link className="inline-flex items-center justify-center gap-2 whitespace-nowrap bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-medium text-sm px-4 sm:px-5 py-2 sm:py-2.5 rounded-full shadow-md shadow-brand-600/20 hover:shadow-lg hover:shadow-brand-600/30 transition duration-150" to="/signup">
               <span>{t.getStarted}</span>
@@ -249,18 +249,36 @@ export default function Landing() {
               </p>
 
               <div className="w-full max-w-xl mb-8">
-                <div className="flex flex-wrap items-center gap-4 mb-4">
-                  <Link className="inline-flex items-center justify-center gap-2.5 bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-semibold text-base px-7 py-3.5 rounded-full shadow-lg shadow-brand-600/25 hover:shadow-xl hover:shadow-brand-600/35 transition-all" to="/signup">
-                    <span>{t.tryFree}</span>
+                {/* Most people who land here are not shopping — signed out, the web
+                    app and the Android app both open on this page, so it is the
+                    front door for every employee coming back to log in. The hero
+                    used to offer only "Try VoTask Free", and on a phone the header's
+                    Sign in is hidden, so logging in meant scrolling or guessing.
+                    Log in now comes first and Create account second, both filled
+                    and full-width on a phone, with the workspace code under them.
+
+                    They are plain router Links to pages already in the main bundle
+                    (Login and Signup are not lazy-loaded in App.tsx), so a tap is
+                    a client-side route change with no network in between — keep it
+                    that way. touch-manipulation drops the double-tap-to-zoom wait
+                    and active:scale answers the finger on the same frame. */}
+                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 sm:gap-4 mb-4">
+                  <Link className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-gradient-to-r from-brand-600 to-amber-600 hover:from-brand-700 hover:to-amber-700 text-white font-semibold text-base px-7 py-3.5 rounded-full shadow-lg shadow-brand-600/25 hover:shadow-xl hover:shadow-brand-600/35 touch-manipulation active:scale-[0.98] transition duration-150" to="/login">
+                    {/* An arrow into a door: entering an account that already exists. */}
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3" /></svg>
+                    <span>{t.signIn}</span>
+                  </Link>
+                  <Link className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-semibold text-base px-7 py-3.5 rounded-full shadow-md shadow-slate-900/15 touch-manipulation active:scale-[0.98] transition duration-150" to="/signup">
+                    <span>{t.createAccount}</span>
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
                   </Link>
-                  {/* The second hero action. It used to be "Watch Demo" — a button
+                  {/* The third hero action. It used to be "Watch Demo" — a button
                       with no onClick behind it, so the whole thing was a painted
-                      placeholder. Joining with a workspace code is the real second
-                      path onto the product: Try Free is for the person starting a
-                      company, this is for the person whose company already exists
-                      and who was handed an 8-character code. */}
-                  <Link className="inline-flex items-center justify-center gap-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 text-slate-700 dark:text-slate-300 font-semibold text-base px-6 py-3.5 rounded-full border border-slate-200 dark:border-slate-700 shadow-sm transition-all" to="/join">
+                      placeholder. Joining with a workspace code is the real other
+                      path onto the product: Create account is for the person
+                      starting a company, this is for the person whose company
+                      already exists and who was handed an 8-character code. */}
+                  <Link className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-white dark:bg-slate-900 hover:bg-slate-50 text-slate-700 dark:text-slate-300 font-semibold text-base px-6 py-3 rounded-full border border-slate-200 dark:border-slate-700 shadow-sm touch-manipulation active:scale-[0.98] transition duration-150" to="/join">
                     <span className="w-7 h-7 rounded-full bg-orange-100 dark:bg-orange-950 flex items-center justify-center text-brand-600 dark:text-brand-400">
                       {/* A key, for a code that unlocks a workspace you already belong to. */}
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
