@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { api } from '../api'
 import { Ic, fmtBytes } from '../ui'
 import { toast } from '../lib/toast'
+import { saveFile as downloadFile, nativeFiles } from '../lib/saveFile'
 import { useDialog } from '../lib/useDialog'
 import { pushBackHandler } from '../back'
 import VoicePlayer, { mediaLength } from './VoicePlayer'
@@ -126,19 +127,17 @@ function audioKindOf(it: MediaFileItem) {
 // ------------------------------------------------------------- file actions
 
 // Viewing never downloads: ?download=1 is only ever added by a Download button.
-function openFile(id: string) {
+// In the phone app a new tab is the browser: the file is downloaded and opened
+// in the phone's own viewer instead (lib/saveFile).
+function openFile(id: string, name: string) {
+  if (nativeFiles()) { downloadFile({ url: chatFileUrl(id, true), name, key: 'chat:' + id }); return }
   window.open(chatFileUrl(id), '_blank', 'noopener')
 }
 
 // The same route as the chat's own Download: ?download=1 makes the server send
 // the file as an attachment, so the browser saves it rather than navigating.
 function saveFile(id: string, name: string) {
-  const a = document.createElement('a')
-  a.href = chatFileUrl(id, true)
-  a.download = name || 'file'
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
+  downloadFile({ url: chatFileUrl(id, true), name: name || 'file', key: 'chat:' + id })
 }
 
 // Only ever hand the browser a web address. The server already keeps links to
@@ -706,7 +705,7 @@ function FileRow({ it, meId, onShow }: { it: MediaFileItem; meId: string; onShow
   const sub = [fmtBytes(it.size), ext === 'FILE' ? '' : ext, who(it, meId), dayOf(it.created_at)].filter(Boolean).join(' · ')
   return (
     <div className="ci-media-li" data-mid={it.id}>
-      <button type="button" className="ci-row" onClick={() => openFile(it.id)} title={`Open ${name}`}>
+      <button type="button" className="ci-row" onClick={() => openFile(it.id, name)} title={`Open ${name}`}>
         <span className={'ci-media-ext ci-media-ext-' + (EXT_FAMILY[ext] || 'other')} aria-hidden="true">{ext}</span>
         <span className="ci-row-main">
           <span className="ci-row-title">{name}</span>
@@ -830,7 +829,7 @@ function Lightbox({ kind, items, index, total, meId, onIndex, onClose, onShowMes
         </div>
         <div className="ci-lb-acts">
           <button type="button" className="ci-lb-btn" onClick={() => onShowMessage(it.id)} title="Show in chat" aria-label="Show in chat"><Ic name="chat" size={19} /></button>
-          <button type="button" className="ci-lb-btn" onClick={() => openFile(it.id)} title="Open in a new tab" aria-label="Open in a new tab"><Ic name="external" size={19} /></button>
+          <button type="button" className="ci-lb-btn" onClick={() => openFile(it.id, it.name)} title="Open in a new tab" aria-label="Open in a new tab"><Ic name="external" size={19} /></button>
           <button type="button" className="ci-lb-btn" onClick={() => saveFile(it.id, it.name)} title="Download" aria-label="Download"><Ic name="download" size={19} /></button>
           <button type="button" className="ci-lb-btn" onClick={close} title="Close" aria-label="Close"><Ic name="close" size={21} /></button>
         </div>

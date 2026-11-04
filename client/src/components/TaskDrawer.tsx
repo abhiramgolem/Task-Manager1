@@ -7,6 +7,7 @@ import CategorySelect from './CategorySelect'
 import PhotoViewer from './PhotoViewer'
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
+import { onDownloadLink } from '../lib/saveFile'
 import { useDialog } from '../lib/useDialog'
 import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
 import { attachable, attachToTask, fileExt } from '../lib/taskAttach'
@@ -696,7 +697,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                       ) : isVid ? (
                         <video className="attach-thumb" src={taskAttachmentUrl(a.id)} controls preload="metadata" />
                       ) : (
-                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb attach-thumb-file">
+                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb attach-thumb-file" onClick={onDownloadLink(taskAttachmentUrl(a.id, true), a.filename, 'task:' + a.id)}>
                           <Ic name="doc" size={26} />
                           {/* XLSX, ZIP, DOCX… — without it every non-picture file is the same icon. */}
                           {fileExt(a.filename) && <span className="attach-ext">{fileExt(a.filename)}</span>}
@@ -704,13 +705,13 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                       )}
                       <div className="attach-meta">
                         <div className="attach-meta-text">
-                          <a href={taskAttachmentUrl(a.id, true)} download={a.filename} className="attach-name" title={`Download ${a.filename}`}>{a.filename}</a>
+                          <a href={taskAttachmentUrl(a.id, true)} download={a.filename} onClick={onDownloadLink(taskAttachmentUrl(a.id, true), a.filename, 'task:' + a.id)} className="attach-name" title={`Download ${a.filename}`}>{a.filename}</a>
                           <span className="muted" style={{ fontSize: 11 }}>{fmtBytes(a.file_size)}</span>
                         </div>
                         {/* Its own button: the file name was the only way to save a
                             file, and nobody read a name as a download link — every
                             thumbnail opens or plays the file instead. */}
-                        <a href={taskAttachmentUrl(a.id, true)} download={a.filename} className="attach-dl" title={`Download ${a.filename}`} aria-label={`Download ${a.filename}`}>
+                        <a href={taskAttachmentUrl(a.id, true)} download={a.filename} onClick={onDownloadLink(taskAttachmentUrl(a.id, true), a.filename, 'task:' + a.id)} className="attach-dl" title={`Download ${a.filename}`} aria-label={`Download ${a.filename}`}>
                           <Ic name="download" size={14} />
                         </a>
                       </div>
@@ -840,8 +841,8 @@ This cannot be undone — comments are not kept in the recycle bin.`,
             onClose={() => setPhotoAt(null)}
             actions={(it) => (
               <>
-                <a className="mv-btn" href={taskAttachmentUrl(it.id)} target="_blank" rel="noreferrer" aria-label="Open in a new tab" title="Open in a new tab"><Ic name="external" size={19} /></a>
-                <a className="mv-btn" href={taskAttachmentUrl(it.id, true)} download={it.title} aria-label="Download" title="Download"><Ic name="download" size={19} /></a>
+                <a className="mv-btn" href={taskAttachmentUrl(it.id)} target="_blank" rel="noreferrer" onClick={onDownloadLink(taskAttachmentUrl(it.id, true), it.title || 'file', 'task:' + it.id)} aria-label="Open in a new tab" title="Open in a new tab"><Ic name="external" size={19} /></a>
+                <a className="mv-btn" href={taskAttachmentUrl(it.id, true)} download={it.title} onClick={onDownloadLink(taskAttachmentUrl(it.id, true), it.title || 'file', 'task:' + it.id)} aria-label="Download" title="Download"><Ic name="download" size={19} /></a>
               </>
             )}
           />,
