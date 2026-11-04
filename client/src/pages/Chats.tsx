@@ -86,6 +86,11 @@ const MAX_STAGED = 10
 // pasted log should not push a whole conversation off the screen.
 // Messages from one person this close together read as one turn (see `cont`).
 const RUN_GAP_MS = 5 * 60_000
+// A held voice note: slide this far left to cancel, this far up to lock; a
+// press shorter than HOLD_TAP_MS is a tap.
+const SLIDE_CANCEL_PX = 110
+const SLIDE_LOCK_PX = 70
+const HOLD_TAP_MS = 400
 const FOLD_CHARS = 700
 const FOLD_LINES = 14
 // The folded part: whole lines up to the limit, then whole words, then "…".
@@ -498,6 +503,15 @@ export default function Chats() {
   const [forkFrom, setForkFrom] = useState<Msg | null>(null)
   const [recording, setRecording] = useState(false)
   const [recSecs, setRecSecs] = useState(0)
+  // A voice note held down on a touch screen, as in WhatsApp: how far the finger
+  // has slid left (null when nothing is held). Release sends, slide left
+  // cancels, slide up locks it to carry on hands-free. A quick tap still starts
+  // a hands-free note, which is how it worked before and what a mouse gets.
+  const [holdDx, setHoldDx] = useState<number | null>(null)
+  const holdRef = useRef<{ x: number; y: number; t: number } | null>(null)
+  const touchPressRef = useRef(false)
+  // Cancelled before the microphone had opened (a quick slide on a slow start).
+  const pendingCancelRef = useRef(false)
   const [transcribing, setTranscribing] = useState<string | null>(null)
   const [summarising, setSummarising] = useState<string | null>(null)
   const [flashId, setFlashId] = useState<string | null>(null)
@@ -1414,6 +1428,7 @@ export default function Chats() {
       }
       rec.start()
       voiceRecRef.current = rec
+      if (pendingCancelRef.current) { pendingCancelRef.current = false; voiceCancelRef.current = true; rec.stop(); return }
       voiceTextRef.current = []
       // Listen alongside the recorder. The two are independent: if speech
       // recognition is unavailable the note still sends, just without text.
@@ -1440,6 +1455,50 @@ export default function Chats() {
     const rec = voiceRecRef.current
     if (rec && rec.state !== 'inactive') { try { rec.stop() } catch { releaseVoice() } }
     else releaseVoice()
+  }
+
+  const cancelHeldNote = () => {
+    if (voiceRecRef.current) finishVoiceNote(true)
+    else pendingCancelRef.current = true
+  }
+  const micPress = {
+    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (e.pointerType === 'mouse' || busy || recording) return
+      e.preventDefault()
+      touchPressRef.current = true
+      try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+      holdRef.current = { x: e.clientX, y: e.clientY, t: Date.now() }
+      pendingCancelRef.current = false
+      setHoldDx(0)
+      void startVoiceNote()
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLButtonElement>) => {
+      const h = holdRef.current
+      if (!h) return
+      const dx = Math.min(0, e.clientX - h.x)
+      if (dx < -SLIDE_CANCEL_PX) { holdRef.current = null; setHoldDx(null); cancelHeldNote(); return }
+      // Locked: the bar's discard and send buttons take over, as for a tap.
+      if (e.clientY - h.y < -SLIDE_LOCK_PX) { holdRef.current = null; setHoldDx(null); return }
+      setHoldDx(dx)
+    },
+    onPointerUp: () => {
+      const h = holdRef.current
+      if (!h) return
+      holdRef.current = null
+      setHoldDx(null)
+      // A tap, or a release before the microphone opened (the first-time
+      // permission prompt): leave it recording hands-free rather than drop it.
+      if (Date.now() - h.t < HOLD_TAP_MS || !voiceRecRef.current) return
+      finishVoiceNote(false)
+    },
+    // The press was taken away (a system gesture): keep what was recorded,
+    // hands-free — losing a note to a stray swipe is worse than one more tap.
+    onPointerCancel: () => { holdRef.current = null; setHoldDx(null) },
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+    onClick: () => {
+      if (touchPressRef.current) { touchPressRef.current = false; return }
+      void startVoiceNote()
+    },
   }
 
   const sendVoiceNote = async (blob: Blob, spoken = '') => {
@@ -3251,8 +3310,15 @@ export default function Chats() {
                     <div className="voice-recording">
                       <span className="voice-rec-dot" />
                       <span className="voice-rec-time">{Math.floor(recSecs / 60)}:{String(recSecs % 60).padStart(2, '0')}</span>
-                      <span className="muted" style={{ fontSize: 12.5 }}>Recording…</span>
-                      <button className="ic-btn cb-discard" title="Discard" aria-label="Discard the voice note" onClick={() => finishVoiceNote(true)}><Ic name="trash" size={18} /></button>
+                      {holdDx !== null ? (<>
+                        <span className="voice-slide" style={{ transform: `translateX(${holdDx * 0.6}px)`, opacity: Math.max(0.25, 1 + holdDx / SLIDE_CANCEL_PX) }}>
+                          <Ic name="arrowLeft" size={14} /> Slide to cancel
+                        </span>
+                        <span className="voice-lock-hint" aria-hidden="true"><Ic name="lock" size={14} /><Ic name="chevronUp" size={14} /></span>
+                      </>) : (<>
+                        <span className="muted" style={{ fontSize: 12.5 }}>Recording…</span>
+                        <button className="ic-btn cb-discard" title="Discard" aria-label="Discard the voice note" onClick={() => finishVoiceNote(true)}><Ic name="trash" size={18} /></button>
+                      </>)}
                     </div>
                   ) : (<>
                     <div className="emoji-wrap">
@@ -3321,10 +3387,11 @@ export default function Chats() {
                       ><Ic name="attach" size={19} /></button>
                     )}
                   </>)}
-                  {recording
+                  {recording && holdDx === null
                     ? <button className="send-btn" title="Send voice note" aria-label="Send the voice note" onClick={() => finishVoiceNote(false)}><Ic name="send" size={18} /></button>
-                    : !editing && !input.trim() && !staged.length
-                      ? <button className="send-btn mic" title="Record a voice note" aria-label="Record a voice note" disabled={busy} onClick={startVoiceNote}><Ic name="mic" size={20} /></button>
+                    : holdDx !== null || (!editing && !input.trim() && !staged.length)
+                      // Stays this same button while held: it holds the pointer capture.
+                      ? <button className={'send-btn mic' + (holdDx !== null ? ' held' : '')} title="Record a voice note (hold on a phone)" aria-label="Record a voice note" disabled={busy} {...micPress}><Ic name="mic" size={20} /></button>
                       : <button
                           data-va="chats.send"
                           className="send-btn"
