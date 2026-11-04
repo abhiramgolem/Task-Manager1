@@ -18,13 +18,20 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // versionCode must keep climbing and is never reused: 2 is permanently
         // consumed (v2 went to Production on Play on 9 Jul 2026), 3 shipped as
-        // "2.1", 4 as "3.0" (the VoTask rebrand) and 5 as "3.1". versionName is
-        // just the label users see, so it doesn't have to track versionCode —
-        // this ships as "3.2" on a versionCode of 6. applicationId stays
-        // io.smarttask.app: changing it would register a brand-new app on Play,
-        // orphaning the existing listing, reviews and installs.
-        versionCode 6
-        versionName "3.2"
+        // "2.1", 4 as "3.0" (the VoTask rebrand) and 5 as "3.1". 6 shipped as
+        // "3.2". 7-13 were consumed by Android-only releases ("3.3"-"3.6") built
+        // from a separate local checkout that never merged its version bump back
+        // into this branch — this jumps straight to 14 so the number stays ahead
+        // of everything already uploaded. versionName is just the label users
+        // see, so it doesn't have to track versionCode. 14 shipped as "3.7",
+        // 15 as "3.8", 16 as "3.9", 17 as "4.0" and 18 as "4.1". 19 was taken on
+        // Play by an upload from elsewhere, so 25 shipped as "4.2" and 26 as
+        // "4.3"; this ships as "4.4" on a versionCode of 27.
+        // applicationId stays io.smarttask.app: changing it would register a
+        // brand-new app on Play, orphaning the existing listing, reviews and
+        // installs.
+        versionCode 27
+        versionName "4.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
