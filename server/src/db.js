@@ -1000,6 +1000,9 @@ export function initSchema() {
   // chime: this build ships VoTask's own notification sound and its channel
   // (push.js). Older builds lack both and stay on the default-tone channel.
   ensureColumn('device_tokens', 'chime', 'INTEGER DEFAULT 0')
+  // The app's versionCode, reported from 4.5 on, so an "update available"
+  // push goes only to phones still on an older build (push.js sendUpdatePush).
+  ensureColumn('device_tokens', 'app_build', 'INTEGER')
   // WHERE A MEETING CAME FROM. A meeting filed out of a chat — a call's
   // transcript, a recording posted in the thread — kept its only trail on the
   // chat side (chat_calls.meeting_id, the "Summary of …" card), so nothing on
