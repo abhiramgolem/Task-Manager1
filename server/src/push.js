@@ -88,11 +88,19 @@ export function removeDeviceToken(token) {
 // A build that registered with chime=1 has VoTask's own sound in res/raw and a
 // channel playing it ('votask_chime', push.ts); Android takes the sound from
 // the channel. An older build has neither, so it keeps its default-tone one.
-export async function sendPushToUser(userId, { title, body, data, tag }) {
+//
+// `rich` ({ chat, sender, text, group }), for a chat line: a build from
+// RICH_CHAT_FROM on gets it as data and draws the chat's notification itself,
+// WhatsApp's way, every message listed under a pull-down (ChatNotifier.java).
+// Older builds get the ordinary notification.
+export async function sendPushToUser(userId, { title, body, data, tag, rich }) {
   if (!userId) return
-  const rows = db.prepare('SELECT token, chime FROM device_tokens WHERE user_id=?').all(userId)
-  await sendToDevices(rows, { title, body, data, tag })
+  const rows = db.prepare('SELECT token, chime, app_build FROM device_tokens WHERE user_id=?').all(userId)
+  await sendToDevices(rows, { title, body, data, tag, rich })
 }
+
+// The first versionCode with ChatNotifier.
+const RICH_CHAT_FROM = 29
 
 // "A new version is on the Play Store", to every phone whose app is older than
 // belowBuild (its versionCode). Builds before 4.5 do not report their version
@@ -104,9 +112,9 @@ export async function sendUpdatePush(belowBuild, { title, body }) {
   return { devices: rows.length, sent }
 }
 
-// One notification to each of these devices (rows of token, chime). Returns
-// how many FCM accepted.
-async function sendToDevices(rows, { title, body, data, tag }) {
+// One notification to each of these devices (rows of token, chime, and
+// app_build where known). Returns how many FCM accepted.
+async function sendToDevices(rows, { title, body, data, tag, rich }) {
   const sa = getServiceAccount()
   if (!sa || !rows.length) return 0
 
@@ -119,13 +127,17 @@ async function sendToDevices(rows, { title, body, data, tag }) {
 
   const url = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`
   let sent = 0
-  await Promise.all(rows.map(async ({ token: tok, chime }) => {
+  // Data only, no notification block: Android would draw that one itself and
+  // the app's own conversation-style notification would never be built.
+  const richData = rich && {
+    ...stringData, rich: '1', chat: String(rich.chat || ''), sender: String(rich.sender || ''),
+    text: String(rich.text || ''), group: rich.group ? '1' : '0',
+  }
+  await Promise.all(rows.map(async ({ token: tok, chime, app_build: build }) => {
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          message: {
+      const message = richData && build >= RICH_CHAT_FROM
+        ? { token: tok, data: richData, android: { priority: 'high' } }
+        : {
             token: tok,
             notification: { title, body },
             data: stringData,
@@ -135,8 +147,11 @@ async function sendToDevices(rows, { title, body, data, tag }) {
                 ? { sound: 'votask_chime', channel_id: 'votask_chime', ...(tag ? { tag } : {}) }
                 : { sound: 'default', channel_id: 'smarttask_v2', ...(tag ? { tag } : {}) },
             },
-          },
-        }),
+          }
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ message }),
       })
       if (res.ok) { sent++; return }
       const err = await res.json().catch(() => ({}))

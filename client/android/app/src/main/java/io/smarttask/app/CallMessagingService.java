@@ -30,6 +30,13 @@ public class CallMessagingService extends MessagingService {
             CallRinger.cancel(this, data.get("call_id"));
             return;
         }
+        // A chat line, sent as data so the app can draw it WhatsApp's way
+        // (ChatNotifier). With the app on screen the thread shows it live, as
+        // it always has, so the tray stays quiet.
+        if (ChatNotifier.handles(data)) {
+            if (!MainActivity.isInForeground()) ChatNotifier.show(this, data);
+            return;
+        }
         super.onMessageReceived(message);
     }
 
