@@ -568,7 +568,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                 )}
               </>
             ) : task.status === 'Done' ? (
-              <div className="card-pad" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, color: '#047857' }}>
+              <div className="dr-done-note">
                 {task.completedBy
                   ? `✓ Completed — ${task.approval_status === 'approved' ? 'approved' : 'marked done'} by ${task.completedBy.id === user?.id ? 'you' : task.completedBy.name}.`
                   : '✓ Completed.'}
@@ -642,14 +642,19 @@ This cannot be undone — comments are not kept in the recycle bin.`,
           )}
 
           {(isManager || isAssigner) && task.approval_status === 'pending' && (
-            <div className="card-pad" style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, marginBottom: 16 }}>
-              <strong>Approval requested</strong>
-              <p className="muted" style={{ margin: '4px 0 10px' }}>
-                {isManager ? 'This task is in review and awaiting your approval.' : 'You handed this task out — it\'s submitted and waiting for you to accept the work.'}
-              </p>
-              <div className="row">
-                <button className="btn btn-primary btn-sm" onClick={() => approve('approved')}>✓ Approve & close</button>
-                <button className="btn btn-sm btn-danger" onClick={() => approve('rejected')} title="Send back to the owner to keep working">Send back for changes</button>
+            <div className="dr-approve" role="region" aria-label="Approval requested">
+              <div className="dr-approve-head">
+                <span className="dr-approve-ic" aria-hidden="true"><Ic name="clock" size={16} /></span>
+                <div className="dr-approve-body">
+                  <strong className="dr-approve-title">Approval requested</strong>
+                  <p className="dr-approve-text">
+                    {isManager ? 'This task is in review and awaiting your approval.' : 'You handed this task out — it\'s submitted and waiting for you to accept the work.'}
+                  </p>
+                </div>
+              </div>
+              <div className="dr-approve-actions">
+                <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => approve('approved')}><Ic name="check" size={14} /> Approve &amp; close</button>
+                <button className="btn btn-sm" disabled={busy} onClick={() => approve('rejected')} title="Send back to the owner to keep working"><Ic name="reply" size={14} /> Send back for changes</button>
               </div>
             </div>
           )}

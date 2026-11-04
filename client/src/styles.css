@@ -1713,6 +1713,45 @@ tbody tr:hover { background: var(--n-50); }
 .dr-field--tall { align-items: stretch; }
 .dr-field--tall .dr-field-val { display: block; }
 .dr-field--tall .dr-field-val .row { justify-content: flex-start; }
+/* The reviewer's approve / send-back panel. It was a raw cream #fffbeb box
+   whose text follows the theme, so on dark it put near-white words on a
+   near-white card. Everything here is mixed from tokens against --surface: a
+   faint amber wash on light, a barely-warm slate on dark, never a bright slab. */
+.dr-approve {
+  margin-bottom: 16px; padding: 14px 16px; border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warning) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, var(--border));
+}
+.dr-approve-ic {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--warning-bg); color: var(--warning-ink);
+}
+/* The buttons sit under the icon and the text, not beside the icon: in the
+   drawer's width, the icon's column was what pushed "Send back" onto a line of
+   its own. */
+.dr-approve-head { display: flex; gap: 12px; align-items: flex-start; }
+.dr-approve-body { flex: 1; min-width: 0; }
+.dr-approve-title { display: block; font-size: 14px; font-weight: 700; color: var(--text); }
+.dr-approve-text { margin: 2px 0 0; font-size: 13px; line-height: 1.5; color: var(--n-600); }
+.dr-approve-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* Approve is the outcome "Completed" turns green for, so it is green here too —
+   emerald-700, flat and without the coral glow: deep enough that white text
+   holds 5.5:1, and quiet on both themes. Send back stays the app's ordinary
+   secondary button rather than an alarm-red one: it returns work, it deletes
+   nothing. */
+.dr-approve .btn-primary { background: #047857; border-color: #047857; color: #fff; box-shadow: none; }
+.dr-approve .btn-primary:hover { background: #065f46; border-color: #065f46; box-shadow: 0 3px 10px rgba(4,120,87,.28); }
+@media (max-width: 720px) {
+  .dr-approve-actions .btn { flex: 1 1 auto; }
+}
+/* "Completed — approved by …". Mixed against the surface for the same reason. */
+.dr-done-note {
+  padding: 12px 14px; border-radius: var(--r-md); font-weight: 600;
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
+  color: var(--success-ink);
+}
 @keyframes slideIn { from { transform: translateX(30px); opacity: .6; } to { transform: none; opacity: 1; } }
 .modal-center { position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 50; display: grid; place-items: center; padding: 20px; }
 .modal { background: #fff; border-radius: 14px; box-shadow: var(--shadow-lg); width: 600px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
