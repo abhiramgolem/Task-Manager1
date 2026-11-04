@@ -4661,6 +4661,11 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .mv-btn:hover { background: rgba(255,255,255,.12); }
 .mv-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
 .mv-media { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+/* Pinch, double-tap and pan are MediaViewer's own (see `zoom`): the browser must
+   not zoom the page under the viewer instead. */
+.mv-stage { touch-action: none; }
+.mv-media.zoomable { transition: transform .18s ease; cursor: zoom-in; user-select: none; }
+.mv-media.zoomable.gesturing { transition: none; }
 .mv-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 46px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; }
 .mv-nav:hover { background: rgba(255,255,255,.22); }
 .mv-nav.prev { left: 12px; } .mv-nav.next { right: 12px; }
