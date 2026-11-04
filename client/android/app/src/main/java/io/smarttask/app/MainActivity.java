@@ -31,6 +31,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(CallRingPlugin.class);
         registerPlugin(MeetingRecorderPlugin.class);
         registerPlugin(ShareTargetPlugin.class);
+        registerPlugin(AppUpdatePlugin.class);
         super.onCreate(savedInstanceState);
         // A recreated activity (rotation, process restore) carries the original
         // launch intent again; answering it a second time would rejoin a call
