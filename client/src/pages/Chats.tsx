@@ -5,6 +5,7 @@ import { useAuth } from '../auth'
 import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
 import { clearChatNotifications } from '../push'
+import { takeShare, onShare, type Shared } from '../lib/shareTarget'
 import { toast } from '../lib/toast'
 import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
@@ -420,6 +421,10 @@ export default function Chats() {
   // box with a preview first, as WhatsApp does before it sends a picture; the
   // text in the box goes with them as the caption. A screenshot pasted by
   // accident is one ✕ away rather than already in front of the whole team.
+  // Shared in from another app, waiting for the chat it goes to (lib/shareTarget).
+  const [sharing, setSharing] = useState<Shared | null>(null)
+  // ...and once one is picked, waiting for that chat to open.
+  const pendingShareRef = useRef<Shared | null>(null)
   const [staged, setStaged] = useState<StagedFile[]>([])
   const stagedRef = useRef<StagedFile[]>([])
   stagedRef.current = staged
@@ -879,6 +884,8 @@ export default function Chats() {
     if (stagedRef.current.length) { stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)); setStaged([]) }
     // ...but what you were typing does: each chat keeps its own unsent text.
     setInput(activeId ? (readDrafts()[activeId] || '') : '')
+    // A share sent here goes in on top of what was already typed.
+    if (activeId && pendingShareRef.current) { applyShare(pendingShareRef.current); pendingShareRef.current = null }
     setPicked([]); setMentionQ(null); setSlashQ(null)
     // The thread of the chat being left does not linger behind the list.
     setMessages([])
@@ -1278,6 +1285,29 @@ export default function Chats() {
     requestAnimationFrame(() => inputRef.current?.focus())
   }
   useEffect(() => () => stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)), [])
+
+  // ---- shared from another app --------------------------------------------
+  // As WhatsApp does: pick the chat, and what was shared waits in its box —
+  // files in the tray, a link or text as the message (or the files' caption).
+  useEffect(() => {
+    const take = () => { const s = takeShare(); if (s) setSharing(s) }
+    take()
+    return onShare(take)
+  }, [])
+  const applyShare = (s: Shared) => {
+    if (s.skipped) toast.info(s.skipped === 1 ? "One item couldn't be shared" : `${s.skipped} items couldn't be shared`)
+    stageFiles(s.files)
+    if (s.text) setInput((cur) => (cur.trim() ? cur + '\n' + s.text : s.text))
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
+  const shareTo = (cid: string) => {
+    const s = sharing
+    setSharing(null)
+    if (!s) return
+    setShowArchived(false)
+    if (cid === activeIdRef.current) applyShare(s)
+    else { pendingShareRef.current = s; setActiveId(cid) }
+  }
 
   // One file to the thread, with an optimistic "Sending…" line until it lands.
   // XHR rather than fetch for the upload progress: a file can be 1 GB, minutes
@@ -3468,6 +3498,7 @@ export default function Chats() {
         />
       )}
       {showNew && <NewChatModal user={user!} convos={convos} onClose={() => setShowNew(false)} onOpen={(cid) => { setShowNew(false); setActiveId(cid); loadConvos() }} />}
+      {sharing && <ShareModal shared={sharing} convos={convos} onPick={shareTo} onClose={() => setSharing(null)} />}
       {forwardMsgs && <ForwardModal messages={forwardMsgs} convos={convos} onClose={() => setForwardMsgs(null)} onDone={() => { setForwardMsgs(null); loadConvos() }} />}
       {assignFor && active && (
         <TaskAssignSheet
@@ -3622,6 +3653,34 @@ function ForwardModal({ messages, convos, onClose, onDone }: { messages: Msg[]; 
           {list.length === 0 && <div className="empty" style={{ padding: 16 }}>No chats</div>}
         </div>
         <button className="btn btn-primary" style={{ width: '100%', marginTop: 10 }} disabled={busy || !sel.size} onClick={go}>Forward ({sel.size})</button>
+      </div>
+    </div>
+  )
+}
+
+// ---------- Send to… (shared from another app) ----------
+function ShareModal({ shared, convos, onPick, onClose }: { shared: Shared; convos: Conversation[]; onPick: (cid: string) => void; onClose: () => void }) {
+  const cardRef = useDialog<HTMLDivElement>(onClose)
+  const [q, setQ] = useState('')
+  // Groups only their admins may write to are left out for everyone else.
+  const list = convos.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()) && !(c.type === 'group' && c.admins_only && c.role !== 'admin'))
+  const n = shared.files.length
+  const what = n > 1 ? `${n} files` : n === 1 ? shared.files[0].name : shared.text
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" ref={cardRef} role="dialog" aria-modal="true" aria-label="Send to a chat" onClick={(e) => e.stopPropagation()}>
+        <div className="card-head spread"><h3 style={{ margin: 0, fontSize: 16 }}>Send to…</h3><button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">✕</button></div>
+        <div className="fwd-preview row" style={{ gap: 5 }}>{n > 0 && <Ic name="attach" size={13} />} {what}</div>
+        <input className="chat-contact-search" placeholder="Search chats…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="modal-list">
+          {list.map((c) => (
+            <button key={c.id} type="button" className="modal-user share-pick" onClick={() => onPick(c.id)}>
+              {c.type === 'group' ? <GroupAvatar conv={c} size={34} /> : <Avatar name={c.name} color={c.avatar_color} size={34} src={c.avatar_file && c.other_user_id ? userAvatarUrl(c.other_user_id, c.avatar_file) : undefined} />}
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 13.5 }}>{c.name}</div><div className="muted" style={{ fontSize: 11.5 }}>{c.type === 'group' ? `${c.member_count} members` : 'Direct'}</div></div>
+            </button>
+          ))}
+          {list.length === 0 && <div className="empty" style={{ padding: 16 }}>No chats</div>}
+        </div>
       </div>
     </div>
   )

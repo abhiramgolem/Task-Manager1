@@ -5344,3 +5344,6 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 @media (max-width: 399px) {
   .composer-box .cb-later { display: none; }
 }
+
+/* "Send to…" for a share from another app: each chat is a button. */
+.modal-user.share-pick { width: 100%; border: 0; background: none; color: inherit; font: inherit; text-align: left; }

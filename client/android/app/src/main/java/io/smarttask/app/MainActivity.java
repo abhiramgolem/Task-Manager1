@@ -30,17 +30,22 @@ public class MainActivity extends BridgeActivity {
         // Must be registered before the bridge is built in super.onCreate.
         registerPlugin(CallRingPlugin.class);
         registerPlugin(MeetingRecorderPlugin.class);
+        registerPlugin(ShareTargetPlugin.class);
         super.onCreate(savedInstanceState);
         // A recreated activity (rotation, process restore) carries the original
         // launch intent again; answering it a second time would rejoin a call
         // that may long be over.
-        if (savedInstanceState == null) handleCall(getIntent(), true);
+        if (savedInstanceState == null) {
+            handleCall(getIntent(), true);
+            handleShare(getIntent());
+        }
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         handleCall(intent, false);
+        handleShare(intent);
     }
 
     @Override
@@ -89,6 +94,15 @@ public class MainActivity extends BridgeActivity {
             .put("kind", intent.getStringExtra("kind"));
         CallRingPlugin.deliverAnswer(action, coldStart);
         intent.removeExtra(EXTRA_CALL_ACTION);
+    }
+
+    // Something shared to VoTask from another app's share sheet (ShareTargetPlugin).
+    private void handleShare(Intent intent) {
+        if (!ShareTargetPlugin.isShare(intent)) return;
+        // Reopened from Recents: Android hands back the share that first opened
+        // the app, which was dealt with then.
+        if ((intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return;
+        ShareTargetPlugin.receive(this, intent);
     }
 
     /** The call is over: the app goes back behind the lock screen like any other. */
