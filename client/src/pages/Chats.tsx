@@ -9,6 +9,7 @@ import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
 import { clipboardFiles, droppedFiles, dragHasFiles, canReadClipboardImages, readClipboardImages } from '../lib/pasteFiles'
 import { stashTaskDraft } from '../lib/taskDraft'
+import { CHUNKED_FROM, sendInChunks } from '../lib/chunkedUpload'
 import { startCall } from '../lib/call'
 import { useCallAnalyses, inProgress } from '../lib/callAnalysis'
 import EmojiPicker, { rememberEmoji } from '../components/EmojiPicker'
@@ -1220,42 +1221,58 @@ export default function Chats() {
   }
   useEffect(() => () => stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)), [])
 
-  // One file to the thread, with an optimistic "Sending…" line until it lands.
-  // XHR rather than fetch for the upload progress: a file can be 1 GB, minutes
-  // on a phone, and a "Sending…" line that never moves reads as stuck.
-  const uploadOne = async (conv: Conversation, file: File, caption: string, rep: Msg | null, capMentions: string[]) => {
+  // A file's optimistic "Sending…" line, put in the thread the moment it is
+  // sent rather than when its turn in the upload queue comes, so the thread
+  // reads in the order things were sent.
+  const addPending = (conv: Conversation, file: File, caption: string) => {
     const tmpId = 'tmp_' + Date.now() + Math.random().toString(36).slice(2, 6)
     setMessages((m) => [...m, { id: tmpId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }])
+    return tmpId
+  }
+
+  // The old way: the whole file in one multipart request, for a small file or
+  // an older server. XHR rather than fetch for the upload progress. A big file
+  // asks first whether the server has room for it: a refusal sent mid-upload
+  // never reaches us (the browser reads no answer until it has sent
+  // everything) and would surface as a dropped connection.
+  const sendWhole = async (conv: Conversation, file: File, caption: string, rep: Msg | null, capMentions: string[], progress: (pct: number) => void) => {
+    if (file.size > 10 * 1024 * 1024) await api.get(`/chat/upload-room?size=${file.size}`)
+    const form = new FormData(); form.append('file', file)
+    if (caption) form.append('body', caption)
+    if (rep) form.append('replyTo', rep.id)
+    if (capMentions.length) form.append('mentions', JSON.stringify(capMentions))
+    return new Promise<Msg>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_BASE}/api/chat/conversations/${conv.id}/upload`)
+      const t = getToken(); if (t) xhr.setRequestHeader('authorization', `Bearer ${t}`)
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress(Math.floor((e.loaded / e.total) * 100)) }
+      xhr.onload = () => {
+        let body: any = null
+        try { body = JSON.parse(xhr.responseText) } catch {}
+        if (xhr.status >= 200 && xhr.status < 300 && body) resolve(body)
+        else reject(new Error(body?.error || `Upload failed (${xhr.status})`))
+      }
+      xhr.onerror = () => reject(new Error('the connection was lost'))
+      xhr.send(form)
+    })
+  }
+
+  // One file to the thread, replacing its "Sending…" line when it lands. The
+  // line counts up: a file can be 1 GB, minutes on a phone, and a line that
+  // never moves reads as stuck. A big file goes up in chunks
+  // (lib/chunkedUpload), which rides out the connection dropping.
+  const uploadOne = async (conv: Conversation, tmpId: string, file: File, caption: string, rep: Msg | null, capMentions: string[]) => {
+    let shown = -1
+    const progress = (pct: number) => {
+      if (pct === shown) return
+      shown = pct
+      setMessages((prev) => prev.map((x) => (x.id === tmpId ? { ...x, progress: pct } : x)))
+    }
     try {
-      // A big file asks first whether the server has room for it: a refusal
-      // sent mid-upload never reaches us (the browser reads no answer until it
-      // has sent everything) and would surface as a dropped connection.
-      if (file.size > 10 * 1024 * 1024) await api.get(`/chat/upload-room?size=${file.size}`)
-      const form = new FormData(); form.append('file', file)
-      if (caption) form.append('body', caption)
-      if (rep) form.append('replyTo', rep.id)
-      if (capMentions.length) form.append('mentions', JSON.stringify(capMentions))
-      const data = await new Promise<Msg>((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        xhr.open('POST', `${API_BASE}/api/chat/conversations/${conv.id}/upload`)
-        const t = getToken(); if (t) xhr.setRequestHeader('authorization', `Bearer ${t}`)
-        let shown = -1
-        xhr.upload.onprogress = (e) => {
-          if (!e.lengthComputable) return
-          const pct = Math.floor((e.loaded / e.total) * 100)
-          if (pct === shown) return
-          shown = pct
-          setMessages((prev) => prev.map((x) => (x.id === tmpId ? { ...x, progress: pct } : x)))
-        }
-        xhr.onload = () => {
-          let body: any = null
-          try { body = JSON.parse(xhr.responseText) } catch {}
-          if (xhr.status >= 200 && xhr.status < 300 && body) resolve(body)
-          else reject(new Error(body?.error || `Upload failed (${xhr.status})`))
-        }
-        xhr.onerror = () => reject(new Error('the connection was lost'))
-        xhr.send(form)
-      })
+      const uploadId = file.size > CHUNKED_FROM ? await sendInChunks(file, 'chat', progress) : null
+      const data: Msg = uploadId
+        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions })
+        : await sendWhole(conv, file, caption, rep, capMentions, progress)
       setMessages((prev) => prev.map((x) => (x.id === tmpId ? data : x)))
       return true
     } catch (err: any) {
@@ -1264,21 +1281,29 @@ export default function Chats() {
     }
   }
 
+  // Files go up one at a time, in the order they were sent — behind the
+  // composer, not in front of it. It used to stay locked until the last byte
+  // was in, so a big video shut the chat for as long as the uplink took. Now
+  // text and voice notes go while it climbs, and files sent meanwhile queue
+  // behind it, each getting the whole uplink in turn rather than a share.
+  const uploadQueue = useRef<Promise<void>>(Promise.resolve())
+
   // Send what is staged: one message per file, in order, the caption (and the
   // reply, and its @mentions) on the first. A file that fails goes back into
   // the tray to try again, and the caption with it if it was riding on that one.
-  const sendStaged = async () => {
+  const sendStaged = () => {
     const conv = active
     if (!conv || busy) return
     const items = stagedRef.current
     const caption = input.trim(); const rep = replyTo
     const capMentions = caption ? resolveMentions(caption, picked, conv.members, user!.id) : []
-    setStaged([]); setInput(''); setBusy(true); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
-    const failed: StagedFile[] = []
-    try {
+    setStaged([]); setInput(''); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
+    const pending = items.map((it, i) => addPending(conv, it.file, i === 0 ? caption : ''))
+    uploadQueue.current = uploadQueue.current.then(async () => {
+      const failed: StagedFile[] = []
       for (let i = 0; i < items.length; i++) {
         const first = i === 0
-        if (await uploadOne(conv, items[i].file, first ? caption : '', first ? rep : null, first ? capMentions : [])) {
+        if (await uploadOne(conv, pending[i], items[i].file, first ? caption : '', first ? rep : null, first ? capMentions : [])) {
           if (items[i].url) URL.revokeObjectURL(items[i].url!)
         } else {
           failed.push(items[i])
@@ -1286,10 +1311,8 @@ export default function Chats() {
         }
       }
       loadConvos()
-    } finally {
       if (failed.length && activeIdRef.current === conv.id) setStaged((cur) => [...failed, ...cur])
-      setBusy(false)
-    }
+    }).catch(() => {}) // one batch going wrong must not stall every one after it
   }
 
   // Phones have no Ctrl+V: the clip's "Paste from clipboard" reads the picture

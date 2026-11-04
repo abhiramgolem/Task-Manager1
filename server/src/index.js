@@ -28,6 +28,7 @@ import ttsRoutes from './routes/tts.js'
 import apiKeyRoutes from './routes/apiKeys.js'
 import departmentRoutes from './routes/departments.js'
 import mcpRoutes from './routes/mcp.js'
+import uploadRoutes from './routes/uploads.js'
 import { startScheduler } from './scheduler.js'
 import { attachLiveTranscribe, attachAssistantLive, attachCallLive } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -39,7 +40,11 @@ initSchema()
 ensureSeed()
 
 const app = express()
-app.use(cors())
+// The Android app is cross-origin and sends an Authorization header, so every
+// request it makes is preceded by a CORS preflight — which browsers cache for
+// 5 s unless told otherwise. A file going up in chunks makes many requests to
+// one URL over minutes; ten minutes means one preflight, not one per chunk.
+app.use(cors({ maxAge: 600 }))
 app.use(express.json({ limit: '5mb' }))
 
 // API responses are per-user and must never be cached (prevents one account's
@@ -93,6 +98,7 @@ app.use('/api/feedback', feedbackRoutes)
 app.use('/api/tts', ttsRoutes)
 app.use('/api/keys', apiKeyRoutes)
 app.use('/api/departments', departmentRoutes)
+app.use('/api/uploads', uploadRoutes)
 // Outside /api on purpose: MCP carries its own credential in the path and speaks
 // JSON-RPC, not REST, so none of the /api middleware applies to it.
 app.use('/mcp', mcpRoutes)

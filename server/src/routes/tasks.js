@@ -53,7 +53,7 @@ export function purgeDeletedTask(row) {
 // one the disk has no room for, on the same budget as chat files.
 const ATTACH_MAX = Number(process.env.TASK_ATTACH_MAX_MB || 500) * MB
 const taskFiles = bigFileUpload({
-  dir: ATTACH_DIR, prefix: 'att', max: ATTACH_MAX, tooBig: `File too large (max ${ATTACH_MAX / MB} MB)`,
+  kind: 'task', dir: ATTACH_DIR, prefix: 'att', max: ATTACH_MAX, tooBig: `File too large (max ${ATTACH_MAX / MB} MB)`,
 })
 
 // SERVE / DOWNLOAD an attachment. Declared BEFORE authRequired so <img>/<video>
