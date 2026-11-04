@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired } from '../auth.js'
 import { saveDeviceToken, removeDeviceToken } from '../push.js'
+import { CHAT_NOTIF_TYPES } from '../util.js'
 
 const r = Router()
 r.use(authRequired)
@@ -23,9 +24,10 @@ r.post('/unregister-device', (req, res) => {
   res.json({ ok: true })
 })
 
-// My notifications, newest first.
+// My notifications, newest first — task ones only; chat lives in Chats.
 r.get('/', (req, res) => {
-  const rows = db.prepare('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').all(req.user.id)
+  const rows = db.prepare(`SELECT * FROM notifications WHERE user_id=? AND type NOT IN (${CHAT_NOTIF_TYPES.map(() => '?').join(',')})
+    ORDER BY created_at DESC LIMIT 50`).all(req.user.id, ...CHAT_NOTIF_TYPES)
   const unread = rows.filter((n) => !n.read).length
   res.json({ items: rows, unread })
 })

@@ -107,6 +107,11 @@ export function deviceLabel(ua = '') {
   return browser || os || 'Unknown device'
 }
 
+// Notification types that belong to Chats, not to the bell. Rows of these
+// filed before the bell went task-only are still in the table, so readers of
+// it filter them out by this list too.
+export const CHAT_NOTIF_TYPES = ['chat_message', 'chat_mention', 'chat_call', 'chat_reminder']
+
 // Which notification categories a person still wants. Every type maps to one
 // category so a toggle governs a whole family rather than a single message.
 export const NOTIF_CATEGORIES = {
@@ -141,7 +146,11 @@ export function notifAllowed(userId, type) {
 // no one line to point at); the conversation alone still opens the right thread.
 // For a task comment it is { commentId }: the task alone opened the drawer at its
 // title, with the comment at the very bottom under everything else.
-export function notify(orgId, userId, type, message, taskId = null, link = null) {
+//
+// `push` overrides what the phone shows: { title, body, tag }. A chat passes a
+// tag per conversation so its messages replace one notification, as Cliq and
+// WhatsApp do, instead of stacking a new one for every line.
+export function notify(orgId, userId, type, message, taskId = null, link = null, push = null) {
   if (!userId) return
   // A muted category is dropped outright rather than filed and hidden — a bell
   // that still counts messages you asked not to receive is not switched off.
@@ -149,12 +158,21 @@ export function notify(orgId, userId, type, message, taskId = null, link = null)
   const conversationId = link?.conversationId || null
   const messageId = (conversationId && link?.messageId) || null
   const commentId = (taskId && link?.commentId) || null
-  db.prepare(
-    `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, conversation_id, message_id, comment_id, read, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,0,?)`
-  ).run(id('ntf'), orgId, userId, type, message, taskId, conversationId, messageId, commentId, now())
-  sendPushToUser(userId, { title: PUSH_TITLES[type] || 'SmartTask', body: message, data: { type, taskId, conversationId, messageId, commentId } })
-    .catch(() => {})
+  // The bell is for tasks. Chat already has its own unread counts, mentions
+  // and list, and filing every message there too buried the task updates
+  // among them — so a chat event is pushed to the phone but never filed.
+  if (!CHAT_NOTIF_TYPES.includes(type)) {
+    db.prepare(
+      `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, conversation_id, message_id, comment_id, read, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,0,?)`
+    ).run(id('ntf'), orgId, userId, type, message, taskId, conversationId, messageId, commentId, now())
+  }
+  sendPushToUser(userId, {
+    title: push?.title || PUSH_TITLES[type] || 'SmartTask',
+    body: push?.body || message,
+    tag: push?.tag,
+    data: { type, taskId, conversationId, messageId, commentId },
+  }).catch(() => {})
 }
 
 // Notify every manager/admin in the org (e.g. when an employee submits work).

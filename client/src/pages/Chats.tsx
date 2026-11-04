@@ -4,6 +4,7 @@ import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '.
 import { useAuth } from '../auth'
 import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
+import { clearChatNotifications } from '../push'
 import { toast } from '../lib/toast'
 import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
@@ -569,6 +570,15 @@ export default function Chats() {
   // Text that was in the box when an edit began, put back when the edit ends.
   const editStashRef = useRef('')
   useEffect(() => { activeIdRef.current = activeId }, [activeId])
+  // The open chat's phone notification goes once you can see it — on opening
+  // it, and on coming back to the app with it still open.
+  useEffect(() => {
+    if (!activeId) return
+    const clear = () => { if (!document.hidden) void clearChatNotifications(activeId) }
+    clear()
+    document.addEventListener('visibilitychange', clear)
+    return () => document.removeEventListener('visibilitychange', clear)
+  }, [activeId])
 
   const active = useMemo(() => convos.find((c) => c.id === activeId) || null, [convos, activeId])
   // The signed-in user as the info panel reads them (the ORG role: it gates
@@ -1721,7 +1731,11 @@ export default function Chats() {
     //
     // isComposing guard: with Indic (Telugu/Hindi) and other IME keyboards,
     // Enter first COMMITS the composition — that keystroke must not send.
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    //
+    // On a touch screen Enter is the newline, as in WhatsApp and Cliq on a
+    // phone: a soft keyboard has no Shift+Enter, so sending on Enter left no way
+    // at all to write a second line. The send button is how a phone sends.
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !touchUI) {
       e.preventDefault()
       send()
     }
@@ -3212,6 +3226,9 @@ export default function Chats() {
                       value={input}
                       onChange={onComposerChange}
                       onKeyDown={onComposerKey}
+                      // The keyboard's action key shows the return arrow it now
+                      // performs on a phone, not a send arrow it no longer does.
+                      enterKeyHint={touchUI ? 'enter' : 'send'}
                       // A screenshot (or any copied file) pasted here goes into the
                       // tray above; a paste of words is still just words.
                       onPaste={(e) => {

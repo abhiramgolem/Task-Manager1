@@ -82,6 +82,20 @@ export async function registerPush() {
   }
 }
 
+// Opening a chat takes its notification out of the tray, as Cliq does: the
+// messages it announced are on screen now. The server tags a chat's pushes
+// `chat_<id>` (its reactions `react_<id>`), which is how they are found here.
+export async function clearChatNotifications(conversationId: string) {
+  if (!conversationId || !Capacitor.isNativePlatform()) return
+  try {
+    const { PushNotifications } = await import('@capacitor/push-notifications')
+    const { notifications } = await PushNotifications.getDeliveredNotifications()
+    const tags = [`chat_${conversationId}`, `react_${conversationId}`]
+    const shown = notifications.filter((n) => n.tag && tags.includes(n.tag))
+    if (shown.length) await PushNotifications.removeDeliveredNotifications({ notifications: shown })
+  } catch {}
+}
+
 // On logout, stop this device receiving the current user's pushes.
 export async function unregisterPush() {
   if (!Capacitor.isNativePlatform()) return

@@ -78,7 +78,10 @@ export function removeDeviceToken(token) {
 
 // Fire-and-forget push to all of a user's devices. Never throws — failures are
 // logged and dead tokens are pruned. FCM HTTP v1 sends one token per request.
-export async function sendPushToUser(userId, { title, body, data }) {
+//
+// `tag`: a notification with the same tag replaces the one already in the
+// tray rather than adding another — one notification per chat, not per line.
+export async function sendPushToUser(userId, { title, body, data, tag }) {
   const sa = getServiceAccount()
   if (!sa || !userId) return
   const tokens = db.prepare('SELECT token FROM device_tokens WHERE user_id=?').all(userId).map((r) => r.token)
@@ -102,7 +105,7 @@ export async function sendPushToUser(userId, { title, body, data }) {
             token: tok,
             notification: { title, body },
             data: stringData,
-            android: { priority: 'high', notification: { sound: 'default', channel_id: 'smarttask_v2' } },
+            android: { priority: 'high', notification: { sound: 'default', channel_id: 'smarttask_v2', ...(tag ? { tag } : {}) } },
           },
         }),
       })

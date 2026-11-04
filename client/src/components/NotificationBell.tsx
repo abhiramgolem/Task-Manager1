@@ -23,10 +23,8 @@ const NOTIF_ICON: Record<string, { name: Parameters<typeof Ic>[0]['name']; tone:
   task_assigned: { name: 'user', tone: 'primary' },
   task_reassigned: { name: 'refresh', tone: 'warning' },
   task_comment: { name: 'chat', tone: 'info' },
-  chat_message: { name: 'chat', tone: 'info' },
-  chat_mention: { name: 'at', tone: 'primary' },
-  chat_call: { name: 'phone', tone: 'warning' },
-  chat_reminder: { name: 'clock', tone: 'info' },
+  // No chat_* types: the bell is for tasks, and the server no longer sends
+  // chat messages, mentions, missed calls or reminders here (CHAT_NOTIF_TYPES).
   call_review: { name: 'ai', tone: 'primary' },
 }
 function NotifIcon({ type }: { type: string }) {

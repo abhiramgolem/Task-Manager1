@@ -14,7 +14,7 @@ import { resolveUser, resolveUserInfo, findSpokenAlias } from '../ai/extractor.j
 import { parseDueDate } from '../ai/dates.js'
 import { recordUsage } from '../ai/usage.js'
 import { db } from '../db.js'
-import { id, now, audit, emailDomainAllowed, orgAllowedDomains } from '../util.js'
+import { id, now, audit, emailDomainAllowed, orgAllowedDomains, CHAT_NOTIF_TYPES } from '../util.js'
 
 // Same shape routes/users.js and routes/invites.js accept, so voice can't create
 // an address the forms would have rejected.
@@ -642,7 +642,9 @@ async function handleCommand(req, res) {
     }
 
     case 'get_notifications': {
-      const rows = db.prepare('SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50').all(user.id)
+      // The bell's own list: task notifications, not chat (see CHAT_NOTIF_TYPES).
+      const rows = db.prepare(`SELECT * FROM notifications WHERE user_id=? AND type NOT IN (${CHAT_NOTIF_TYPES.map(() => '?').join(',')})
+        ORDER BY created_at DESC LIMIT 50`).all(user.id, ...CHAT_NOTIF_TYPES)
       const unread = rows.filter((n) => !n.read)
       if (!unread.length) return res.json(answer("You're all caught up — no unread notifications."))
       const preview = unread.slice(0, 3).map((n) => n.message).filter(Boolean).join('. ')
