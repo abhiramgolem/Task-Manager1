@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { Avatar, Badge, Ic } from '../ui'
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
+import { saveFile } from '../lib/saveFile'
 import DepartmentSelect, { Dept } from './DepartmentSelect'
 
 // Format only. Any domain is fine as far as the form is concerned — an org that
@@ -56,8 +57,7 @@ export default function UserManagement() {
 
   const downloadTemplate = () => {
     const csv = 'name,email,phone,role,department,aliases,language,password\nMunidhar Reddy,munidhar@befach.com,+91 98765 43210,employee,Engineering,"Muni,Munidhar",en,password123\n'
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-    const a = document.createElement('a'); a.href = url; a.download = 'users-template.csv'; a.click(); URL.revokeObjectURL(url)
+    saveFile({ blob: new Blob([csv], { type: 'text/csv' }), name: 'users-template.csv' })
   }
 
   const sendDigestNow = async () => {

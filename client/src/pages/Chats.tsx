@@ -6,6 +6,7 @@ import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
 import { clearChatNotifications } from '../push'
 import { takeShare, onShare, type Shared } from '../lib/shareTarget'
+import { saveFile } from '../lib/saveFile'
 import { toast } from '../lib/toast'
 import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
@@ -2089,10 +2090,10 @@ export default function Chats() {
     if (navigator.share) { try { await navigator.share(shareData) } catch {} }
     else { try { await navigator.clipboard.writeText(url || m.body); toast.success('Link copied to clipboard') } catch {} }
   }
+  // In the phone app: downloaded by the app and opened, as WhatsApp does (lib/saveFile).
   const download = (m: Msg) => {
     setMenuId(null)
-    const a = document.createElement('a'); a.href = fileUrl(m, true); a.download = m.file?.name || 'file'
-    document.body.appendChild(a); a.click(); a.remove()
+    saveFile({ url: fileUrl(m, true), name: m.file?.name || 'file', mime: m.file?.type, key: 'chat:' + m.id })
   }
   // Over a photo or video in the thread. Files had their own Download, but a
   // picture's was in the ⋯ menu or behind a long-press, and a video's nowhere
@@ -2511,11 +2512,7 @@ export default function Chats() {
       const lines = (d.items as { at: string; sender: string; text: string; event: boolean }[])
         .map((i) => `${stamp(i.at)} - ${i.event ? '' : i.sender + ': '}${i.text}`)
       const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' })
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `VoTask chat with ${c.name.replace(/[\\/:*?"<>|]/g, '')}.txt`
-      document.body.appendChild(a); a.click(); a.remove()
-      setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+      await saveFile({ blob, name: `VoTask chat with ${c.name.replace(/[\\/:*?"<>|]/g, '')}.txt` })
       toast.success(`Exported ${lines.length} messages`)
     } catch (e: any) { toast.error('Could not export: ' + e.message) }
   }

@@ -32,6 +32,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(MeetingRecorderPlugin.class);
         registerPlugin(ShareTargetPlugin.class);
         registerPlugin(AppUpdatePlugin.class);
+        registerPlugin(FileDownloadPlugin.class);
         super.onCreate(savedInstanceState);
         // A recreated activity (rotation, process restore) carries the original
         // launch intent again; answering it a second time would rejoin a call
@@ -104,6 +105,10 @@ public class MainActivity extends BridgeActivity {
         // the app, which was dealt with then.
         if ((intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return;
         ShareTargetPlugin.receive(this, intent);
+        // Once only. A cold start sees this intent twice (BridgeActivity replays
+        // the launch intent through onNewIntent, then onCreate reads it), and a
+        // second receive would clear the first one's copies while they load.
+        intent.setAction(Intent.ACTION_MAIN);
     }
 
     /** The call is over: the app goes back behind the lock screen like any other. */

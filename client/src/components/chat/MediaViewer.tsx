@@ -1,4 +1,5 @@
 import React from 'react'
+import { saveFile } from '../../lib/saveFile'
 import { Ic } from '../../ui'
 import PhotoViewer, { ViewerItem } from '../PhotoViewer'
 import type { Msg } from './types'
@@ -31,10 +32,7 @@ export default function MediaViewer({ items, startId, senderName, meId, onClose,
     caption: m.body || undefined,
   }))
 
-  const download = (m: Msg) => {
-    const a = document.createElement('a'); a.href = fileUrl(m, true); a.download = m.file?.name || 'file'
-    document.body.appendChild(a); a.click(); a.remove()
-  }
+  const download = (m: Msg) => saveFile({ url: fileUrl(m, true), name: m.file?.name || 'file', mime: m.file?.type, key: 'chat:' + m.id })
 
   return (
     <PhotoViewer items={shown} startId={startId} onClose={onClose} actions={(it) => {

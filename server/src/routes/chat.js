@@ -950,10 +950,13 @@ function deliver(conv, msgRow, sender, mentioned = []) {
         AND COALESCE(kind,'')<>'system'
         AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
       LIMIT ${UNREAD_CAP})`)
+  // `rich`: the same line for a phone that draws the chat's notification
+  // itself, listing each message under its sender (push.js sendPushToUser).
+  const rich = { chat: chatTitle, sender: sender.name, text: short, group: conv.type === 'group' }
   const pushFor = (uid, lastReadAt, line) => {
     const n = unreadOf.get(conv.id, uid, lastReadAt || '', uid).c
     const count = n > 1 ? ` · ${n >= UNREAD_CAP ? `${UNREAD_CAP}+` : n} new messages` : ''
-    return { title: chatTitle + count, body: line, tag }
+    return { title: chatTitle + count, body: line, tag, rich }
   }
   const groupLine = conv.type === 'group' ? `${sender.name}: ${short}` : short
   for (const uid of others) {
