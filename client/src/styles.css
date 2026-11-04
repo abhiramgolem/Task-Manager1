@@ -5596,3 +5596,44 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 /* A tall photo is mostly a phone screenshot: its top is what matters. In dark
    the generic rule paints the unread label's text for an orange pill. */
 :root[data-theme="dark"] .chat-layout .unread-sep span { color: var(--text); }
+
+/* A shared document reads as WhatsApp's: its name on up to two lines rather
+   than cut to a dozen characters, and its type as a coloured badge. */
+.chat-layout .chat-file-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-width: 230px; overflow-wrap: anywhere; line-height: 1.3; }
+.chat-layout .chat-file-icon[data-kind]:not([data-kind=""]) { width: 34px; height: 40px; border-radius: 5px; color: #fff; font-size: 9.5px; font-weight: 800; letter-spacing: .3px; }
+.chat-layout .chat-file-icon[data-kind="pdf"] { background: #e53935; }
+.chat-layout .chat-file-icon[data-kind="doc"] { background: #2b6fd6; }
+.chat-layout .chat-file-icon[data-kind="xls"] { background: #1e8e4e; }
+.chat-layout .chat-file-icon[data-kind="ppt"] { background: #e2621b; }
+.chat-layout .chat-file-icon[data-kind="zip"] { background: #7c6a55; }
+
+/* ---- the open chat's header on wide screens, as Cliq's ----------------------
+   The name, how many people (a group), and Messages | Media Files under it; a
+   close button at the end. A phone keeps WhatsApp's header: back arrow, name,
+   the members' names or last seen, and the info screen for media. */
+.chp-people, .chp-tabs, .chp-close { display: none; }
+@media (min-width: 721px) {
+  .chat-layout .chat-peer-who { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .chp-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .chp-line .chat-peer-name { flex: 0 1 auto; min-width: 0; }
+  .chp-line .chat-peer-sub { margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The count says it; the list of names no longer runs off the header. */
+  .chp-line .chp-names { display: none; }
+  .chp-people {
+    display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 1px 0 1px 10px;
+    border: 0; border-left: 1px solid var(--border); background: none; color: var(--muted);
+    font: inherit; font-size: 13.5px; cursor: pointer;
+  }
+  .chp-people:hover { color: var(--text); }
+  .chp-tabs { display: flex; gap: 2px; margin-bottom: -9px; }
+  .chp-tab {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px 7px; border: 0; border-bottom: 2px solid transparent;
+    background: none; color: var(--muted); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; border-radius: 6px 6px 0 0;
+  }
+  .chp-tab:hover { color: var(--text); background: var(--chat-fill); }
+  .chp-tab.on { color: var(--primary-dark, var(--primary)); border-bottom-color: var(--primary); background: color-mix(in srgb, var(--primary) 9%, transparent); }
+  .chat-peer-actions .chp-close { display: grid; margin-left: 4px; border-left: 1px solid var(--border); border-radius: 0 8px 8px 0; }
+}
+/* Media Files in place of the thread. */
+.chat.media-on .chat-log-wrap, .chat.media-on .composer, .chat.media-on .pin-bar, .chat.media-on .pin-list, .chat.media-on .in-search { display: none; }
+.chat-media-pane { flex: 1; min-height: 0; }

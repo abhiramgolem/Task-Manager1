@@ -34,7 +34,9 @@ import MediaViewer from '../components/chat/MediaViewer'
 import PhotoViewer from '../components/PhotoViewer'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
 import ChatInfoPanel from '../components/ChatInfoPanel'
-import type { InfoView, Me } from '../lib/chatInfo'
+import type { InfoView, Me, MediaKind } from '../lib/chatInfo'
+import { chatInfoApi, MEDIA_TABS } from '../lib/chatInfo'
+import { MediaView } from '../components/ChatMedia'
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 const MAX_FILE = 1024 * 1024 * 1024 // 1 GB — the server's limit for a chat file
@@ -359,6 +361,11 @@ function MessageText({ body, mentions, meId, fromMe, highlight }: { body: string
 }
 
 // Group avatar: uploaded photo if present, else a '#' tile.
+// A document's type badge, as WhatsApp marks a PDF red: the common office
+// types by their usual colours (styles.css), anything else the plain glyph.
+const FILE_KINDS: Record<string, string> = { pdf: 'pdf', doc: 'doc', docx: 'doc', xls: 'xls', xlsx: 'xls', csv: 'xls', ppt: 'ppt', pptx: 'ppt', zip: 'zip', rar: 'zip' }
+const fileKind = (name?: string) => FILE_KINDS[(/\.([a-z0-9]{1,5})$/i.exec(name || '')?.[1] || '').toLowerCase()] || ''
+
 function GroupAvatar({ conv, size }: { conv: { id: string; avatar_file?: string | null; avatar_color?: string }; size: number }) {
   const [broken, setBroken] = useState(false)
   useEffect(() => { setBroken(false) }, [conv.avatar_file])
@@ -456,6 +463,20 @@ export default function Chats() {
   // when there is nothing left to step out of. The history effects use it so
   // Back leaves a sub-view before it closes the panel.
   const [infoStart, setInfoStart] = useState<InfoView>({ view: 'info' })
+  // Wide screens, as Cliq: the open chat shows its Messages or its Media Files,
+  // the second opening on the first kind of file the chat has.
+  const [paneTab, setPaneTab] = useState<'messages' | 'media'>('messages')
+  const [mediaFirst, setMediaFirst] = useState<MediaKind | null>(null)
+  const openMediaTab = () => {
+    if (!activeIdRef.current) return
+    setPaneTab('media'); setMediaFirst(null)
+    const cid = activeIdRef.current
+    chatInfoApi.info(cid).then((d) => {
+      if (activeIdRef.current !== cid) return
+      const c = d?.counts
+      setMediaFirst((c && MEDIA_TABS.find((t) => (c[t.key] || 0) > 0)?.key) || 'images')
+    }).catch(() => setMediaFirst('images'))
+  }
   const infoStepRef = useRef<(() => boolean) | null>(null)
   // "Open that chat AND its info" (a list avatar): the info entry goes on top
   // of the chat's own history entry, so it waits for that entry to land.
@@ -884,6 +905,7 @@ export default function Chats() {
   // taps a conversation to open it (and the back arrow returns to the list).
   useEffect(() => {
     setLoadOpen(false); setSelectedId(null); setReactionsOf(null); setHeadMenu(false); setJumpOpen(false); setAttachMenu(false)
+    setPaneTab('messages')
     setMulti(null); setUnfolded(new Set()); setAwayFromBottom(false); setNewBelow(0); setHasMore(false); setTypingName(null)
     // Files staged for one chat do not follow you into the next.
     if (stagedRef.current.length) { stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)); setStaged([]) }
@@ -2818,7 +2840,7 @@ export default function Chats() {
             <span className="drop-veil-sub">You can add a caption before it is sent</span>
           </div>
         )}
-        <div className="chat">
+        <div className={'chat' + (paneTab === 'media' && active ? ' media-on' : '')}>
           {/* Touch screens, a message selected: the header becomes its action
               bar, as in WhatsApp — ✕ to let go, the everyday actions as icons,
               the rest under ⋮. Every action ends the selection. */}
@@ -2900,10 +2922,18 @@ export default function Chats() {
                 onClick={toggleInfo}
                 onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleInfo() } }}
               >
+                <div className="chp-line">
                 <div className="chat-peer-name">{active.name}</div>
+                {/* Wide screens, as Cliq: how many people, which opens them. */}
+                {active.type === 'group' && (
+                  <button type="button" className="chp-people" title="People" aria-label={`${active.members.length} people. Show them`}
+                    onClick={(e) => { e.stopPropagation(); openInfo() }}>
+                    <Ic name="user" size={14} /> {active.members.length}
+                  </button>
+                )}
                 <div className="muted chat-peer-sub">
                   {typingName ? <span className="typing-text">{active.type === 'group' ? `${typingName.split(' ')[0]} is ` : ''}{typingMode === 'recording' ? 'recording audio…' : 'typing…'}</span>
-                    : active.type === 'group' ? <span>{active.members.map((m) => m.name.split(' ')[0]).join(', ')}</span>
+                    : active.type === 'group' ? <span className="chp-names">{active.members.map((m) => m.name.split(' ')[0]).join(', ')}</span>
                       : otherOnline ? <span className="online-text">online</span>
                         : (active.other_user_id && lastSeen[active.other_user_id]) ? <span>{lastSeenLabel(lastSeen[active.other_user_id])}</span>
                           : (() => {
@@ -2919,6 +2949,13 @@ export default function Chats() {
                       summed over a group it was the whole team's backlog ("107
                       open · 104 late"), which says nothing about anyone here. */}
                   <LoadChip load={peerLoad} onClick={(e) => { e.stopPropagation(); setLoadOpen((o) => !o); setHeadMenu(false) }} />
+                </div>
+                </div>
+                <div className="chp-tabs" role="tablist" aria-label="Show">
+                  <button type="button" role="tab" aria-selected={paneTab === 'messages'} className={'chp-tab' + (paneTab === 'messages' ? ' on' : '')}
+                    onClick={(e) => { e.stopPropagation(); setPaneTab('messages') }}><Ic name="chat" size={15} /> Messages</button>
+                  <button type="button" role="tab" aria-selected={paneTab === 'media'} className={'chp-tab' + (paneTab === 'media' ? ' on' : '')}
+                    onClick={(e) => { e.stopPropagation(); if (paneTab !== 'media') openMediaTab() }}><Ic name="doc" size={15} /> Media Files</button>
                 </div>
               </div>
               <div className="chat-peer-actions">
@@ -2961,6 +2998,10 @@ export default function Chats() {
                   )}
                   {jumpOpen && <JumpToDate days={dayIndex} onPick={jumpToDay} onClose={() => setJumpOpen(false)} />}
                 </div>
+                {/* Wide screens, as Cliq: close the chat. A phone has its back arrow. */}
+                <button className="ic-btn wide-only chp-close" title="Close chat" aria-label="Close chat" onClick={() => setActiveId('')}>
+                  <Ic name="close" size={19} />
+                </button>
               </div>
               {loadOpen && peerLoad && (
                 <LoadPop
@@ -3021,6 +3062,19 @@ export default function Chats() {
           {touchUI && <span id="msg-select-hint" className="sr-only">Select to react, reply or forward</span>}
           <div className="sr-only" aria-live="polite">{selMsg ? `Message from ${selMsg.sender_id === user!.id ? 'you' : senderName(selMsg.sender_id)} selected. Reactions are next to it; reply, forward and more are at the top.` : ''}</div>
 
+          {/* Media Files: what this chat has shared, by kind, in place of the
+              thread (which stays mounted underneath, hidden, so Messages
+              comes back to the same place). Scrolls in a .ci-body, the box
+              its paging and sticky headers expect. */}
+          {active && paneTab === 'media' && infoMe && (
+            <div className="ci-body chat-media-pane">
+              {mediaFirst
+                ? <MediaView convId={active.id} me={infoMe} initialTab={mediaFirst}
+                    onShowMessage={(mid) => { setPaneTab('messages'); showMessage(mid) }}
+                    onOpenMeeting={(mid) => openInfo({ view: 'summary', meetingId: mid })} />
+                : <div className="dash-skeleton"><span className="spinner" /></div>}
+            </div>
+          )}
           <div className="chat-log-wrap">
           <div className={'chat-log' + (multi ? ' picking' : '')} ref={logRef} onScroll={onLogScroll}>
             {/* The New chat button is offered whether or not there are existing
@@ -3199,7 +3253,7 @@ export default function Chats() {
                                   {mediaDl(m)}
                                 </div>
                               : <div className="chat-file">
-                                  <span className="chat-file-icon">{m.uploading ? <Ic name="clock" size={18} /> : <DocGlyph size={20} />}</span>
+                                  <span className="chat-file-icon" data-kind={fileKind(m.file?.name)}>{m.uploading ? <Ic name="clock" size={18} /> : fileKind(m.file?.name) ? fileKind(m.file?.name).toUpperCase() : <DocGlyph size={20} />}</span>
                                   <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
                                   {!m.uploading && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={() => download(m)}><Ic name="download" size={14} /></button>}
                                 </div>)}
