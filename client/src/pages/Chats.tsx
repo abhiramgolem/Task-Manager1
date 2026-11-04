@@ -1930,6 +1930,14 @@ export default function Chats() {
     const a = document.createElement('a'); a.href = fileUrl(m, true); a.download = m.file?.name || 'file'
     document.body.appendChild(a); a.click(); a.remove()
   }
+  // Over a photo or video in the thread. Files had their own Download, but a
+  // picture's was in the ⋯ menu or behind a long-press, and a video's nowhere
+  // else, so "there is no way to download it" was the report. stopPropagation
+  // keeps the tap off the bubble, which would otherwise select the message.
+  const mediaDl = (m: Msg) => (
+    <button type="button" className="chat-media-dl" title="Download" aria-label={`Download ${m.file?.name || 'file'}`}
+      onClick={(e) => { e.stopPropagation(); download(m) }}><Ic name="download" size={15} /></button>
+  )
   const togglePin = async (m: Msg) => {
     setMenuId(null)
     const next = !m.pinned_at
@@ -2969,11 +2977,17 @@ export default function Chats() {
                               </div>
                             </div>
                           ) : m.file && (isImage && !m.uploading
-                            ? <button type="button" className="chat-image-btn" onClick={(e) => { e.stopPropagation(); setViewerAt(m.id) }} aria-label={`Open photo${m.body ? `: ${m.body}` : ''}`}>
-                                <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy" />
-                              </button>
+                            ? <div className="chat-media">
+                                <button type="button" className="chat-image-btn" onClick={(e) => { e.stopPropagation(); setViewerAt(m.id) }} aria-label={`Open photo${m.body ? `: ${m.body}` : ''}`}>
+                                  <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy" />
+                                </button>
+                                {mediaDl(m)}
+                              </div>
                             : isVideo(m.file) && !m.uploading
-                              ? <video className="chat-video" src={fileUrl(m)} controls preload="metadata" playsInline />
+                              ? <div className="chat-media">
+                                  <video className="chat-video" src={fileUrl(m)} controls preload="metadata" playsInline />
+                                  {mediaDl(m)}
+                                </div>
                               : <div className="chat-file">
                                   <span className="chat-file-icon">{m.uploading ? <Ic name="clock" size={18} /> : <DocGlyph size={20} />}</span>
                                   <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>

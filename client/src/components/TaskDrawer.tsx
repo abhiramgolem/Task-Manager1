@@ -693,8 +693,16 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                         </a>
                       )}
                       <div className="attach-meta">
-                        <a href={taskAttachmentUrl(a.id, true)} className="attach-name" title={`Download ${a.filename}`}>{a.filename}</a>
-                        <span className="muted" style={{ fontSize: 11 }}>{fmtBytes(a.file_size)}</span>
+                        <div className="attach-meta-text">
+                          <a href={taskAttachmentUrl(a.id, true)} download={a.filename} className="attach-name" title={`Download ${a.filename}`}>{a.filename}</a>
+                          <span className="muted" style={{ fontSize: 11 }}>{fmtBytes(a.file_size)}</span>
+                        </div>
+                        {/* Its own button: the file name was the only way to save a
+                            file, and nobody read a name as a download link — every
+                            thumbnail opens or plays the file instead. */}
+                        <a href={taskAttachmentUrl(a.id, true)} download={a.filename} className="attach-dl" title={`Download ${a.filename}`} aria-label={`Download ${a.filename}`}>
+                          <Ic name="download" size={14} />
+                        </a>
                       </div>
                       {canRemove && <button className="attach-item-x" disabled={busy} onClick={() => removeAttachment(a)} aria-label={`Remove ${a.filename}`}>✕</button>}
                     </div>

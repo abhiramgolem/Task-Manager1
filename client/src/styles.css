@@ -3727,7 +3727,11 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
 .attach-thumb img, .attach-thumb video { width: 100%; height: 84px; object-fit: cover; display: block; }
 .attach-thumb-file { display: grid; place-items: center; align-content: center; gap: 3px; color: var(--muted); text-decoration: none; }
 .attach-ext { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; }
-.attach-meta { padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; }
+.attach-meta { padding: 6px 8px; display: flex; align-items: center; gap: 6px; }
+.attach-meta-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* Download, on every tile: the thumbnail above opens or plays the file. */
+.attach-dl { flex-shrink: 0; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); text-decoration: none; }
+.attach-dl:hover { background: color-mix(in srgb, var(--primary) 18%, transparent); }
 /* A big file going up from the drawer: its name, a percentage, a bar. */
 .attach-progress { margin-top: 8px; display: grid; gap: 5px; }
 .attach-progress-line { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
@@ -4399,6 +4403,14 @@ button.reply-quote {
 .bubble.user .read-more { color: #fff; text-decoration: underline; }
 .chat-image-btn { display: block; border: 0; padding: 0; background: transparent; cursor: zoom-in; border-radius: 10px; line-height: 0; }
 .chat-video { display: block; max-width: 260px; max-height: 260px; border-radius: 10px; background: #000; }
+/* Download over a photo or video, in the top corner: the bottom is the video's
+   own controls. On hover with a mouse; always there on a touch screen, which
+   has no hover to reveal it. */
+.chat-media { position: relative; width: fit-content; }
+.chat-media-dl { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.chat-media:hover .chat-media-dl, .chat-media-dl:focus-visible { opacity: 1; }
+.chat-media-dl:hover { background: rgba(0,0,0,.75); }
+@media (hover: none) { .chat-media-dl { opacity: .9; } }
 .chat-file-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: color-mix(in srgb, currentColor 12%, transparent); flex-shrink: 0; }
 
 /* Cards inside a bubble: the bubble gives them room and keeps the time below. */
