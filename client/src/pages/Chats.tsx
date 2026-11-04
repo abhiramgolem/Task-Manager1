@@ -29,6 +29,7 @@ import TaskAssignSheet, { Draft } from '../components/chat/TaskAssignSheet'
 import { TaskCard, PollCard, PollVotesSheet, LocationCard, ContactCard, LinkPreview, CallSummaryCard } from '../components/chat/MessageCards'
 import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPicker, CallsSheet, DescriptionEditor } from '../components/chat/ChatDialogs'
 import MediaViewer from '../components/chat/MediaViewer'
+import PhotoViewer from '../components/PhotoViewer'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
 import ChatInfoPanel from '../components/ChatInfoPanel'
 import type { InfoView, Me } from '../lib/chatInfo'
@@ -515,6 +516,9 @@ export default function Chats() {
   const [contactOpen, setContactOpen] = useState(false)
   const [callsOpen, setCallsOpen] = useState(false)
   const [viewerAt, setViewerAt] = useState<string | null>(null)
+  // A picture still in the tray above the box, open full size so it can be
+  // checked (zoomed into) before it goes.
+  const [stagedAt, setStagedAt] = useState<string | null>(null)
   const [descOpen, setDescOpen] = useState(false)
   // Older pages of a long chat, fetched on scrolling to the top.
   const [hasMore, setHasMore] = useState(false)
@@ -986,7 +990,7 @@ export default function Chats() {
     // remove, delete), and ConfirmHost has no back handler of its own — without
     // this, back would step the panel and leave the question hanging.
     if (document.querySelector('.confirm-center')) { resolveConfirm(false); return true }
-    if (viewerAt) { setViewerAt(null); return true }
+    if (viewerAt || stagedAt) { setViewerAt(null); setStagedAt(null); return true }
     if (openTaskId) { setOpenTaskId(null); return true }
     if (emojiFor) { setEmojiFor(null); return true }
     if (attachMenu) { setAttachMenu(false); return true }
@@ -1012,7 +1016,7 @@ export default function Chats() {
     if (activeId) { setActiveId(''); return true } // open chat → back to the list
     if (showArchived) { setShowArchived(false); return true }
     return false
-  }), [viewerAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
+  }), [viewerAt, stagedAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
 
   // Escape closes the top-most of this page's own popups — a menu or picker,
   // then the selected message — one layer per press. Dialogs, the emoji picker
@@ -3126,12 +3130,13 @@ export default function Chats() {
                 </div>
               )}
               {/* What will go with the next Send: pictures as thumbnails, other
-                  files by name. ✕ takes one back out. */}
+                  files by name. A picture opens full size, to be checked
+                  before it goes; ✕ takes one back out. */}
               {staged.length > 0 && (
                 <div className="stage-strip" role="group" aria-label={`${staged.length} file${staged.length === 1 ? '' : 's'} ready to send`}>
                   {staged.map((s) => (
                     <div key={s.id} className={'stage-item' + (s.url ? ' pic' : '')} title={s.file.name}>
-                      {s.url ? <img src={s.url} alt={s.file.name} />
+                      {s.url ? <button type="button" className="stage-open" onClick={() => setStagedAt(s.id)} aria-label={`View ${s.file.name}`}><img src={s.url} alt="" /></button>
                         : (<>
                           <span className={'stage-ic' + (isAudio({ name: s.file.name, type: s.file.type }) ? ' audio' : '')}>
                             {isAudio({ name: s.file.name, type: s.file.type }) ? <Ic name="mic" size={16} /> : (/\.([a-z0-9]{1,5})$/i.exec(s.file.name)?.[1] || 'FILE').toUpperCase()}
@@ -3439,6 +3444,16 @@ export default function Chats() {
           onClose={() => setViewerAt(null)}
           onForward={(m) => { setViewerAt(null); setForwardMsgs([m]) }}
           onShowInChat={(m) => { setViewerAt(null); requestAnimationFrame(() => scrollToMessage(m.id)) }}
+        />
+      )}
+      {/* Closes by itself once the picture leaves the tray (sent, removed, or
+          the chat switched). */}
+      {stagedAt && (
+        <PhotoViewer
+          label="Picture to send"
+          items={staged.filter((s) => s.url).map((s) => ({ id: s.id, src: s.url!, alt: s.file.name, title: s.file.name, subtitle: `Not sent yet · ${fmtSize(s.file.size)}` }))}
+          startId={stagedAt}
+          onClose={() => setStagedAt(null)}
         />
       )}
       {showStarred && <StarredModal onClose={() => setShowStarred(false)} onOpen={(cid, mid) => { setShowStarred(false); openMessage(cid, mid) }} />}
