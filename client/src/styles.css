@@ -2541,7 +2541,9 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 
 /* in-chat search bar + composer */
 .in-search { display: flex; gap: 6px; align-items: center; padding: 6px 0 10px; }
-.in-search input { flex: 1; padding: 7px 11px; border: 1px solid var(--border); border-radius: 9px; font-size: 13px; }
+.in-search input { flex: 1; min-width: 0; padding: 7px 11px; border: 1px solid var(--border); border-radius: 9px; font-size: 13px; }
+.in-search-count { font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.in-search .ic-btn:disabled { opacity: .4; cursor: default; }
 .composer { padding-top: 4px; }
 
 /* modals (new chat / group info) */

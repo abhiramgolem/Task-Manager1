@@ -378,6 +378,10 @@ export default function Chats() {
   const [search, setSearch] = useState('')       // sidebar people search
   const [inSearch, setInSearch] = useState('')   // in-conversation message search
   const [inSearchOpen, setInSearchOpen] = useState(false)
+  // The search's matches over the chat's whole history, newest first, and the
+  // one on screen — WhatsApp's "3 of 12" with ⌃ ⌄ to step between them.
+  const [searchHits, setSearchHits] = useState<string[] | null>(null)
+  const [hitAt, setHitAt] = useState(0)
   const [replyTo, setReplyTo] = useState<Msg | null>(null)
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [loading, setLoading] = useState(true)
@@ -909,6 +913,30 @@ export default function Chats() {
     forceScrollRef.current = false
     if (!scrollToMessage(id)) void seekOlder(activeId, id, messages, hasMore)
   }, [landOn, active?.id, messages])
+  // In-chat search asks the server, which sees the whole history rather than
+  // the page loaded, a moment after typing stops — then lands on the newest match.
+  useEffect(() => {
+    const q = inSearch.trim()
+    if (!inSearchOpen || q.length < 2 || !activeId) { setSearchHits(null); setHitAt(0); return }
+    let live = true
+    const t = setTimeout(() => {
+      api.get(`/chat/search?conversationId=${encodeURIComponent(activeId)}&q=${encodeURIComponent(q)}`).then((d) => {
+        if (!live) return
+        const ids: string[] = d.ids || []
+        setSearchHits(ids)
+        setHitAt(0)
+        if (ids.length) setLandOn(ids[0])
+      }).catch(() => {})
+    }, 250)
+    return () => { live = false; clearTimeout(t) }
+  }, [inSearch, inSearchOpen, activeId])
+  // ⌃ goes back in time (the hits run newest first), ⌄ forward; both wrap.
+  const stepHit = (older: boolean) => {
+    if (!searchHits?.length) return
+    const n = (hitAt + (older ? 1 : searchHits.length - 1)) % searchHits.length
+    setHitAt(n)
+    setLandOn(searchHits[n])
+  }
   // The line is older than the page that loaded — a busy group can bury a
   // notification under hundreds of newer messages. Fetch back a page at a time
   // until it is there. Bounded: a line deleted or cleared from this chat is
@@ -939,7 +967,7 @@ export default function Chats() {
     if (!el) return
     const away = el.scrollHeight - el.scrollTop - el.clientHeight > 300
     if (away !== awayRef.current) { awayRef.current = away; setAwayFromBottom(away); if (!away) setNewBelow(0) }
-    if (el.scrollTop < 120 && hasMore && !loadingOlder && !inSearch.trim()) loadOlder()
+    if (el.scrollTop < 120 && hasMore && !loadingOlder) loadOlder()
   }
   // From far back in a long chat, a jump (as WhatsApp does) — gliding past
   // hundreds of messages takes long enough to look like nothing happened.
@@ -2443,9 +2471,9 @@ export default function Chats() {
   // me, chat cleared, touch turned off), or the next Escape or Back would be
   // spent letting go of a message no longer there.
   useEffect(() => { if (selectedId && !selMsg) setSelectedId(null) }, [selectedId, selMsg])
-  const shownMessages = inSearch.trim()
-    ? messages.filter((m) => !m.deleted && m.kind !== 'system' && `${m.body || ''} ${m.transcript || ''} ${m.file?.name || ''}`.toLowerCase().includes(inSearch.trim().toLowerCase()))
-    : messages
+  // Searching no longer filters the thread: matches are highlighted in place and
+  // stepped through (searchHits), so each one is read with what was said around it.
+  const shownMessages = messages
   // Interleave date separators (Today / Yesterday / date) + an "unread" divider,
   // which says how many, as WhatsApp's does.
   const isUnreadForMe = (m: Msg) => !!threadLastRead && m.created_at > threadLastRead && m.sender_id !== user?.id && m.kind !== 'system'
@@ -2803,7 +2831,18 @@ export default function Chats() {
 
           {inSearchOpen && (
             <div className="in-search">
-              <input autoFocus placeholder="Search messages…" value={inSearch} onChange={(e) => setInSearch(e.target.value)} />
+              <input autoFocus placeholder="Search messages…" value={inSearch} onChange={(e) => setInSearch(e.target.value)}
+                enterKeyHint="search"
+                // Enter steps to the next older match, Shift+Enter back — the
+                // keyboard's search key on a phone does the same.
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); stepHit(!e.shiftKey) } }} />
+              {searchHits && (
+                <span className="in-search-count" aria-live="polite">
+                  {searchHits.length ? `${hitAt + 1} of ${searchHits.length}${searchHits.length >= 300 ? '+' : ''}` : 'No results'}
+                </span>
+              )}
+              <button className="ic-btn" aria-label="Older match" title="Older match" disabled={!searchHits?.length} onClick={() => stepHit(true)}><Ic name="chevronUp" size={16} /></button>
+              <button className="ic-btn" aria-label="Newer match" title="Newer match" disabled={!searchHits?.length} onClick={() => stepHit(false)}><Ic name="chevronDown" size={16} /></button>
               <button className="btn btn-ghost btn-sm" aria-label="Close search" onClick={() => { setInSearch(''); setInSearchOpen(false) }}>✕</button>
             </div>
           )}
@@ -2832,13 +2871,13 @@ export default function Chats() {
                 />
               </div>
             )}
-            {active && hasMore && !inSearch.trim() && (
+            {active && hasMore && (
               <div className="older-row">
                 {loadingOlder ? <span className="spinner" /> : <button className="btn btn-ghost btn-sm" onClick={loadOlder}>Load earlier messages</button>}
               </div>
             )}
             {active && threadLoading && messages.length === 0 && <div style={{ margin: 'auto' }}><span className="spinner" /></div>}
-            {active && !threadLoading && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}>{inSearch ? 'No matching messages' : <>No messages yet.<br />Say hello</>}</div>}
+            {active && !threadLoading && shownMessages.length === 0 && <div className="empty" style={{ margin: 'auto', textAlign: 'center' }}><>No messages yet.<br />Say hello</></div>}
             {logItems.map((it, idx) => {
               if ('sep' in it) return <div key={'sep' + idx} className="date-sep"><span>{it.sep}</span></div>
               if ('unread' in it) return <div key={'unread' + idx} className="unread-sep"><span>{it.unread} unread message{it.unread === 1 ? '' : 's'}</span></div>

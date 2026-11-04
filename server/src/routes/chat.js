@@ -2426,6 +2426,22 @@ r.get('/search', (req, res) => {
   const me = req.user
   const q = String(req.query.q || '').trim()
   if (q.length < 2) return res.json({ items: [] })
+  // Search inside one chat (the thread's own search bar): just the matching
+  // lines' ids, newest first, which the thread steps through in place as
+  // WhatsApp does — over the whole history, not only the page on screen. The
+  // scan is bounded to this chat's rows by idx_chat_convo.
+  if (req.query.conversationId) {
+    const cid = String(req.query.conversationId)
+    if (!member(cid, me.id)) return res.status(404).json({ error: 'Conversation not found' })
+    const ids = db.prepare(`
+      SELECT id FROM chat_messages
+      WHERE conversation_id=? AND deleted_for_all=0
+        AND (body LIKE ? OR file_name LIKE ? OR transcript LIKE ?)
+        AND COALESCE(kind,'')<>'system'
+        AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+      ORDER BY created_at DESC LIMIT 300`).all(cid, `%${q}%`, `%${q}%`, `%${q}%`, me.id).map((r) => r.id)
+    return res.json({ ids })
+  }
   const rows = db.prepare(`
     SELECT m.* FROM chat_messages m
     JOIN chat_participants p ON p.conversation_id=m.conversation_id AND p.user_id=?
