@@ -36,11 +36,22 @@ async function receive(s: NativeShare) {
       files.push(new File([blob], f.name, { type: f.type || blob.type }))
     } catch { skipped++ }
   }
-  // A link shared from a browser or YouTube often comes with its page title
-  // as the subject; it leads, unless the text already says it.
   const text = (s.text || '').trim()
   const subject = (s.subject || '').trim()
-  const body = subject && !text.includes(subject) ? (text ? `${subject}\n${text}` : subject) : text
+  let body: string
+  if (files.length) {
+    // Files come with words the sending app wrote for its own share sheet:
+    // WhatsApp's "Document from Sai" and the file's name again. Other apps
+    // drop those and send just the file; only a real caption is kept.
+    const names = new Set(files.flatMap((f) => [f.name, f.name.replace(/\.[^.]+$/, '')].map((n) => n.trim().toLowerCase())))
+    body = text.split(/\r?\n/).map((l) => l.trim())
+      .filter((l) => l && !names.has(l.toLowerCase()) && !/^(documents?|photos?|images?|videos?|audios?|files?|pdfs?|stickers?|gifs?) from \S/i.test(l))
+      .join('\n')
+  } else {
+    // A link shared from a browser or YouTube often comes with its page title
+    // as the subject; it leads, unless the text already says it.
+    body = subject && !text.includes(subject) ? (text ? `${subject}\n${text}` : subject) : text
+  }
   if (!files.length && !body && !skipped) return
   pending = { files, text: body, skipped }
   subs.forEach((cb) => cb())
