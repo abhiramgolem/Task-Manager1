@@ -19,6 +19,11 @@ const shortDate = (iso?: string | null) => {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
+// A link in a task's title, shortened for a card: no scheme, no www, and a
+// long path cut to its start, as Cliq shows one. The full link is in the task.
+const shortLinks = (text: string) =>
+  text.replace(/\bhttps?:\/\/(?:www\.)?([^\s]+)/gi, (_, rest: string) => (rest.length > 32 ? rest.slice(0, 30) + '…' : rest))
+
 // ---------- a task assigned from the chat ----------
 // Read live from the task (server taskCard), so the card says In Progress or
 // Done once the work moves — the chat stays a true picture of who owes what.
@@ -36,7 +41,7 @@ export function TaskCard({ task, meId, onOpen }: { task: TaskRef; meId: string; 
         <span className="task-card-kind">{forMe ? 'Task for you' : 'Task assigned'}</span>
         <span className="task-card-status" style={{ color: STATUS_COLORS[task.status || 'To Do'], borderColor: 'currentColor' }}>{task.status || 'To Do'}</span>
       </span>
-      <span className="task-card-title">{task.title}</span>
+      <span className="task-card-title">{shortLinks(task.title || '')}</span>
       <span className="task-card-meta">
         {task.assignee_id ? (
           <span className="task-card-who">

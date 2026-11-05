@@ -210,6 +210,12 @@ final class CallRinger {
         }, "votask-decline").start();
     }
 
+    /** The API base the web app last handed over (configure), or "". */
+    static String apiBase(Context ctx) {
+        String b = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("api_base", "");
+        return b == null ? "" : b.replaceAll("/+$", "");
+    }
+
     static void saveApiBase(Context ctx, String base) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("api_base", base == null ? "" : base).apply();
     }

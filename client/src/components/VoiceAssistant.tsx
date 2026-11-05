@@ -1,28 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useVoiceAssistant } from '../voice/useVoiceAssistant'
 import { useWakeWord, wakeWordConfigured, wakeWordPhrase, WakeStatus } from '../voice/wakeword'
-import { useDraggable } from '../lib/useDraggable'
 import VoiceCard from './VoiceCard'
 import VoiceOrb from './VoiceOrb'
 
-// Where the draggable "Ask BTM" card remembers its spot (per device).
-const FAB_POS_KEY = 'befach_voice_fab_pos'
-// The card is only shown — and so only draggable — on desktop/tablet; phones use
-// the "Talk to AI" row at the top of the More drawer instead (see the
-// `.va-fab-pill { display: none }` rule).
-const CARD_MQ = '(min-width: 721px)'
+// Desktop/tablet widths: the sidebar is always on screen there. Phones keep it
+// behind More. Both open the assistant from the sidebar's "Talk to AI" row
+// (App.tsx); there is no floating card any more.
+const WIDE_MQ = '(min-width: 721px)'
 
 const MicIcon = ({ size = 24 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1" /><line x1="12" y1="19" x2="12" y2="22" />
-  </svg>
-)
-// Small AI sparkle — a static accent so the control reads as an intelligent voice
-// assistant, not a plain button. Filled, so it registers at small sizes.
-const SparkleIcon = ({ size = 13 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M12 2l1.9 5.6L19.5 9.5 13.9 11.4 12 17l-1.9-5.6L4.5 9.5l5.6-1.9z" />
-    <path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9z" />
   </svg>
 )
 const SpeakerIcon = ({ size = 20 }: { size?: number }) => (
@@ -136,15 +125,6 @@ const FEATURES: Record<string, Feature[]> = {
     { icon: <BoltIcon />, title: 'Action Oriented', sub: 'Turning words into real results' },
   ],
 }
-// Six-dot grip — the standard "you can move this" affordance. Decorative only:
-// the whole card is the drag handle, this just advertises it on hover.
-const GripIcon = () => (
-  <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">
-    <circle cx="2.5" cy="3" r="1.35" /><circle cx="7.5" cy="3" r="1.35" />
-    <circle cx="2.5" cy="8" r="1.35" /><circle cx="7.5" cy="8" r="1.35" />
-    <circle cx="2.5" cy="13" r="1.35" /><circle cx="7.5" cy="13" r="1.35" />
-  </svg>
-)
 
 export default function VoiceAssistant() {
   const v = useVoiceAssistant()
@@ -158,16 +138,14 @@ export default function VoiceAssistant() {
   // the assistant, or automatically after a while.
   const [coach, setCoach] = useState(false)
 
-  // The "Ask BTM" card is a free-floating dock the user can park anywhere on the
-  // page — dragging is gated to the widths where the card is actually rendered.
-  const [canDrag, setCanDrag] = useState(() => window.matchMedia(CARD_MQ).matches)
+  // Where the coachmark points: at the sidebar row (wide) or at More (phone).
+  const [wide, setWide] = useState(() => window.matchMedia(WIDE_MQ).matches)
   useEffect(() => {
-    const mq = window.matchMedia(CARD_MQ)
-    const sync = () => setCanDrag(mq.matches)
+    const mq = window.matchMedia(WIDE_MQ)
+    const sync = () => setWide(mq.matches)
     mq.addEventListener('change', sync)
     return () => mq.removeEventListener('change', sync)
   }, [])
-  const dock = useDraggable({ storageKey: FAB_POS_KEY, enabled: canDrag })
 
   // Wake word ("hey VoTask") — starts a session when heard. No-op until configured;
   // paused while a session is already open so it doesn't retrigger mid-conversation.
@@ -209,17 +187,6 @@ export default function VoiceAssistant() {
   }, [v])
 
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, [v.messages, v.state])
-
-  // The coachmark hangs off the card, so it has to flip sides once the card is
-  // parked near an edge — otherwise it would point off-screen. Approximate sizes
-  // cover the first paint, before the dock has been measured.
-  const dockAnchor = (() => {
-    if (!dock.pos) return ''  // default corner: coachmark above the card, right-aligned
-    const w = dock.ref.current?.offsetWidth || 232
-    const h = dock.ref.current?.offsetHeight || 62
-    return (dock.pos.x + w / 2 < window.innerWidth / 2 ? ' va-dock--left' : '')
-      + (dock.pos.y + h / 2 < window.innerHeight / 2 ? ' va-dock--top' : '')
-  })()
 
   // The step the agent is on right now, if any. Drives the minimized bar's caption.
   const running = v.trace.find((s) => s.status === 'running')
@@ -417,52 +384,23 @@ export default function VoiceAssistant() {
       )}
     </div>
 
-    {/* The floating "Ask BTM" card — a dock the user can drag anywhere on screen
-        (position remembered per device). It carries the coachmark with it, so the
-        tip always points at wherever the card currently sits. */}
-    <div
-      ref={dock.ref}
-      className={'va-dock' + dockAnchor + (dock.dragging ? ' va-dock--dragging' : '')}
-      style={dock.style}
-    >
-      {/* One-time first-visit coachmark, sitting just above the pill and pointing
-          at it, so people discover voice — the product's main feature. */}
+    {/* Holds the one-time coachmark. The assistant itself opens from the
+        sidebar's "Talk to AI" row: on a wide screen the tip sits beside it, on
+        a phone above the tab bar, pointing at More. */}
+    <div className={'va-dock' + (wide ? ' va-dock--side' : '')}>
+      {/* One-time first-visit coachmark, so people discover voice — the
+          product's main feature. */}
       {!v.open && coach && (
         <div className="va-coach" role="dialog" aria-label="Voice assistant tip">
           <button className="va-coach-x" onClick={dismissCoach} aria-label="Dismiss">✕</button>
           <span className="va-coach-badge">NEW</span>
           <div className="va-coach-title">Control the app with your voice</div>
-          {/* canDrag is the desktop/tablet query: there the mic is the card below
-              the tip; phones have no mic on screen, only the drawer row behind More. */}
-          <div className="va-coach-sub">Create tasks, check workload, open meetings — just talk. {canDrag ? 'Tap the mic below' : <>Tap <b>More</b>, then <b>Talk to AI</b></>}{wakeWordConfigured() && <>, or say <b>“{wakeWordPhrase()}”</b></>}.</div>
+          <div className="va-coach-sub">Create tasks, check workload, open meetings — just talk. {wide ? <>Tap <b>Talk to AI</b> in the menu</> : <>Tap <b>More</b>, then <b>Talk to AI</b></>}{wakeWordConfigured() && <>, or say <b>“{wakeWordPhrase()}”</b></>}.</div>
           <div className="va-coach-actions">
             <button className="btn btn-primary btn-sm" onClick={() => { dismissCoach(); v.start() }}>Try it</button>
             <button className="va-coach-later" onClick={dismissCoach}>Got it</button>
           </div>
         </div>
-      )}
-
-      {/* The signature control — voice is the product's core feature, so it's a
-          LABELLED pill (not an anonymous icon) with a gentle live pulse, so users
-          notice it and know what it does. Hidden while the panel is open (the panel
-          has its own footer mic + header ✕), so there's never a second mic. */}
-      {!v.open && (
-        <button
-          className="va-fab-pill"
-          // A press that travels more than a few px is a drag, not a tap — the hook
-          // reports that so the trailing click doesn't also open the assistant.
-          onClick={() => { if (dock.consumeClick()) return; v.start() }}
-          title={canDrag ? 'Control the app with your voice · drag to move it anywhere' : 'Control the app with your voice'}
-          aria-label={canDrag ? 'Open voice assistant. Drag, or use the arrow keys, to move this card.' : 'Open voice assistant'}
-          {...dock.handleProps}
-        >
-          <span className="va-fab-ic"><MicIcon size={24} /><span className="va-fab-spark"><SparkleIcon size={12} /></span></span>
-          <span className="va-fab-label">
-            <span className="va-fab-title">Ask BTM</span>
-            <span className="va-fab-sub">AI voice assistant</span>
-          </span>
-          {canDrag && <span className="va-fab-grip"><GripIcon /></span>}
-        </button>
       )}
     </div>
     </>

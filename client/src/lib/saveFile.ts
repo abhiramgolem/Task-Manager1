@@ -10,6 +10,7 @@ import { toast } from './toast'
 interface FileDownloadPlugin {
   save(o: { url?: string; data?: string; name: string; mime?: string; open?: boolean; id?: string }): Promise<{ uri: string; opened: boolean; mime: string }>
   open(o: { uri: string; mime?: string }): Promise<{ opened: boolean; missing?: boolean }>
+  share(o: { url?: string; name?: string; mime?: string; text?: string; title?: string }): Promise<{ shared: boolean }>
 }
 const FileDownload = registerPlugin<FileDownloadPlugin>('FileDownload')
 
@@ -93,4 +94,40 @@ export function onDownloadLink(url: string, name: string, key?: string) {
     e.preventDefault(); e.stopPropagation()
     saveFile({ url, name, key })
   }
+}
+
+/**
+ * Share to another app, as WhatsApp's Share does: a file goes as the file
+ * itself (with its caption), words as words. In the phone app this is
+ * Android's share sheet (FileDownloadPlugin.share), since the WebView has no
+ * navigator.share and Share used to fall back to copying a link. On the
+ * website it is the browser's own share where it has one, a copied link or
+ * text where it does not.
+ */
+export async function shareOut(o: { url?: string; name?: string; mime?: string; text?: string }) {
+  const text = (o.text || '').trim()
+  if (nativeFiles()) {
+    if (o.url) toast.info(`Preparing ${o.name || 'the file'}…`, 2500)
+    try {
+      await FileDownload.share({ url: o.url ? new URL(o.url, location.href).href : undefined, name: o.name, mime: o.mime, text: text || undefined })
+    } catch (e: any) {
+      toast.error(`Couldn't share${e?.message ? `: ${e.message}` : ''}`)
+    }
+    return
+  }
+  const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean }
+  if (o.url && nav.share && nav.canShare) {
+    try {
+      const blob = await (await fetch(o.url)).blob()
+      const file = new File([blob], o.name || 'file', { type: o.mime || blob.type })
+      const data: ShareData = { files: [file], ...(text ? { text } : {}) }
+      if (nav.canShare(data)) { await nav.share(data); return }
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return // the person closed the sheet
+    }
+  }
+  const words = o.url ? new URL(o.url, location.href).href : text
+  if (!words) return
+  if (nav.share) { try { await nav.share(o.url ? { title: o.name, url: words } : { text: words }) } catch {} return }
+  try { await navigator.clipboard.writeText(words); toast.success(o.url ? 'Link copied to clipboard' : 'Copied') } catch {}
 }

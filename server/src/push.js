@@ -132,6 +132,8 @@ async function sendToDevices(rows, { title, body, data, tag, rich }) {
   const richData = rich && {
     ...stringData, rich: '1', chat: String(rich.chat || ''), sender: String(rich.sender || ''),
     text: String(rich.text || ''), group: rich.group ? '1' : '0',
+    // The notification's Reply / Mark as read / Mute buttons (chat.js notifActionFor).
+    ...(rich.act ? { act_uid: rich.act.uid, act_exp: rich.act.exp, act_sig: rich.act.sig, act_url: rich.act.url } : {}),
   }
   await Promise.all(rows.map(async ({ token: tok, chime, app_build: build }) => {
     try {
