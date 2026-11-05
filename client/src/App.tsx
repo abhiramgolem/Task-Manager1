@@ -196,11 +196,10 @@ function Layout({ children }: { children: React.ReactNode }) {
             <div className="brand-sub">Execution Platform</div>
           </div>
         </div>
-        {/* Phones only: the voice assistant's way in, since the tab bar's centre
-            went to a page. First in the drawer, above the pages, because it is
-            the one thing in here that isn't a place you go — and it keeps the
-            neon orb so it still reads as the thing that listens. Desktop has the
-            floating Ask BTM card instead. */}
+        {/* The voice assistant's way in, on every screen size. First, above the
+            pages, because it is the one thing in here that isn't a place you
+            go — and it keeps the neon orb so it still reads as the thing that
+            listens. Desktop used to have a floating Ask BTM card instead. */}
         <button className="sidebar-ai-m" onClick={openVoice} aria-label="Open voice assistant">
           <span className="sidebar-ai-orb" aria-hidden="true">
             <span className="sidebar-ai-glow" />

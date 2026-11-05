@@ -559,6 +559,55 @@ r.post('/call/:id/decline-push', (req, res) => {
   res.json({ ok: true })
 })
 
+// Reply / Mark as read / Mute 1 hour, the buttons under a chat's notification
+// on a phone (ChatNotifier.java), as Cliq and WhatsApp have them. Like the
+// ring's Decline, native code holds no session, only what its push carried:
+// a signature for this one chat, as this one person, until it runs out
+// (notifActionFor). A phone that has since signed out keeps no device token,
+// and its old notifications stop working with it.
+const NOTIF_ACTION_DAYS = 3
+function notifActionFor(convId, uid) {
+  const exp = Date.now() + NOTIF_ACTION_DAYS * 86400000
+  const base = (process.env.PUBLIC_API_URL || '').replace(/\/+$/, '')
+  return {
+    uid, exp: String(exp), sig: signScoped(`chatnotif:${convId}:${uid}:${exp}`),
+    url: base ? `${base}/api/chat/conversations/${convId}/notif-action` : '',
+  }
+}
+
+r.post('/conversations/:id/notif-action', (req, res) => {
+  const convId = req.params.id
+  const uid = String(req.body?.uid || '')
+  const exp = Number(req.body?.exp) || 0
+  if (!uid || exp < Date.now() || !verifyScoped(`chatnotif:${convId}:${uid}:${exp}`, req.body?.sig)) return res.status(403).json({ error: 'Forbidden' })
+  const me = db.prepare('SELECT * FROM users WHERE id=?').get(uid)
+  const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(convId)
+  if (!me || !conv || conv.org_id !== me.org_id || !member(convId, uid)) return res.status(404).json({ error: 'Not found' })
+  if (!db.prepare('SELECT 1 FROM device_tokens WHERE user_id=? LIMIT 1').get(uid)) return res.status(403).json({ error: 'Signed out' })
+  const action = String(req.body?.action || '')
+  if (action === 'read') {
+    readConversation(convId, uid)
+  } else if (action === 'mute') {
+    const until = new Date(Date.now() + 60 * 60000).toISOString()
+    db.prepare('UPDATE chat_participants SET muted=1, muted_until=? WHERE conversation_id=? AND user_id=?').run(until, convId, uid)
+    pushToUser(uid, { type: 'conversation', action: 'updated', conversationId: convId }) // their open tabs
+  } else if (action === 'reply') {
+    const body = String(req.body?.text || '').trim()
+    if (!body) return res.status(400).json({ error: 'Message body required' })
+    if (body.length > 4000) return res.status(400).json({ error: 'Message too long' })
+    if (!canPost(conv, uid)) return res.status(403).json({ error: ADMINS_ONLY })
+    // Answering from the tray means the chat was read, as in WhatsApp.
+    readConversation(convId, uid)
+    const mid = id('msg')
+    db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, reply_to, kind, meta, read, created_at) VALUES (?,?,?,?,?,?,NULL,NULL,NULL,0,?)')
+      .run(mid, conv.org_id, conv.id, uid, '', body, now())
+    deliver(conv, db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid), me, [])
+  } else {
+    return res.status(400).json({ error: 'Unknown action' })
+  }
+  res.json({ ok: true })
+})
+
 r.use(authRequired)
 
 // ---------- users available to chat / add to groups ----------
@@ -765,12 +814,16 @@ r.post('/conversations/:id/avatar', smallUpload.single('file'), (req, res) => {
 // by "Mark as read" on the chat list).
 r.post('/conversations/:id/read', (req, res) => {
   if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Not found' })
-  const ts = now()
-  const moved = markRead(req.params.id, req.user.id, ts)
-  pushToConversation(req.params.id, { type: 'read', conversationId: req.params.id, userId: req.user.id, last_read_at: ts }, req.user.id)
-  if (moved) pushReceipts(req.params.id)
+  readConversation(req.params.id, req.user.id)
   res.json({ ok: true })
 })
+
+function readConversation(convId, userId) {
+  const ts = now()
+  const moved = markRead(convId, userId, ts)
+  pushToConversation(convId, { type: 'read', conversationId: convId, userId, last_read_at: ts }, userId)
+  if (moved) pushReceipts(convId)
+}
 
 // A group event line ("Priya added Ravi"), sent straight to everyone like the
 // call ledger line — never through deliver(): an admin tidying the member list
@@ -956,7 +1009,7 @@ function deliver(conv, msgRow, sender, mentioned = []) {
   const pushFor = (uid, lastReadAt, line) => {
     const n = unreadOf.get(conv.id, uid, lastReadAt || '', uid).c
     const count = n > 1 ? ` · ${n >= UNREAD_CAP ? `${UNREAD_CAP}+` : n} new messages` : ''
-    return { title: chatTitle + count, body: line, tag, rich }
+    return { title: chatTitle + count, body: line, tag, rich: { ...rich, act: notifActionFor(conv.id, uid) } }
   }
   const groupLine = conv.type === 'group' ? `${sender.name}: ${short}` : short
   for (const uid of others) {

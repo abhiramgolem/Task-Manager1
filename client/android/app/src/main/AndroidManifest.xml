@@ -48,6 +48,8 @@
             android:exported="false" />
 
         <receiver android:name=".CallActionReceiver" android:exported="false" />
+        <!-- Reply / Mark as read / Mute 1 hour under a chat's notification. -->
+        <receiver android:name=".ChatActionReceiver" android:exported="false" />
 
         <!-- Our subclass replaces Capacitor's FCM service: Android gives the
              MESSAGING_EVENT to one service only, and calls must be handled

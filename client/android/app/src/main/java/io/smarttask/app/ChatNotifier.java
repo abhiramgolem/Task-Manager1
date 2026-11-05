@@ -15,6 +15,9 @@ import android.service.notification.StatusBarNotification;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.app.Person;
+import androidx.core.app.RemoteInput;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -44,6 +47,12 @@ final class ChatNotifier {
     }
 
     static synchronized void show(Context ctx, Map<String, String> d) {
+        show(ctx, d, false);
+    }
+
+    // `local`: a line the phone adds itself ("reply not sent"), not a new
+    // message, so it neither counts nor rings again.
+    private static void show(Context ctx, Map<String, String> d, boolean local) {
         String cid = d.get("conversationId");
         String tag = "chat_" + cid;
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -54,7 +63,9 @@ final class ChatNotifier {
         // is gone (opened, swiped away, the chat read) the next starts afresh.
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         JSONArray lines = new JSONArray();
-        if (isShowing(nm, tag)) {
+        boolean showing = isShowing(nm, tag);
+        if (!local) sp.edit().putString(cid + ":last", new JSONObject(d).toString()).apply();
+        if (showing) {
             try { lines = new JSONArray(sp.getString(cid, "[]")); } catch (Exception ignored) {}
         }
         long now = System.currentTimeMillis();
@@ -68,7 +79,7 @@ final class ChatNotifier {
         for (int i = Math.max(0, lines.length() - KEEP); i < lines.length(); i++) kept.put(lines.opt(i));
         sp.edit().putString(cid, kept.toString()).apply();
         int total = sp.getInt(cid + ":n", 0);
-        total = isShowing(nm, tag) ? total + 1 : 1;
+        total = local ? Math.max(1, total) : showing ? total + 1 : 1;
         sp.edit().putInt(cid + ":n", total).apply();
 
         boolean group = "1".equals(d.get("group"));
@@ -98,7 +109,7 @@ final class ChatNotifier {
         PendingIntent tap = PendingIntent.getActivity(ctx, cid.hashCode(), open,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Notification n = new NotificationCompat.Builder(ctx, CHANNEL_ID)
+        NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_chat)
             .setColor(0xFFEA580C)
             .setStyle(style)
@@ -110,13 +121,84 @@ final class ChatNotifier {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
-            .setContentIntent(tap)
-            .build();
+            .setOnlyAlertOnce(local)
+            .setContentIntent(tap);
+        addActions(ctx, b, d, cid);
+        Notification n = b.build();
         try {
             NotificationManagerCompat.from(ctx).notify(tag, NOTIFICATION_ID, n);
         } catch (SecurityException ignored) {
             // Notifications switched off for the app (Android 13+ permission).
         }
+    }
+
+    // Reply, Mark as read, Mute 1 hour: Cliq's three buttons. Only when the
+    // push carried the signature the server checks them by (chat.js
+    // notifActionFor) — a push from an older server has none.
+    private static void addActions(Context ctx, NotificationCompat.Builder b, Map<String, String> d, String cid) {
+        String sig = d.get("act_sig");
+        if (sig == null || sig.isEmpty()) return;
+        int code = cid.hashCode();
+        Intent base = new Intent(ctx, ChatActionReceiver.class)
+            .putExtra(ChatActionReceiver.EXTRA_CONV, cid)
+            .putExtra("uid", nz(d.get("act_uid"), ""))
+            .putExtra("exp", nz(d.get("act_exp"), ""))
+            .putExtra("sig", sig)
+            .putExtra("url", nz(d.get("act_url"), ""));
+
+        // A reply's PendingIntent must be mutable: Android writes the typed
+        // text into it.
+        int mutable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0;
+        PendingIntent replyPi = PendingIntent.getBroadcast(ctx, code * 4 + 1,
+            new Intent(base).setAction(ChatActionReceiver.ACTION_REPLY),
+            PendingIntent.FLAG_UPDATE_CURRENT | mutable);
+        RemoteInput input = new RemoteInput.Builder(ChatActionReceiver.KEY_TEXT).setLabel("Message").build();
+        b.addAction(new NotificationCompat.Action.Builder(R.drawable.ic_stat_chat, "Reply", replyPi)
+            .addRemoteInput(input)
+            .setAllowGeneratedReplies(true)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .setShowsUserInterface(false)
+            .build());
+
+        PendingIntent readPi = PendingIntent.getBroadcast(ctx, code * 4 + 2,
+            new Intent(base).setAction(ChatActionReceiver.ACTION_READ),
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        b.addAction(new NotificationCompat.Action.Builder(R.drawable.ic_stat_chat, "Mark as read", readPi)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
+            .setShowsUserInterface(false)
+            .build());
+
+        PendingIntent mutePi = PendingIntent.getBroadcast(ctx, code * 4 + 3,
+            new Intent(base).setAction(ChatActionReceiver.ACTION_MUTE),
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        b.addAction(new NotificationCompat.Action.Builder(R.drawable.ic_stat_chat, "Mute 1 hour", mutePi)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MUTE)
+            .setShowsUserInterface(false)
+            .build());
+    }
+
+    /** Take this chat's notification down and forget its lines. */
+    static synchronized void clear(Context ctx, String cid) {
+        if (cid == null) return;
+        NotificationManagerCompat.from(ctx).cancel("chat_" + cid, NOTIFICATION_ID);
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .remove(cid).remove(cid + ":n").remove(cid + ":last").apply();
+    }
+
+    /** A reply that did not reach the server: say so under the chat, quietly. */
+    static synchronized void replyFailed(Context ctx, String cid) {
+        Map<String, String> d = new HashMap<>();
+        try {
+            JSONObject last = new JSONObject(ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(cid + ":last", "{}"));
+            for (Iterator<String> it = last.keys(); it.hasNext(); ) {
+                String k = it.next();
+                d.put(k, last.optString(k, ""));
+            }
+        } catch (Exception ignored) {}
+        if (d.get("conversationId") == null) return;
+        d.put("sender", "VoTask");
+        d.put("text", "Reply not sent. Tap to open the chat.");
+        show(ctx, d, true);
     }
 
     private static boolean isShowing(NotificationManager nm, String tag) {

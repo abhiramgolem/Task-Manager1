@@ -24,6 +24,7 @@ import { typeInto, flashPress, pause, settle, findVaEl } from '../voice/uiContro
 import TaskDrawer from '../components/TaskDrawer'
 import type { Member, Conversation, MentionRef, ChatFile, Msg, OrgUser, LocationRef, Poll } from '../components/chat/types'
 import { fileUrl, isAudio, isEditable, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
+import ChatVideo from '../components/chat/ChatVideo'
 import {
   CopyGlyph, Ticks, PollGlyph, PinDropGlyph, ContactGlyph, CameraGlyph, GalleryGlyph, DocGlyph, TaskGlyph,
   ArchiveGlyph, InfoGlyph, SelectGlyph, ExportGlyph, PencilGlyph, ChevronDown, DotsV, SparkGlyph,
@@ -3246,7 +3247,7 @@ export default function Chats() {
                               </div>
                             : isVideo(m.file) && !m.uploading
                               ? <div className="chat-media">
-                                  <video className="chat-video" src={fileUrl(m)} controls preload="metadata" playsInline />
+                                  <ChatVideo id={m.id} src={fileUrl(m)} size={m.file.size} sizeLabel={fmtSize(m.file.size)} name={m.body || m.file.name} onOpen={() => setViewerAt(m.id)} />
                                   {mediaDl(m)}
                                 </div>
                               : <div className="chat-file">
