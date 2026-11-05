@@ -3568,6 +3568,10 @@ export default function Chats() {
                           aria-label={editing ? 'Save the edit' : staged.length ? `Send ${staged.length} file${staged.length === 1 ? '' : 's'}` : 'Send'}
                           disabled={busy || (!input.trim() && !staged.length)}
                           onClick={() => { if (heldRef.current) { heldRef.current = false; return } send() }}
+                          // Never take focus from the text box: a tap that
+                          // focused this button blurred it, and the phone put its
+                          // keyboard away after every message. WhatsApp keeps it up.
+                          onMouseDown={(e) => e.preventDefault()}
                           onPointerDown={() => {
                             heldRef.current = false
                             if (editing || stagedRef.current.length) return
