@@ -1,6 +1,8 @@
 package io.smarttask.app;
 
+import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -99,6 +101,100 @@ public class FileDownloadPlugin extends Plugin {
             return;
         }
         call.resolve(new JSObject().put("opened", openUri(u, call.getString("mime", guessMime(u.getLastPathSegment())))));
+    }
+
+    /**
+     * { url?, name?, mime?, text? } → { shared }: Android's share sheet, so a
+     * chat's photo, video, document or words go to WhatsApp, Gmail or any
+     * other app as the thing itself, not as a link to it. A file is fetched
+     * into the app's cache first (FileProvider's cache-path), under its own
+     * name so the other app shows it; copies older than a day are cleared.
+     */
+    @PluginMethod
+    public void share(PluginCall call) {
+        String url = call.getString("url");
+        String text = call.getString("text");
+        String title = call.getString("title", "Share");
+        Activity act = getActivity();
+        if (act == null) { call.reject("No screen to share from"); return; }
+        if (url == null || url.isEmpty()) {
+            if (text == null || text.isEmpty()) { call.reject("Nothing to share"); return; }
+            Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+            act.runOnUiThread(() -> {
+                try {
+                    act.startActivity(Intent.createChooser(send, title));
+                    call.resolve(new JSObject().put("shared", true));
+                } catch (Exception e) {
+                    call.reject("No app to share with");
+                }
+            });
+            return;
+        }
+        if (!(url.startsWith("https://") || url.startsWith("http://"))) { call.reject("Not a web address"); return; }
+        String name = safeName(call.getString("name", "file"));
+        String mimeIn = call.getString("mime");
+        io.execute(() -> {
+            HttpURLConnection conn = null;
+            try {
+                File root = new File(getContext().getCacheDir(), "shared");
+                clearOld(root);
+                File dir = new File(root, String.valueOf(System.currentTimeMillis()));
+                if (!dir.mkdirs() && !dir.isDirectory()) throw new IllegalStateException("No room to prepare the file");
+                File f = new File(dir, name);
+                conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setConnectTimeout(20000);
+                conn.setReadTimeout(60000);
+                conn.setInstanceFollowRedirects(true);
+                int code = conn.getResponseCode();
+                if (code < 200 || code >= 300) throw new IllegalStateException("The server answered " + code);
+                String mime = mimeIn;
+                if (mime == null || mime.isEmpty() || mime.startsWith("application/octet-stream")) {
+                    String ct = conn.getContentType();
+                    if (ct != null && !ct.startsWith("application/octet-stream")) mime = ct.split(";")[0].trim();
+                }
+                if (mime == null || mime.isEmpty() || mime.startsWith("application/octet-stream")) mime = guessMime(name);
+                try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(f)) {
+                    byte[] buf = new byte[64 * 1024];
+                    int r;
+                    while ((r = in.read(buf)) != -1) out.write(buf, 0, r);
+                }
+                Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", f);
+                Intent send = new Intent(Intent.ACTION_SEND)
+                    .setType(mime)
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                // The grant reaches the app picked in the sheet only through ClipData.
+                send.setClipData(ClipData.newRawUri(name, uri));
+                if (text != null && !text.isEmpty()) send.putExtra(Intent.EXTRA_TEXT, text);
+                Intent chooser = Intent.createChooser(send, title).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                act.runOnUiThread(() -> {
+                    try {
+                        act.startActivity(chooser);
+                        call.resolve(new JSObject().put("shared", true));
+                    } catch (Exception e) {
+                        call.reject("No app to share with");
+                    }
+                });
+            } catch (Exception e) {
+                call.reject(e.getMessage() == null ? "Could not share" : e.getMessage(), e);
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        });
+    }
+
+    private static void clearOld(File root) {
+        File[] dirs = root.listFiles();
+        if (dirs == null) return;
+        long cutoff = System.currentTimeMillis() - 24L * 3600 * 1000;
+        for (File d : dirs) {
+            if (d.lastModified() >= cutoff) continue;
+            File[] files = d.listFiles();
+            if (files != null) for (File f : files) //noinspection ResultOfMethodCallIgnored
+                f.delete();
+            //noinspection ResultOfMethodCallIgnored
+            d.delete();
+        }
     }
 
     private Uri write(Context ctx, String name, String mime, InputStream in, long total, String id) throws Exception {

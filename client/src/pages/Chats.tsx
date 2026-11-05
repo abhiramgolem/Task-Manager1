@@ -6,7 +6,7 @@ import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
 import { clearChatNotifications } from '../push'
 import { takeShare, onShare, type Shared } from '../lib/shareTarget'
-import { saveFile } from '../lib/saveFile'
+import { saveFile, shareOut } from '../lib/saveFile'
 import { toast } from '../lib/toast'
 import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
@@ -2084,12 +2084,10 @@ export default function Chats() {
     // that the tap did anything.
     try { await navigator.clipboard.writeText(text); toast.success('Copied') } catch { window.prompt('Copy:', text) }
   }
-  const share = async (m: Msg) => {
+  // To another app: the file itself with its caption, or the words (lib/saveFile).
+  const share = (m: Msg) => {
     setMenuId(null)
-    const url = m.file ? `${location.origin}${fileUrl(m)}` : undefined
-    const shareData: any = m.file ? { title: m.file.name, url } : { text: m.body }
-    if (navigator.share) { try { await navigator.share(shareData) } catch {} }
-    else { try { await navigator.clipboard.writeText(url || m.body); toast.success('Link copied to clipboard') } catch {} }
+    shareOut(m.file ? { url: fileUrl(m), name: m.file.name, mime: m.file.type, text: m.body } : { text: m.body })
   }
   // In the phone app: downloaded by the app and opened, as WhatsApp does (lib/saveFile).
   const download = (m: Msg) => {
@@ -3531,7 +3529,10 @@ export default function Chats() {
                         stageFiles(files)
                       }}
                       onBlur={() => { sendTyping(false); setTimeout(() => setMentionQ(null), 120) }}
-                      autoFocus
+                      // Ready to type with a mouse and keyboard. On a phone,
+                      // focus would throw the keyboard up over a chat you have
+                      // only opened to read; WhatsApp waits for a tap on the box.
+                      autoFocus={!touchUI}
                     />
                     {/* Turn what you're typing into a task without sending it first —
                         the common case is realising mid-sentence that this is work. */}

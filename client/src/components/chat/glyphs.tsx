@@ -19,6 +19,7 @@ export const ArchiveGlyph = ({ size }: G) => <Svg size={size}><rect x="3" y="4" 
 export const InfoGlyph = ({ size }: G) => <Svg size={size}><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></Svg>
 export const SelectGlyph = ({ size }: G) => <Svg size={size}><circle cx="12" cy="12" r="9" /><path d="m8.5 12 2.5 2.5 4.5-5" /></Svg>
 export const ExportGlyph = ({ size }: G) => <Svg size={size}><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></Svg>
+export const ShareGlyph = ({ size }: G) => <Svg size={size}><circle cx="18" cy="5" r="2.5" /><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="19" r="2.5" /><path d="m8.2 10.8 7.6-4.4M8.2 13.2l7.6 4.4" /></Svg>
 export const PencilGlyph = ({ size }: G) => <Svg size={size}><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="m13.5 6.5 4 4" /></Svg>
 export const ChevronDown = ({ size = 22 }: G) => <Svg size={size}><path d="m6 9 6 6 6-6" /></Svg>
 export const ChevronLeft = ({ size = 24 }: G) => <Svg size={size}><path d="m15 18-6-6 6-6" /></Svg>

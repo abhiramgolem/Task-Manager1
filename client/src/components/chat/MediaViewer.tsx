@@ -1,9 +1,10 @@
 import React from 'react'
-import { saveFile } from '../../lib/saveFile'
+import { saveFile, shareOut } from '../../lib/saveFile'
 import { Ic } from '../../ui'
 import PhotoViewer, { ViewerItem } from '../PhotoViewer'
 import type { Msg } from './types'
 import { fileUrl, isVideo, whenLabel } from './types'
+import { ShareGlyph } from './glyphs'
 
 // WhatsApp's photo viewer: the picture full screen on black, who sent it and
 // when along the top, the caption along the bottom, and a swipe (or the arrow
@@ -42,6 +43,7 @@ export default function MediaViewer({ items, startId, senderName, meId, onClose,
         <>
           <button type="button" className="mv-btn" onClick={() => onShowInChat(m)} aria-label="Show in chat" title="Show in chat"><Ic name="chat" size={19} /></button>
           <button type="button" className="mv-btn" onClick={() => onForward(m)} aria-label="Forward" title="Forward"><Ic name="forward" size={19} /></button>
+          <button type="button" className="mv-btn" onClick={() => shareOut({ url: fileUrl(m), name: m.file?.name, mime: m.file?.type, text: m.body })} aria-label="Share to another app" title="Share"><ShareGlyph size={19} /></button>
           <button type="button" className="mv-btn" onClick={() => download(m)} aria-label="Download" title="Download"><Ic name="download" size={19} /></button>
         </>
       )
