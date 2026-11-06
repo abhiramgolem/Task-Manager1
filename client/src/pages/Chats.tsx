@@ -549,7 +549,10 @@ export default function Chats() {
   const [forwardMsgs, setForwardMsgs] = useState<Msg[] | null>(null)
   // Assign a task without leaving the chat (TaskAssignSheet): the message it
   // came from, if any, and the server's pre-filled draft.
-  const [assignFor, setAssignFor] = useState<{ source: Msg | null; draft: Draft } | null>(null)
+  // fromBox: made from what was waiting in the composer (its words and its
+  // staged files), which then leave the box — otherwise a Send afterwards
+  // posts the same thing a second time as a plain message.
+  const [assignFor, setAssignFor] = useState<{ source: Msg | null; draft: Draft; fromBox?: boolean } | null>(null)
   // A task opened from a card in the thread, over the chat.
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [infoFor, setInfoFor] = useState<Msg | null>(null)
@@ -1665,14 +1668,14 @@ export default function Chats() {
   // was named" rules as the rest of the app. Nothing is created until Assign is
   // pressed, because handing someone work should stay a deliberate act — the
   // same reason the voice assistant never submits a form either.
-  const toTask = async (payload: { messageId?: string; text?: string; mentions?: string[] }, source: Msg | null = null) => {
+  const toTask = async (payload: { messageId?: string; text?: string; mentions?: string[] }, source: Msg | null = null, fromBox = false) => {
     setMenuId(null); setSelectedId(null); setMulti(null)
     try {
       const draft = await api.post('/chat/task-draft', payload)
       // A group only its admins may write to cannot take the task's card, so
       // the task is made on the full form instead of half-made here.
       if (readOnly) { openFullTaskForm(draft); return }
-      setAssignFor({ source, draft })
+      setAssignFor({ source, draft, fromBox })
     } catch (e: any) { toast.error('Could not build the task: ' + e.message) }
   }
   // The full New task form, for the task that needs a project or a category.
@@ -1694,8 +1697,10 @@ export default function Chats() {
   }
   const draftFromComposer = () => {
     const text = input.trim()
-    if (!text || !active) return
-    toTask({ text, mentions: resolveMentions(text, picked, active.members, user!.id) })
+    if (!active) return
+    // Only files waiting (a screenshot, no words yet): nothing to draft from.
+    if (!text) { setAssignFor({ source: null, draft: { title: '' }, fromBox: !!stagedRef.current.length }); return }
+    toTask({ text, mentions: resolveMentions(text, picked, active.members, user!.id) }, null, true)
   }
 
   // Print the conversation. Opens a plain, self-contained document rather than
@@ -3456,7 +3461,7 @@ export default function Chats() {
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setLocOpen(true) }}><span className="ag-ic loc"><PinDropGlyph size={20} /></span>Location</button>
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setContactOpen(true) }}><span className="ag-ic contact"><ContactGlyph size={20} /></span>Contact</button>
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setPollOpen(true) }}><span className="ag-ic poll"><PollGlyph size={20} /></span>Poll</button>
-                    <button role="menuitem" onClick={() => { setAttachMenu(false); setAssignFor({ source: null, draft: { title: input.trim() } }) }}><span className="ag-ic task"><TaskGlyph size={20} /></span>Task</button>
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); draftFromComposer() }}><span className="ag-ic task"><TaskGlyph size={20} /></span>Task</button>
                     {touchUI && canReadClipboardImages() && (
                       <button role="menuitem" onClick={pasteFromClipboard}>
                         <span className="ag-ic paste"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /></svg></span>
@@ -3645,15 +3650,20 @@ export default function Chats() {
           meId={user!.id}
           source={assignFor.source}
           draft={assignFor.draft}
+          files={assignFor.fromBox ? staged.map((s) => s.file) : []}
           workload={workload}
           senderName={senderName}
           onClose={() => setAssignFor(null)}
           onDone={(card) => {
-            // Typed in the box and turned into a task: the words are the task
-            // now, so they leave the box.
-            const fromBox = !assignFor.source && !!input.trim() && input.trim() === (assignFor.draft.title || '').trim()
+            // Typed in the box and turned into a task: the words and the
+            // staged files are the task now, so they leave the box. Before,
+            // they stayed whenever the title had been edited (or files were
+            // waiting), and the next Send posted them again as a message.
             setAssignFor(null); mergeIncoming(card); loadConvos(); loadWorkload()
-            if (fromBox) setInput('')
+            if (assignFor.fromBox) {
+              stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url))
+              setStaged([]); setInput(''); setPicked([]); setMentionQ(null); sendTyping(false)
+            }
           }}
           onMoreOptions={openFullTaskForm}
         />

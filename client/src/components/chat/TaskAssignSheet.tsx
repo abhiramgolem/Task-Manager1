@@ -5,6 +5,7 @@ import { toast } from '../../lib/toast'
 import { useDialog } from '../../lib/useDialog'
 import type { Conversation, Msg, OrgUser, Workload } from './types'
 import { TaskGlyph } from './glyphs'
+import { attachToTask, attachable } from '../../lib/taskAttach'
 
 // Assign a task without leaving the chat.
 //
@@ -28,11 +29,14 @@ const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padSt
 const inDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return isoDay(d) }
 const nextMonday = () => { const d = new Date(); d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7)); return isoDay(d) }
 
-export default function TaskAssignSheet({ conversation, meId, source, draft, workload, senderName, onClose, onDone, onMoreOptions }: {
+export default function TaskAssignSheet({ conversation, meId, source, draft, files = [], workload, senderName, onClose, onDone, onMoreOptions }: {
   conversation: Conversation
   meId: string
   source: Msg | null
   draft: Draft
+  // Files staged in the composer when the task was made from it: they go on
+  // the task as attachments (a screenshot is usually the point of the task).
+  files?: File[]
   workload: Workload
   senderName: (uid: string) => string
   onClose: () => void
@@ -86,8 +90,15 @@ export default function TaskAssignSheet({ conversation, meId, source, draft, wor
         due_date: due || undefined,
         source_quote: source?.body || source?.transcript || undefined,
       })
-      // The task exists from here on; a card that fails to post must not
-      // pretend the assignment failed too.
+      // The task exists from here on; a card or a file that fails to post
+      // must not pretend the assignment failed too.
+      if (files.length) {
+        const { ok, skipped } = attachable(files)
+        const sent = await Promise.allSettled(ok.map((f) => attachToTask(task.id, f)))
+        const lost = sent.filter((x) => x.status === 'rejected').length
+        if (lost) toast.error(lost === 1 ? 'The task was assigned, but one file could not be attached to it' : `The task was assigned, but ${lost} files could not be attached to it`)
+        if (skipped) toast.error(skipped)
+      }
       try {
         const card = await api.post(`/chat/conversations/${conversation.id}/task-card`, { taskId: task.id, replyTo: source?.id })
         onDone(card)
@@ -119,6 +130,13 @@ export default function TaskAssignSheet({ conversation, meId, source, draft, wor
             <div className="ta-quote">
               <span className="ta-quote-who">{source.sender_id === meId ? 'You' : senderName(source.sender_id)}</span>
               <span className="ta-quote-text">{source.transcript || source.body || source.file?.name}</span>
+            </div>
+          )}
+
+          {files.length > 0 && (
+            <div className="ta-files">
+              <Ic name="attach" size={14} />
+              <span>{files.length === 1 ? `${files[0].name} goes with the task` : `${files.length} files go with the task`}</span>
             </div>
           )}
 
