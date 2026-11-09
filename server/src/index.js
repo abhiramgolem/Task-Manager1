@@ -31,6 +31,7 @@ import departmentRoutes from './routes/departments.js'
 import mcpRoutes from './routes/mcp.js'
 import uploadRoutes from './routes/uploads.js'
 import { startScheduler } from './scheduler.js'
+import { seedUpdateCards } from './seedUpdateCards.js'
 import { attachLiveTranscribe, attachAssistantLive, attachCallLive } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
 import { hasEmbeddings, embedModel } from './ai/embeddings.js'
@@ -145,6 +146,8 @@ const server = app.listen(PORT, () => {
   const ragCount = db.prepare('SELECT COUNT(*) c FROM embeddings').get().c
   console.log(`  RAG: ${hasEmbeddings() ? `ON (${embedModel()}, ${ragCount} items indexed)` : 'OFF (no embedding key set)'}`)
   console.log(`  Users in DB: ${db.prepare('SELECT COUNT(*) c FROM users').get().c}`)
+  // The 132cr team's daily update cards, until each one is made (seedUpdateCards.js).
+  try { seedUpdateCards() } catch (e) { console.warn('  [update-cards] failed:', e.message) }
   startScheduler()
   console.log('')
 })

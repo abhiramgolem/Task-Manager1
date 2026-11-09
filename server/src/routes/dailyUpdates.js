@@ -67,11 +67,19 @@ function cleanMetrics(raw) {
     let mid = String(m?.id || '').trim()
     if (!/^[a-z0-9_-]{1,24}$/i.test(mid) || seen.has(mid)) mid = id().slice(0, 10)
     seen.add(mid)
-    const target = parseAmount(m?.target)
-    if (Number.isNaN(target)) return { error: `"${label}": the target should be a number, like 1.69L or 100` }
+    // A target may be a range, as the team writes them: "6L-18L", "3 lakhs to
+    // 6 lakhs". The low end is the target the bar measures; the high end, the
+    // stretch, is shown beside it.
+    let rawT = m?.target, rawS = m?.stretch
+    const range = typeof rawT === 'string' && /^\s*(\S.*?)\s*(?:-|–|to)\s*(\S.*)$/i.exec(rawT)
+    if (range && rawS == null) { rawT = range[1]; rawS = range[2] }
+    const target = parseAmount(rawT)
+    const stretch = parseAmount(rawS)
+    if (Number.isNaN(target) || Number.isNaN(stretch)) return { error: `"${label}": the target should be a number or a range, like 1.69L, 100 or 6L-18L` }
     out.push({
       id: mid, label,
       target: target != null && target > 0 ? target : null,
+      stretch: stretch != null && target != null && stretch > target ? stretch : null,
       unit: String(m?.unit || '').trim().slice(0, 10),
       mode: MODES.includes(m?.mode) ? m.mode : 'total',
     })
@@ -115,35 +123,42 @@ function postableConv(user, convId) {
 // Everyone in the chat sees the "posted today" line change.
 const announce = (convId) => pushToConversation(convId, { type: 'updates-today', conversationId: convId })
 
+// One card's rows from what was typed. `values`: { metricId: typed }. A metric
+// left empty is "not reported": a running total carries over, a daily count
+// adds 0. `totals`: { metricId: typed } for a daily count whose month is not
+// what the app added up (a card started mid-month, a correction from the CRM).
+function computeRows(metrics, prevTotal, values, totals) {
+  return metrics.map((m) => {
+    const v = parseAmount(values?.[m.id])
+    if (Number.isNaN(v)) throw { status: 400, error: `"${m.label}" should be a number, like 45k or 12` }
+    const fix = m.mode === 'daily' ? parseAmount(totals?.[m.id]) : null
+    if (Number.isNaN(fix)) throw { status: 400, error: `"${m.label}" month so far should be a number, like 1.2L` }
+    const before = prevTotal[m.id] ?? null
+    const total = m.mode === 'daily' ? (fix ?? (before || 0) + (v || 0)) : (v ?? before)
+    return { ...m, value: v, total }
+  })
+}
+const totalsOf = (meta) => { const t = {}; for (const v of meta?.metrics || []) t[v.id] = v.total; return t }
+const lineOf = (title, rows) => `${title}: ${rows.map((x) => `${x.label} ${fmtAmount(x.total)}${x.target ? '/' + fmtAmount(x.target) : ''}`).join(' · ')}`.slice(0, 600)
+
 // ---- posting -----------------------------------------------------------------
 // `values`: { metricId: what was typed (or a number) }. A metric left empty is
 // "not reported today": a running total carries over, a daily count adds 0.
 // Shared with the voice assistant (routes/assistant.js), which is why it takes
 // the user and throws { status, error } rather than answering a request.
-export function postDailyUpdate(user, convId, values = {}, note = '') {
+export function postDailyUpdate(user, convId, values = {}, note = '', totals = {}) {
   const got = postableConv(user, convId)
   if (got.error) throw got
   const tpl = templateOf(user.id, convId)
   if (!tpl) throw { status: 400, error: 'Set up your daily update card first' }
   const metrics = JSON.parse(tpl.metrics || '[]')
   const day = zonedNow().date
-  const prev = lastPost(tpl.id, day)
-  const prevTotal = {}
-  for (const v of prev?.metrics || []) prevTotal[v.id] = v.total
-  const rows = []
-  for (const m of metrics) {
-    const v = parseAmount(values?.[m.id])
-    if (Number.isNaN(v)) throw { status: 400, error: `"${m.label}" should be a number, like 45k or 12` }
-    const before = prevTotal[m.id] ?? null
-    const total = m.mode === 'daily' ? (before || 0) + (v || 0) : (v ?? before)
-    rows.push({ ...m, value: v, total })
-  }
+  const rows = computeRows(metrics, totalsOf(lastPost(tpl.id, day)), values, totals)
   if (rows.every((x) => x.value == null) && !String(note || '').trim()) throw { status: 400, error: 'Fill in at least one number' }
 
   const meta = { template_id: tpl.id, title: tpl.title, day, metrics: rows, note: String(note || '').trim().slice(0, 1000) }
   // The body is the card in one line: what the chat list, a push and search show.
-  const line = rows.map((x) => `${x.label} ${fmtAmount(x.total)}${x.target ? '/' + fmtAmount(x.target) : ''}`).join(' · ')
-  const body = `${tpl.title}: ${line}`.slice(0, 600)
+  const body = lineOf(tpl.title, rows)
   const mid = id('msg')
   const ts = now()
   db.transaction(() => {
@@ -157,6 +172,33 @@ export function postDailyUpdate(user, convId, values = {}, note = '') {
   deliver(got.conv, row, user)
   announce(convId)
   return shapeMessage(row, user.id, receiptCtx(convId, user.id))
+}
+
+// Correct a card already posted. Only the latest one of a card: every later
+// post's month totals were added up from it, so changing an older one would
+// leave them wrong. Its numbers are recomputed from the post before it, with
+// the metrics it was posted with.
+export function editDailyUpdate(user, messageId, values = {}, note = '', totals = {}) {
+  const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(messageId)
+  const post = db.prepare('SELECT * FROM daily_update_posts WHERE message_id=?').get(messageId)
+  if (!m || !post || m.kind !== 'update' || m.deleted_for_all || m.sender_id !== user.id || !member(m.conversation_id, user.id)) {
+    throw { status: 404, error: 'Update not found' }
+  }
+  const latest = db.prepare(`
+    SELECT p.message_id FROM daily_update_posts p JOIN chat_messages c ON c.id = p.message_id
+    WHERE p.template_id = ? AND c.deleted_for_all = 0 ORDER BY p.day DESC, p.created_at DESC LIMIT 1`).get(post.template_id)
+  if (latest?.message_id !== messageId) throw { status: 409, error: 'Only your latest update can be edited' }
+  const old = parseMeta(m)
+  const defs = (old.metrics || []).map(({ value, total, ...def }) => def)
+  const rows = computeRows(defs, totalsOf(lastPost(post.template_id, post.day)), values, totals)
+  if (rows.every((x) => x.value == null) && !String(note || '').trim()) throw { status: 400, error: 'Fill in at least one number' }
+  const meta = { ...old, metrics: rows, note: String(note || '').trim().slice(0, 1000) }
+  const body = lineOf(old.title || 'Daily update', rows)
+  const ts = now()
+  db.prepare('UPDATE chat_messages SET body=?, meta=?, edited_at=? WHERE id=?').run(body, JSON.stringify(meta), ts, messageId)
+  // The 'edit' every open chat already listens for, carrying the new card.
+  pushToConversation(m.conversation_id, { type: 'edit', conversationId: m.conversation_id, id: messageId, body, edited_at: ts, update: meta })
+  return { id: messageId, body, edited_at: ts, update: meta }
 }
 
 // My templates across chats, newest-used first, with each chat's name — for
@@ -175,8 +217,14 @@ r.get('/conversations/:id/update-template', authRequired, (req, res) => {
   if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Conversation not found' })
   const t = templateOf(req.user.id, req.params.id)
   const day = zonedNow().date
-  const last = t ? lastPost(t.id, day, { before: false }) : null
-  res.json({ template: shapeTemplate(t), last, day })
+  // The latest post this month (the one that can be edited), and the month as
+  // it stood before it: what a daily count's "month so far" is worked out from.
+  const row = t && db.prepare(`
+    SELECT p.message_id, p.day FROM daily_update_posts p JOIN chat_messages m ON m.id = p.message_id
+    WHERE p.template_id = ? AND p.day >= ? AND m.deleted_for_all = 0 ORDER BY p.day DESC, p.created_at DESC LIMIT 1`).get(t.id, `${day.slice(0, 7)}-01`)
+  const last = row ? parseMeta(db.prepare('SELECT * FROM chat_messages WHERE id=?').get(row.message_id)) : null
+  const lastBase = row ? totalsOf(lastPost(t.id, row.day)) : {}
+  res.json({ template: shapeTemplate(t), last, last_id: row?.message_id || null, last_base: lastBase, day })
 })
 
 r.put('/conversations/:id/update-template', authRequired, (req, res) => {
@@ -220,7 +268,16 @@ r.delete('/conversations/:id/update-template', authRequired, (req, res) => {
 
 r.post('/conversations/:id/update', authRequired, (req, res) => {
   try {
-    res.status(201).json(postDailyUpdate(req.user, req.params.id, req.body?.values || {}, req.body?.note || ''))
+    res.status(201).json(postDailyUpdate(req.user, req.params.id, req.body?.values || {}, req.body?.note || '', req.body?.totals || {}))
+  } catch (e) {
+    if (e?.status) return res.status(e.status).json({ error: e.error })
+    throw e
+  }
+})
+
+r.put('/message/:id/update', authRequired, (req, res) => {
+  try {
+    res.json(editDailyUpdate(req.user, req.params.id, req.body?.values || {}, req.body?.note || '', req.body?.totals || {}))
   } catch (e) {
     if (e?.status) return res.status(e.status).json({ error: e.error })
     throw e

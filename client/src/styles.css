@@ -4637,13 +4637,18 @@ button.reply-quote {
 .du-days button.on { background: #0d9488; border-color: #0d9488; color: #fff; }
 .du-stop { display: block; margin: 14px 0 0; padding: 0; border: 0; background: none; color: var(--danger-ink); font: inherit; font-size: 13px; cursor: pointer; }
 .du-fill-day { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-.du-again { font-size: 12.5px; padding: 7px 10px; border-radius: 8px; margin-bottom: 8px; background: color-mix(in srgb, #d97706 12%, var(--surface)); }
+.du-again { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; padding: 7px 10px; border-radius: 8px; margin-bottom: 8px; background: color-mix(in srgb, #d97706 12%, var(--surface)); }
+.du-again > span { flex: 1 1 180px; }
+/* A daily count's month under its box: added up, and typed over to correct. */
+.du-month { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 12.5px; color: var(--muted); }
+.du-month label { white-space: nowrap; }
+.du-field .du-month .ta-input { width: 110px; flex: 0 0 auto; padding: 5px 8px; font-size: 14px; }
+.du-correct { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 .du-field { margin-bottom: 10px; }
 .du-field label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
 .du-field-name { font-weight: 600; font-size: 14px; }
 .du-field-hint { font-size: 12px; color: var(--muted); text-align: right; }
 .du-field .ta-input { font-size: 16px; }
-.du-field-total { font-size: 12px; color: var(--muted); margin-top: 3px; }
 .du-note-in { resize: vertical; }
 .du-sheet .wa-sheet-foot { justify-content: space-between; }
 
