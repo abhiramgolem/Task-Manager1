@@ -325,7 +325,8 @@ export const TOOLS: ToolDef[] = [
     // in the org. Visible to someone else, and not silently undoable.
     // approve_suggestions creates real tasks and notifies every assignee — as
     // outward-facing as send_message, so it stops for the same yes.
-    destructive: ({ action }) => ['delete_task', 'remove_user', 'send_message', 'invite_user', 'approve_suggestions'].includes(action?.kind),
+    // post_update puts a card in a team chat for everyone there to see.
+    destructive: ({ action }) => ['delete_task', 'remove_user', 'send_message', 'invite_user', 'approve_suggestions', 'post_update'].includes(action?.kind),
     summarize: ({ action }) => {
       const s = action?.summary || 'apply that change'
       return s.charAt(0).toUpperCase() + s.slice(1)
@@ -349,6 +350,9 @@ export const TOOLS: ToolDef[] = [
       } else if (action.kind === 'send_message') {
         window.dispatchEvent(new Event('chat-unread-changed'))
         ctx.navigate('/chats')
+      } else if (action.kind === 'post_update') {
+        // To the chat, where the card just went up.
+        ctx.navigate(`/chats?c=${encodeURIComponent(action.conversation_id)}`)
       } else if (action.kind === 'read_notifications') {
         // Stay put — clearing the bell is not a reason to yank the user anywhere.
         window.dispatchEvent(new Event('notifications-changed'))
@@ -416,6 +420,7 @@ async function runAction(action: any, password?: string): Promise<void> {
       break
     }
     case 'read_notifications': await api.post('/notifications/read-all'); break
+    case 'post_update': await api.post(`/chat/conversations/${action.conversation_id}/update`, { values: action.values, note: action.note || '' }); break
     case 'delete_own_comment': await api.del(`/tasks/${action.task_id}/comments/latest-own`); break
     // Empty ids = every pending suggestion that has an owner, same as the meeting
     // page's own "Assign all" button.

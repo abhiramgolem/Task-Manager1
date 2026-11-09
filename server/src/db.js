@@ -499,6 +499,45 @@ export function initSchema() {
     FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
   );
 
+  -- A person's daily update card in one chat (routes/dailyUpdates.js): the
+  -- numbers they report every day, set up once by that person and then only
+  -- filled in. metrics is JSON [{id, label, target, unit, mode}], mode 'total'
+  -- (they enter the month's figure so far) or 'daily' (they enter today's and
+  -- the month is added up). remind_at is "HH:MM" in TASK_MAIL_TZ, remind_days
+  -- the weekdays it applies to (0 = Sunday). The two dates let the reminder
+  -- sweep skip, by row, whoever has posted or been reminded today.
+  CREATE TABLE IF NOT EXISTS daily_update_templates (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    metrics TEXT NOT NULL,
+    remind_at TEXT,
+    remind_days TEXT DEFAULT '1,2,3,4,5,6',
+    last_posted_date TEXT,
+    last_reminded_date TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (user_id, conversation_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_dut_conv ON daily_update_templates(conversation_id);
+  CREATE INDEX IF NOT EXISTS idx_dut_remind ON daily_update_templates(remind_at);
+  -- One row per update posted, so "who has posted today" and "this month so
+  -- far" are index lookups rather than a walk through the chat's messages.
+  -- The card itself is the chat message (kind 'update', its numbers in meta).
+  CREATE TABLE IF NOT EXISTS daily_update_posts (
+    message_id TEXT PRIMARY KEY,
+    template_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    day TEXT NOT NULL,                   -- YYYY-MM-DD in TASK_MAIL_TZ
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_dup_template ON daily_update_posts(template_id, day);
+  CREATE INDEX IF NOT EXISTS idx_dup_conv_day ON daily_update_posts(conversation_id, day);
+
   -- Every time someone's delivered / read position in a conversation moves
   -- forward. chat_participants only holds where it is NOW; Message info has to
   -- say WHEN a particular message was read, which is the first of these at or

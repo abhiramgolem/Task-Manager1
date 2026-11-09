@@ -57,11 +57,11 @@ function readForTranscription(abs) {
 const r = Router()
 
 // ---------- helpers ----------
-const member = (convId, userId) => db.prepare('SELECT * FROM chat_participants WHERE conversation_id=? AND user_id=?').get(convId, userId)
+export const member = (convId, userId) => db.prepare('SELECT * FROM chat_participants WHERE conversation_id=? AND user_id=?').get(convId, userId)
 const participantsOf = (convId) => db.prepare('SELECT user_id FROM chat_participants WHERE conversation_id=?').all(convId).map((p) => p.user_id)
 
 // Push a payload to every participant of a conversation (optionally excluding one).
-function pushToConversation(convId, payload, exceptUserId = null) {
+export function pushToConversation(convId, payload, exceptUserId = null) {
   for (const uid of participantsOf(convId)) if (uid !== exceptUserId) pushToUser(uid, payload)
 }
 
@@ -108,7 +108,7 @@ function reactionsByMessage(ids) {
   return out
 }
 
-const parseMeta = (row) => { try { return row?.meta ? JSON.parse(row.meta) : {} } catch { return {} } }
+export const parseMeta = (row) => { try { return row?.meta ? JSON.parse(row.meta) : {} } catch { return {} } }
 const nameOf = (uid) => db.prepare('SELECT name FROM users WHERE id=?').get(uid)?.name || 'Someone'
 
 // A group event line, worded for whoever reads it: "You added Ravi" to Priya,
@@ -148,6 +148,7 @@ function snippet(row, viewerId = null) {
   if (row.deleted_for_all) return row.sender_id === viewerId ? 'You deleted this message' : 'This message was deleted'
   if (row.kind === 'system') return systemText(parseMeta(row), viewerId)
   if (row.kind === 'poll') return '📊 ' + (row.body || 'Poll')
+  if (row.kind === 'update') return '📈 ' + (row.body || 'Daily update')
   if (row.kind === 'task') return '📋 ' + (row.body || 'Task')
   if (row.kind === 'location') return '📍 ' + (row.body || 'Location')
   if (row.kind === 'contact') return '👤 ' + (row.body || 'Contact')
@@ -180,7 +181,7 @@ const oldest = (vals) => (!vals.length || vals.some((v) => !v)) ? null : vals.re
 // delivered once it is older than ALL of their delivered positions and read
 // once it is older than all of their read ones — WhatsApp's rule in a group:
 // blue only when everyone has read it.
-function receiptCtx(convId, viewerId) {
+export function receiptCtx(convId, viewerId) {
   const others = db.prepare('SELECT last_read_at, read_receipt_at, last_delivered_at, joined_at FROM chat_participants WHERE conversation_id=? AND user_id!=?').all(convId, viewerId)
   if (!others.length) return { othersMinRead: null, othersMinDelivered: null }
   return { othersMinRead: oldest(others.map(readPos)), othersMinDelivered: oldest(others.map(deliveredPos)) }
@@ -267,7 +268,7 @@ function contactCard(userId) {
 }
 
 // Shape a message row for the client (viewer-specific: starred, reactions, ticks).
-function shapeMessage(row, viewerId, ctx = {}) {
+export function shapeMessage(row, viewerId, ctx = {}) {
   const base = { id: row.id, conversation_id: row.conversation_id, sender_id: row.sender_id, created_at: row.created_at }
   if (row.deleted_for_all) return { ...base, deleted: true, body: '' }
   const reactions = (ctx.reactions && ctx.reactions[row.id]) || []
@@ -311,6 +312,8 @@ function shapeMessage(row, viewerId, ctx = {}) {
     meeting: row.meeting_id ? meetingCard(row.meeting_id, viewerId) : null,
     system: row.kind === 'system' ? systemText(meta, viewerId) : null,
     poll: row.kind === 'poll' ? pollOf(row.id) : null,
+    // A daily update card: its numbers as they were posted (dailyUpdates.js).
+    update: row.kind === 'update' ? meta : null,
     task: row.kind === 'task' ? taskCard(row.task_id) : null,
     location: row.kind === 'location' ? { lat: meta.lat, lng: meta.lng, label: meta.label || '', accuracy: meta.accuracy || null } : null,
     contact: row.kind === 'contact' ? contactCard(meta.user_id) : null,
@@ -993,7 +996,7 @@ function clipForPush(text) {
   if (c >= 0xd800 && c <= 0xdbff) cut--
   return text.slice(0, cut) + '…'
 }
-function deliver(conv, msgRow, sender, mentioned = []) {
+export function deliver(conv, msgRow, sender, mentioned = []) {
   touchConvo(conv.id)
   const others = participantsOf(conv.id).filter((u) => u !== sender.id)
   const label = conv.type === 'group' ? `${sender.name} in ${conv.name || 'Group'}` : sender.name
@@ -1063,11 +1066,11 @@ function deliver(conv, msgRow, sender, mentioned = []) {
 
 // "Send messages: only admins" — checked on every way into a thread, not just
 // the composer, because the UI hiding the box is not a permission.
-function canPost(conv, userId) {
+export function canPost(conv, userId) {
   if (!conv || conv.type !== 'group' || !conv.admins_only) return true
   return member(conv.id, userId)?.role === 'admin'
 }
-const ADMINS_ONLY = 'Only admins can send messages to this group'
+export const ADMINS_ONLY = 'Only admins can send messages to this group'
 
 // What a new message may quote. Normally a message in the same thread. A
 // different thread only for WhatsApp's "Reply privately": allowed when the

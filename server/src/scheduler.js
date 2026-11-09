@@ -4,6 +4,7 @@
 import { db } from './db.js'
 import { sendDailyDigests } from './digest.js'
 import { runChatDue } from './routes/chat.js'
+import { runUpdateReminders } from './routes/dailyUpdates.js'
 import { purgeDeletedTask } from './routes/tasks.js'
 import {
   sendDailyTaskMail, sendCriticalDigest, sendNewCriticalAlerts, sendDeadlineWarnings,
@@ -81,6 +82,9 @@ async function tick() {
   // granularity as everything else here — "remind me at 4pm" means within the
   // minute, which is what people actually expect of a reminder.
   try { runChatDue() } catch (e) { console.error('[scheduler] chat due work failed:', e.message) }
+  // Daily update cards whose owner's reminder time has come and who has not
+  // posted today (routes/dailyUpdates.js). One indexed read when nothing is due.
+  try { runUpdateReminders() } catch (e) { console.error('[scheduler] update reminders failed:', e.message) }
 }
 
 export function startScheduler() {

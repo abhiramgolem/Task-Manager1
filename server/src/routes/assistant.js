@@ -13,6 +13,7 @@ import { hasLLM as hasVoiceLLM } from '../ai/voiceTask.js'
 import { resolveUser, resolveUserInfo, findSpokenAlias } from '../ai/extractor.js'
 import { parseDueDate } from '../ai/dates.js'
 import { recordUsage } from '../ai/usage.js'
+import { templatesFor, parseAmount, fmtAmount } from './dailyUpdates.js'
 import { db } from '../db.js'
 import { id, now, audit, emailDomainAllowed, orgAllowedDomains, BELL_SKIPPED_TYPES } from '../util.js'
 
@@ -478,6 +479,55 @@ async function handleCommand(req, res) {
       if (!body) return res.json(clarify(`What should I tell ${match.name}?`))
       return res.json(confirm(`Message ${match.name} in chat: "${body}". Send it?`,
         { kind: 'send_message', to_user_id: match.id, to_name: match.name, text: body, summary: `Messaged ${match.name}` }))
+    }
+
+    // ---- daily update card -----------------------------------------------------
+    // Posts to a team chat, so it stops for a yes like send_message. The card
+    // (and its labels) belongs to the person: their words are matched to it here.
+    case 'post_daily_update': {
+      const cards = templatesFor(user.id)
+      if (!cards.length) return res.json(answer("You haven't set up a daily update card yet. Open your team's chat, tap the clip, then Daily update."))
+      const plain = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+      let card = cards[0]
+      if (a.chat_name) {
+        const q = plain(a.chat_name)
+        card = cards.find((c) => { const n = plain(c.conv_name); return n && (n.includes(q) || q.includes(n)) }) || null
+        if (!card) return res.json(clarify(`I couldn't find your daily update in "${a.chat_name}". You post it in ${cards.map((c) => c.conv_name || 'a direct chat').join(', ')}.`))
+      }
+      const metrics = JSON.parse(card.metrics || '[]')
+      const stem = (w) => w.replace(/(es|s)$/, '')
+      const wordsOf = (s) => plain(s).split(' ').filter((w) => w.length > 1).map(stem)
+      const matchMetric = (spoken) => {
+        const q = new Set(wordsOf(spoken))
+        let best = null, score = 0
+        for (const m of metrics) {
+          const w = wordsOf(m.label)
+          const hit = plain(m.label) === plain(spoken) ? 100 : w.filter((x) => q.has(x)).length / Math.max(1, w.length)
+          if (hit > score) { best = m; score = hit }
+        }
+        return score > 0 ? best : null
+      }
+      const values = {}
+      const missed = []
+      for (const v of Array.isArray(a.values) ? a.values : []) {
+        const m = matchMetric(v?.metric)
+        const raw = /^(zero|none|nil|no|nothing)$/i.test(String(v?.value ?? '').trim()) ? 0 : v?.value
+        const n = parseAmount(raw)
+        if (!m || n == null || Number.isNaN(n)) { if (v?.metric) missed.push(String(v.metric)); continue }
+        values[m.id] = n
+      }
+      const note = String(a.note || '').trim()
+      if (!Object.keys(values).length) {
+        return res.json(clarify(`Which numbers? Your ${card.title} has ${metrics.map((m) => m.label).join(', ')}.`))
+      }
+      // Say which kind of number each is: a running total and today's count
+      // are both "sales 12k" out loud, and only one of them is right.
+      const said = metrics.filter((m) => m.id in values)
+        .map((m) => `${m.label} ${fmtAmount(values[m.id])}${m.mode === 'daily' ? ' today' : ' so far this month'}`).join(', ')
+      const where = card.conv_type === 'group' ? ` in ${card.conv_name || 'your group'}` : ''
+      const skip = missed.length ? ` I couldn't match ${missed.join(', ')} to your card.` : ''
+      return res.json(confirm(`Post your ${card.title}${where}: ${said}${note ? `, with the note "${note}"` : ''}.${skip} Post it?`,
+        { kind: 'post_update', conversation_id: card.conversation_id, values, note, summary: `posted your ${card.title}` }))
     }
 
     // ---- team / people (managers) ------------------------------------------

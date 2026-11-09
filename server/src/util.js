@@ -84,6 +84,7 @@ const PUSH_TITLES = {
   chat_mention: 'You were mentioned',
   chat_call: 'Missed call',
   chat_reminder: 'Reminder',
+  update_reminder: 'Daily update',
   call_review: 'Call ready for review',
 }
 
@@ -111,7 +112,7 @@ export function deviceLabel(ua = '') {
 // filed before the bell went task-only are still in the table, so readers of
 // it filter them out by this list too. A mention is the one chat event that
 // does go to the bell: it is addressed to you by name, like a task is.
-export const BELL_SKIPPED_TYPES = ['chat_message', 'chat_call', 'chat_reminder']
+export const BELL_SKIPPED_TYPES = ['chat_message', 'chat_call', 'chat_reminder', 'update_reminder']
 
 // Which notification categories a person still wants. Every type maps to one
 // category so a toggle governs a whole family rather than a single message.

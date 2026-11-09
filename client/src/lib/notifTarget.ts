@@ -19,6 +19,8 @@ export function notifTarget(n: NotifRef): string | null {
   if (n.conversationId) {
     const q = new URLSearchParams({ c: n.conversationId })
     if (n.messageId) q.set('msg', n.messageId)
+    // The daily update reminder opens the card to fill in, not just the chat.
+    if (n.type === 'update_reminder') q.set('update', '1')
     return `/chats?${q}`
   }
   if (n.type?.startsWith('chat_')) return '/chats'
