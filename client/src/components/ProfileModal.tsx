@@ -8,7 +8,7 @@ import { useEscape } from '../lib/useEscape'
 import { confirmDialog, confirmLogout } from '../lib/confirm'
 import { savedAccounts } from '../accounts'
 import EmailCodeEntry from './EmailCodeEntry'
-import { webPushState, enableWebPush, turnOffWebPush, type WebPushState } from '../lib/webPush'
+import { webPushState, enableWebPush, turnOffWebPush, needsHomeScreen, type WebPushState } from '../lib/webPush'
 
 // The profile hub, one concern per screen. It used to be a single column that
 // ran photo -> name -> wallpaper -> password -> feedback in one scroll, so
@@ -337,6 +337,11 @@ export default function ProfileModal({ onClose, onFeedback, initialSection }: { 
         <>
           {note('notifications')}
           <div className="muted pf-hint" style={{ marginTop: 0 }}>Turning a category off stops both the in-app alert and the push on your phone.</div>
+          {needsHomeScreen() && (
+            <div className="pf-hint wp-ios-hint">
+              <b>Notifications on this iPhone:</b> add VoTask to your Home Screen first. In Safari tap Share, then Add to Home Screen, and open VoTask from its icon. The switch for notifications is here once you do.
+            </div>
+          )}
           {webPush !== 'unsupported' && (
             <div className="pf-toggles">
               <label className="pf-toggle">

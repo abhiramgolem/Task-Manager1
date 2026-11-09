@@ -9,7 +9,7 @@ import { setPushNavigator } from './push'
 import { startShareTarget, onShare, hasShare } from './lib/shareTarget'
 import { startUpdateCheck } from './lib/appUpdate'
 import { useEscape } from './lib/useEscape'
-import { webPushSupported, enableWebPush } from './lib/webPush'
+import { webPushSupported, enableWebPush, needsHomeScreen } from './lib/webPush'
 import { toast } from './lib/toast'
 import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
@@ -459,8 +459,11 @@ const WEBPUSH_LATER = 'votask_webpush_later'
 function WebPushPrompt() {
   const { user } = useAuth()
   const [show, setShow] = useState(false)
+  // An iPhone in Safari cannot be asked yet: it shows how to add VoTask to
+  // the Home Screen, where the same card then offers notifications.
+  const [ios] = useState(() => needsHomeScreen())
   useEffect(() => {
-    if (!user || !webPushSupported() || Notification.permission !== 'default') { setShow(false); return }
+    if (!user || (!ios && (!webPushSupported() || Notification.permission !== 'default'))) { setShow(false); return }
     let later = 0
     try { later = Number(localStorage.getItem(WEBPUSH_LATER) || 0) } catch {}
     if (later > Date.now()) return
@@ -469,6 +472,27 @@ function WebPushPrompt() {
     return () => clearInterval(t)
   }, [user?.id])
   if (!show) return null
+  if (ios) {
+    const later = () => { try { localStorage.setItem(WEBPUSH_LATER, String(Date.now() + 14 * 86400000)) } catch {} setShow(false) }
+    return (
+      <div className="verify-pop wp-pop" role="dialog" aria-label="Get notifications on your iPhone">
+        <div className="verify-pop-head">
+          <span className="verify-pop-ic wp-ic"><Ic name="bell" size={18} /></span>
+          <div className="verify-pop-body">
+            <div className="verify-pop-title">Get notifications on your iPhone</div>
+            <div className="verify-pop-sub">
+              Add VoTask to your Home Screen: tap <b>Share</b> <span aria-hidden="true">(the square with an arrow)</span>, then <b>Add to Home Screen</b>.
+              Open VoTask from its new icon and sign in once; it will offer notifications there.
+            </div>
+          </div>
+          <button className="verify-pop-x" onClick={later} aria-label="Close">✕</button>
+        </div>
+        <div className="verify-pop-actions">
+          <button className="btn btn-ghost btn-sm" onClick={later}>Got it</button>
+        </div>
+      </div>
+    )
+  }
   const notNow = () => { try { localStorage.setItem(WEBPUSH_LATER, String(Date.now() + 7 * 86400000)) } catch {} setShow(false) }
   const turnOn = async () => {
     setShow(false)

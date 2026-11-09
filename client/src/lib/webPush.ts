@@ -21,6 +21,15 @@ export const webPushSupported = () =>
   !Capacitor.isNativePlatform() && typeof window !== 'undefined' && window.isSecureContext
   && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
 
+// An iPhone or iPad in Safari, not opened from the Home Screen. Apple gives
+// a website notifications only once it has been added to the Home Screen and
+// is opened from there (iOS 16.4 and later); in a Safari tab there is no Push
+// API at all. So there the answer is "add it to the Home Screen first".
+export const isIOS = () => typeof navigator !== 'undefined'
+  && (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+const standalone = () => window.matchMedia?.('(display-mode: standalone)').matches || (navigator as any).standalone === true
+export const needsHomeScreen = () => !Capacitor.isNativePlatform() && isIOS() && !standalone()
+
 export type WebPushState = 'on' | 'off' | 'blocked' | 'unsupported'
 export function webPushState(): WebPushState {
   if (!webPushSupported()) return 'unsupported'

@@ -13,8 +13,14 @@ self.addEventListener('push', (e) => {
     // counts, the bell's chime). A system notification on top would say the
     // same thing twice.
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-    if (wins.some((w) => w.focused && w.visibilityState === 'visible')) return
+    const inFront = wins.some((w) => w.focused && w.visibilityState === 'visible')
+    // Safari (an iPhone's Home Screen app above all) takes a push that shows
+    // nothing as a broken promise and, after a few, stops delivering them. So
+    // there the notification is always shown, silently while VoTask is open.
+    const safari = /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|Edg|Firefox|FxiOS/.test(navigator.userAgent)
+    if (inFront && !safari) return
     await self.registration.showNotification(d.title || 'VoTask', {
+      silent: inFront,
       body: d.body || '',
       // One per chat, as on the phone: a new message replaces that chat's
       // notification, and renotify makes it sound again.
