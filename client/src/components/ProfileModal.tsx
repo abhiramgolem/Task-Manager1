@@ -8,6 +8,7 @@ import { useEscape } from '../lib/useEscape'
 import { confirmDialog, confirmLogout } from '../lib/confirm'
 import { savedAccounts } from '../accounts'
 import EmailCodeEntry from './EmailCodeEntry'
+import { webPushState, enableWebPush, turnOffWebPush, type WebPushState } from '../lib/webPush'
 
 // The profile hub, one concern per screen. It used to be a single column that
 // ran photo -> name -> wallpaper -> password -> feedback in one scroll, so
@@ -83,6 +84,7 @@ export default function ProfileModal({ onClose, onFeedback, initialSection }: { 
     const p = (user as any)?.notif_prefs || {}
     return Object.fromEntries(NOTIF_ROWS.map((r) => [r.key, p[r.key] !== false]))
   })
+  const [webPush, setWebPush] = useState<WebPushState>(() => webPushState())
   const [sessions, setSessions] = useState<Session[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   // Messages belong to the panel that raised them, so a wrong-password error can
@@ -335,6 +337,27 @@ export default function ProfileModal({ onClose, onFeedback, initialSection }: { 
         <>
           {note('notifications')}
           <div className="muted pf-hint" style={{ marginTop: 0 }}>Turning a category off stops both the in-app alert and the push on your phone.</div>
+          {webPush !== 'unsupported' && (
+            <div className="pf-toggles">
+              <label className="pf-toggle">
+                <span className="pf-toggle-meta">
+                  <span className="pf-toggle-label">Notifications in this browser</span>
+                  <span className="muted pf-toggle-hint">{webPush === 'blocked'
+                    ? 'Blocked by the browser. Allow notifications for this site from the icon left of the address, then switch this on.'
+                    : 'Messages, mentions and tasks pop up on this computer, even with VoTask in another tab.'}</span>
+                </span>
+                <input type="checkbox" checked={webPush === 'on'} disabled={webPush === 'blocked'} onChange={async () => {
+                  if (webPush === 'on') { await turnOffWebPush(); setWebPush(webPushState()) }
+                  else {
+                    const r = await enableWebPush()
+                    setWebPush(webPushState())
+                    if (r === 'error') flash('err', 'Could not turn browser notifications on.', 'notifications')
+                  }
+                }} />
+                <span className="pf-switch" aria-hidden="true" />
+              </label>
+            </div>
+          )}
           <div className="pf-toggles">
             {NOTIF_ROWS.map((r) => (
               <label key={r.key} className="pf-toggle">

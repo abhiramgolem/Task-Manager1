@@ -9,6 +9,8 @@ import { setPushNavigator } from './push'
 import { startShareTarget, onShare, hasShare } from './lib/shareTarget'
 import { startUpdateCheck } from './lib/appUpdate'
 import { useEscape } from './lib/useEscape'
+import { webPushSupported, enableWebPush } from './lib/webPush'
+import { toast } from './lib/toast'
 import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic } from './ui'
 import NotificationBell from './components/NotificationBell'
@@ -353,7 +355,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         </header>
-        <main className="content"><VerifyEmailBanner /><div>{children}</div></main>
+        <main className="content"><VerifyEmailBanner /><WebPushPrompt /><div>{children}</div></main>
       </div>
       {/* Mobile bottom tab bar: two tabs, the raised orange centre tab, one more
           tab, then "More" (opens the full drawer, where the voice assistant now
@@ -441,6 +443,54 @@ function VerifyEmailBanner() {
       </div>
       <div className="verify-pop-actions">
         <EmailCodeEntry />
+      </div>
+    </div>
+  )
+}
+
+// Browser notifications, offered once on the website: a new message or task
+// then reaches this computer with VoTask's tab in the background, as WhatsApp
+// Web does (lib/webPush.ts). The browser asks for permission only inside a
+// click, so this is a button, not an automatic prompt. Shown only while the
+// browser has not been asked, and never together with the email card, which
+// uses the same corner: it waits until that one is closed. "Not now" puts it
+// away for a week. Profile → Notifications has the switch.
+const WEBPUSH_LATER = 'votask_webpush_later'
+function WebPushPrompt() {
+  const { user } = useAuth()
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    if (!user || !webPushSupported() || Notification.permission !== 'default') { setShow(false); return }
+    let later = 0
+    try { later = Number(localStorage.getItem(WEBPUSH_LATER) || 0) } catch {}
+    if (later > Date.now()) return
+    // After the page has drawn, not over it; and not while the email card is up.
+    const t = setInterval(() => { if (!document.querySelector('.verify-pop:not(.wp-pop)')) { clearInterval(t); setShow(true) } }, 4000)
+    return () => clearInterval(t)
+  }, [user?.id])
+  if (!show) return null
+  const notNow = () => { try { localStorage.setItem(WEBPUSH_LATER, String(Date.now() + 7 * 86400000)) } catch {} setShow(false) }
+  const turnOn = async () => {
+    setShow(false)
+    const r = await enableWebPush()
+    if (r === 'on') toast.success('Notifications are on for this browser')
+    else if (r === 'blocked') toast.info('The browser blocked them. Allow notifications for this site from the icon left of the address, then turn them on in Profile → Notifications.', 8000)
+    else if (r === 'error') toast.error('Could not turn notifications on. Try again from Profile → Notifications.')
+    else notNow()
+  }
+  return (
+    <div className="verify-pop wp-pop" role="dialog" aria-label="Turn on notifications">
+      <div className="verify-pop-head">
+        <span className="verify-pop-ic wp-ic"><Ic name="bell" size={18} /></span>
+        <div className="verify-pop-body">
+          <div className="verify-pop-title">Get notified on this computer</div>
+          <div className="verify-pop-sub">New messages, mentions and tasks pop up even when VoTask is in another tab.</div>
+        </div>
+        <button className="verify-pop-x" onClick={notNow} aria-label="Not now">✕</button>
+      </div>
+      <div className="verify-pop-actions">
+        <button className="btn btn-primary btn-sm" onClick={turnOn}>Turn on</button>
+        <button className="btn btn-ghost btn-sm" onClick={notNow}>Not now</button>
       </div>
     </div>
   )

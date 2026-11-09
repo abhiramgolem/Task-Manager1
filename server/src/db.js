@@ -523,6 +523,18 @@ export function initSchema() {
   );
   CREATE INDEX IF NOT EXISTS idx_dut_conv ON daily_update_templates(conversation_id);
   CREATE INDEX IF NOT EXISTS idx_dut_remind ON daily_update_templates(remind_at);
+  -- A browser that turned on VoTask notifications (webPush.js): its Web Push
+  -- endpoint and the keys its messages are encrypted with. One row per browser.
+  CREATE TABLE IF NOT EXISTS web_push_subs (
+    endpoint TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    ua TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_web_push_user ON web_push_subs(user_id);
+
   -- One row per update posted, so "who has posted today" and "this month so
   -- far" are index lookups rather than a walk through the chat's messages.
   -- The card itself is the chat message (kind 'update', its numbers in meta).
