@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired, signScoped, verifyScoped, sessionOk } from '../auth.js'
 import { saveDeviceToken, removeDeviceToken } from '../push.js'
+import { webPushKey, saveWebSub, removeWebSub } from '../webPush.js'
 import { BELL_SKIPPED_TYPES } from '../util.js'
 
 const r = Router()
@@ -51,6 +52,21 @@ r.post('/register-device', (req, res) => {
   const build = Number.isInteger(appBuild) && appBuild > 0 && appBuild < 1e7 ? appBuild : null
   saveDeviceToken(req.user.id, token, platform || 'android', { callRing: !!callRing, chime: !!chime, appBuild: build })
   res.json({ ok: true, refresh: deviceRefreshFor(req.user.id, req.sessionId, token) })
+})
+
+// Browser notifications (webPush.js): the key a browser subscribes with, and
+// its subscription in and out. Out on sign-out, so a shared computer stops
+// showing this person's messages.
+r.get('/web-push-key', (req, res) => {
+  try { res.json({ key: webPushKey() }) } catch (e) { res.status(503).json({ error: 'Browser notifications are not available' }) }
+})
+r.post('/web-subscribe', (req, res) => {
+  if (!saveWebSub(req.user.id, req.body?.subscription, req.headers['user-agent'])) return res.status(400).json({ error: 'Invalid subscription' })
+  res.json({ ok: true })
+})
+r.post('/web-unsubscribe', (req, res) => {
+  removeWebSub(req.body?.endpoint, req.user.id)
+  res.json({ ok: true })
 })
 
 // Unregister on logout so a shared device stops receiving this user's pushes.

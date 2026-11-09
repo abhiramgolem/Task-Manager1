@@ -9,7 +9,15 @@
          browser picks a real size instead of downscaling one large PNG. -->
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" href="/favicon.png" />
-    <link rel="apple-touch-icon" href="/favicon.png" />
+    <!-- Installable as an app: an iPhone gives a website notifications only
+         once it is on the Home Screen, and needs this manifest to put it there
+         as an app (src/lib/webPush.ts). The touch icon is the app's own tile. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="VoTask" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VoTask — AI Execution Platform</title>
     <meta name="theme-color" content="#fcfaf7" />

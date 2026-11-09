@@ -11,6 +11,7 @@ import { nativeCallsAvailable, configureNativeCalls } from './lib/nativeCall'
 import { notifTarget, replacesEntry } from './lib/notifTarget'
 import { shareTargetAvailable } from './lib/shareTarget'
 import { openUpdate } from './lib/appUpdate'
+import { syncWebPush, dropWebPush } from './lib/webPush'
 
 let started = false
 let lastToken: string | null = null
@@ -35,8 +36,23 @@ type Go = (to: string, opts: { replace: boolean }) => void
 let go: Go | null = null
 export function setPushNavigator(fn: Go | null) { go = fn }
 
+// A notification clicked while the website is open (public/sw.js): moved
+// there inside the app, as a phone notification's tap is.
+let webOpenHooked = false
+function hookWebOpen() {
+  if (webOpenHooked) return
+  webOpenHooked = true
+  window.addEventListener('votask-open', (e) => {
+    const dest = String((e as CustomEvent).detail || '/')
+    if (go) go(dest, { replace: replacesEntry(dest, location.pathname) })
+    else location.assign(dest)
+  })
+}
+
 export async function registerPush() {
-  if (started || !Capacitor.isNativePlatform()) return
+  // The website: browser notifications, if this browser has them on.
+  if (!Capacitor.isNativePlatform()) { hookWebOpen(); syncWebPush(); return }
+  if (started) return
   started = true
   try {
     const { PushNotifications } = await import('@capacitor/push-notifications')
@@ -161,7 +177,7 @@ export async function clearChatNotifications(conversationId: string) {
 
 // On logout, stop this device receiving the current user's pushes.
 export async function unregisterPush() {
-  if (!Capacitor.isNativePlatform()) return
+  if (!Capacitor.isNativePlatform()) { dropWebPush(); return }
   try {
     if (lastToken) { try { await api.post('/notifications/unregister-device', { token: lastToken }) } catch {} }
     const { PushNotifications } = await import('@capacitor/push-notifications')

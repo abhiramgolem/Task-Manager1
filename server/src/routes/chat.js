@@ -82,11 +82,38 @@ function mentionsByMessage(ids) {
   return out
 }
 
+// The people a message's text names with @, read from the words themselves.
+// The app sends the ids of names picked from its @ list, but a name typed out
+// by hand ("@Vinay"), or a pick a phone keyboard's autocorrect undid, used to
+// arrive with no ids at all — and went out as an ordinary message, with no
+// mention, no "mentioned you" and no way past a muted chat. A full name always
+// counts; a first name only when no one else in the chat shares it. @all and
+// @everyone name everyone else in the chat.
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+function mentionsInText(convId, text, senderId) {
+  const body = String(text || '')
+  if (!body.includes('@')) return []
+  const people = db.prepare('SELECT u.id, u.name FROM chat_participants p JOIN users u ON u.id = p.user_id WHERE p.conversation_id = ?').all(convId)
+    .filter((u) => u.id !== senderId && u.name)
+  // Not inside an email address: sales@vinay.com names nobody.
+  const named = (name) => new RegExp(`(?<![\\p{L}\\p{N}.])@${escRe(name.trim()).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])`, 'iu').test(body)
+  if (/(?<![\p{L}\p{N}.])@(all|everyone)(?![\p{L}\p{N}])/iu.test(body)) return people.map((u) => u.id)
+  const firstCount = {}
+  for (const u of people) { const f = u.name.trim().split(/\s+/)[0].toLowerCase(); firstCount[f] = (firstCount[f] || 0) + 1 }
+  const out = []
+  for (const u of people) {
+    const first = u.name.trim().split(/\s+/)[0]
+    if (named(u.name) || (firstCount[first.toLowerCase()] === 1 && named(first))) out.push(u.id)
+  }
+  return out
+}
+
 // Record the @mentions on a message. Only real participants of the conversation
 // count — a mention is a notification, so accepting an arbitrary id from the
 // client would let anyone ping a teammate who cannot even see the thread.
-function saveMentions(convId, messageId, rawIds, senderId) {
-  const ids = [...new Set((Array.isArray(rawIds) ? rawIds : []).map(String))]
+// `text`: the message's words, whose @names count too (mentionsInText).
+function saveMentions(convId, messageId, rawIds, senderId, text = '') {
+  const ids = [...new Set([...(Array.isArray(rawIds) ? rawIds : []).map(String), ...mentionsInText(convId, text, senderId)])]
   if (!ids.length) return []
   const allowed = new Set(participantsOf(convId))
   const valid = ids.filter((u) => allowed.has(u) && u !== senderId)
@@ -1041,8 +1068,12 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
     // typing someone's name instead of just talking. Muting still silences every
     // other message in the thread.
     if (pinged.has(uid) && !dndLive) {
-      notify(conv.org_id, uid, 'chat_mention', `${sender.name} mentioned you${conv.type === 'group' ? ` in ${conv.name || 'Group'}` : ''}: ${short}`, null, at,
-        pushFor(uid, p?.last_read_at, `${sender.name} mentioned you: ${full}`))
+      // On a phone that draws the chat itself the line sits under the sender's
+      // name, so it says "Mentioned you" there; without it a mention looked
+      // like every other message in the group.
+      const push = pushFor(uid, p?.last_read_at, `${sender.name} mentioned you: ${full}`)
+      push.rich = { ...push.rich, text: clipForPush(`Mentioned you: ${preview}`) }
+      notify(conv.org_id, uid, 'chat_mention', `${sender.name} mentioned you${conv.type === 'group' ? ` in ${conv.name || 'Group'}` : ''}: ${short}`, null, at, push)
       continue
     }
     // DND silences everything, including a direct mention — that is the contract
@@ -1115,7 +1146,7 @@ r.post('/conversations/:id/messages', (req, res) => {
   const ts = now()
   db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, reply_to, kind, meta, read, created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?)')
     .run(mid, conv.org_id, conv.id, me.id, '', body, replyTo, kind, meta ? JSON.stringify(meta) : null, ts)
-  const mentioned = kind ? [] : saveMentions(conv.id, mid, req.body?.mentions, me.id)
+  const mentioned = kind ? [] : saveMentions(conv.id, mid, req.body?.mentions, me.id, body)
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
   deliver(conv, row, me, mentioned)
   res.status(201).json(shapeMessage(row, me.id, receiptCtx(conv.id, me.id)))
@@ -1159,7 +1190,7 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   let capMentions = []
   if (Array.isArray(req.body?.mentions)) capMentions = req.body.mentions
   else try { capMentions = JSON.parse(req.body?.mentions || '[]') } catch {}
-  const mentioned = saveMentions(conv.id, mid, capMentions, me.id)
+  const mentioned = saveMentions(conv.id, mid, capMentions, me.id, caption)
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
   deliver(conv, row, me, mentioned)
   res.status(201).json(shapeMessage(row, me.id, receiptCtx(conv.id, me.id)))
@@ -1183,9 +1214,9 @@ r.patch('/message/:id', (req, res) => {
   if (body === (m.body || '')) return res.json({ ok: true, body, edited_at: m.edited_at || null, mentions: mentionsByMessage([m.id])[m.id] || [] })
   const ts = now()
   db.prepare('UPDATE chat_messages SET body=?, edited_at=? WHERE id=?').run(body, ts, m.id)
-  if (Array.isArray(req.body?.mentions)) {
+  if (Array.isArray(req.body?.mentions) || body.includes('@')) {
     db.prepare('DELETE FROM chat_mentions WHERE message_id=?').run(m.id)
-    saveMentions(m.conversation_id, m.id, req.body.mentions, me.id)
+    saveMentions(m.conversation_id, m.id, req.body?.mentions, me.id, body)
   }
   const mentions = mentionsByMessage([m.id])[m.id] || []
   pushToConversation(m.conversation_id, { type: 'edit', conversationId: m.conversation_id, id: m.id, body, edited_at: ts, mentions })
@@ -3347,7 +3378,7 @@ export function runChatDue() {
       const mid = id('msg')
       db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, read, created_at) VALUES (?,?,?,?,?,?,0,?)')
         .run(mid, conv.org_id, conv.id, sender.id, '', sch.body, now())
-      const mentioned = saveMentions(conv.id, mid, sch.mentions ? sch.mentions.split(',').filter(Boolean) : [], sender.id)
+      const mentioned = saveMentions(conv.id, mid, sch.mentions ? sch.mentions.split(',').filter(Boolean) : [], sender.id, sch.body)
       const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
       deliver(conv, row, sender, mentioned)
     } catch (e) { console.error('[chat] scheduled message failed:', e.message) }

@@ -1841,6 +1841,11 @@ tbody tr:hover { background: var(--n-50); }
 .verify-pop-x { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 4px 6px; border-radius: var(--r-sm); flex-shrink: 0; }
 .verify-pop-x:hover { background: var(--bg); color: var(--text); }
 .verify-pop-actions { display: flex; gap: 8px; align-items: center; padding-left: 45px; }
+/* The browser-notifications offer (App.tsx WebPushPrompt): the email card's
+   corner and shape, in the accent rather than the warning colour. */
+.wp-pop { border-color: color-mix(in srgb, var(--primary) 35%, var(--border)); }
+.verify-pop-ic.wp-ic { background: color-mix(in srgb, var(--primary) 14%, var(--surface)); color: var(--primary); }
+.wp-ios-hint { margin: 0 0 10px; padding: 9px 11px; border-radius: 9px; background: color-mix(in srgb, var(--primary) 8%, var(--surface)); font-size: 13px; line-height: 1.45; }
 /* On phones: full-width and lifted above the voice FAB (bottom-right). */
 @media (max-width: 560px) {
   .verify-pop { left: 16px; right: 16px; width: auto; bottom: 88px; }

@@ -343,11 +343,14 @@ function markMatches(nodes: React.ReactNode[], q: string): React.ReactNode[] {
 
 function MessageText({ body, mentions, meId, fromMe, highlight }: { body: string; mentions?: MentionRef[]; meId: string; fromMe: boolean; highlight?: string }) {
   const refs = mentions || []
-  const names = refs.map((r) => r.name)
+  // A full name, and the first name alone: the server also counts "@Vinay"
+  // typed by hand for Vinay Kumar (chat.js mentionsInText).
+  const firstOf = (n: string) => n.trim().split(/\s+/)[0]
+  const names = [...new Set(refs.flatMap((r) => [r.name, firstOf(r.name)]))]
   // Which @names refer to ME — drives the stronger chip. @all counts, but not in
   // my own message, where I am the one doing the summoning.
   const meNames = new Set<string>()
-  for (const r of refs) if (r.id === meId) meNames.add(r.name.toLowerCase())
+  for (const r of refs) if (r.id === meId) { meNames.add(r.name.toLowerCase()); meNames.add(firstOf(r.name).toLowerCase()) }
   if (!fromMe) { meNames.add('all'); meNames.add('everyone') }
 
   const nodes: React.ReactNode[] = []

@@ -10,6 +10,7 @@
 // every function here is a safe no-op, so the app runs fine without push.
 import jwt from 'jsonwebtoken'
 import { db } from './db.js'
+import { sendWebPush } from './webPush.js'
 
 let svc = null // parsed service account
 let svcTried = false
@@ -95,6 +96,8 @@ export function removeDeviceToken(token) {
 // Older builds get the ordinary notification.
 export async function sendPushToUser(userId, { title, body, data, tag, rich }) {
   if (!userId) return
+  // The same notification to the browsers this person turned it on in.
+  sendWebPush(userId, { title, body, tag, data }).catch(() => {})
   const rows = db.prepare('SELECT token, chime, app_build FROM device_tokens WHERE user_id=?').all(userId)
   await sendToDevices(rows, { title, body, data, tag, rich })
 }
