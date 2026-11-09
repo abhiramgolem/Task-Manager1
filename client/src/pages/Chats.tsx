@@ -4,7 +4,7 @@ import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '.
 import { useAuth } from '../auth'
 import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
-import { clearChatNotifications } from '../push'
+import { clearChatNotifications, askBackgroundDelivery } from '../push'
 import { takeShare, onShare, type Shared } from '../lib/shareTarget'
 import { saveFile, shareOut } from '../lib/saveFile'
 import { toast } from '../lib/toast'
@@ -86,7 +86,10 @@ const DESK_MENU_ICONS: Record<string, React.ReactNode> = {
   info: <InfoGlyph size={16} />,
 }
 // A file waiting above the composer for Send; `url` is a preview for pictures.
-interface StagedFile { id: string; file: File; url: string | null }
+// Each has its own caption, as in Cliq and WhatsApp: several photos go in one
+// Send, each with its own words. The one picked in the tray is the one the box
+// is writing for; the rest keep theirs here.
+interface StagedFile { id: string; file: File; url: string | null; caption: string }
 // How many files can wait for one Send.
 const MAX_STAGED = 10
 // A message longer than this folds behind "Read more", as on WhatsApp — one
@@ -439,6 +442,11 @@ export default function Chats() {
   const [staged, setStaged] = useState<StagedFile[]>([])
   const stagedRef = useRef<StagedFile[]>([])
   stagedRef.current = staged
+  // Which staged file the box is captioning: the one tapped, else the first.
+  const [capId, setCapId] = useState<string | null>(null)
+  const capFor = staged.some((s) => s.id === capId) ? capId : (staged[0]?.id ?? null)
+  const capForRef = useRef<string | null>(null)
+  capForRef.current = capFor
   const [dropping, setDropping] = useState(false)
   const dragDepthRef = useRef(0)
   const [attachMenu, setAttachMenu] = useState(false)
@@ -1303,7 +1311,7 @@ export default function Chats() {
     if (ok.length > room) { toast.info(`Up to ${MAX_STAGED} files at a time`); ok = ok.slice(0, Math.max(0, room)) }
     if (!ok.length) return
     setStaged((cur) => [...cur, ...ok.map((file) => ({
-      id: Math.random().toString(36).slice(2), file,
+      id: Math.random().toString(36).slice(2), file, caption: '',
       url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
     }))])
     setAttachMenu(false)
@@ -1313,10 +1321,35 @@ export default function Chats() {
   const unstage = (id: string) => {
     const gone = stagedRef.current.find((s) => s.id === id)
     if (gone?.url) URL.revokeObjectURL(gone.url)
-    setStaged((cur) => cur.filter((s) => s.id !== id))
+    const rest = stagedRef.current.filter((s) => s.id !== id)
+    // The caption goes with its picture. The last one out leaves the words in
+    // the box, where they are now just a message.
+    if (id === capForRef.current && rest.length) { setCapId(rest[0].id); setInput(rest[0].caption) }
+    setStaged(rest)
     requestAnimationFrame(() => inputRef.current?.focus())
   }
+  // Tap a file in the tray to write its caption: what the box held goes back
+  // onto the one it was for. A second tap on a picture opens it full size.
+  const pickStaged = (id: string) => {
+    const was = capForRef.current
+    if (id === was) {
+      if (stagedRef.current.find((s) => s.id === id)?.url) setStagedAt(id)
+      else inputRef.current?.focus()
+      return
+    }
+    const next = stagedRef.current.find((s) => s.id === id)
+    if (!next) return
+    setStaged((cur) => cur.map((s) => (s.id === was ? { ...s, caption: input } : s)))
+    setCapId(id); setInput(next.caption); setMentionQ(null)
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
+  // Each staged file's caption as it stands, the picked one's being the box.
+  const stagedCaption = (s: StagedFile) => (s.id === capFor ? input : s.caption)
   useEffect(() => () => stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)), [])
+  // Chat is where a phone that stops VoTask in the background costs the most,
+  // so it is where the app asks to be let run (push.ts). A moment after
+  // opening, not over the list as it first draws.
+  useEffect(() => { const t = setTimeout(askBackgroundDelivery, 2500); return () => clearTimeout(t) }, [])
 
   // ---- shared from another app --------------------------------------------
   // As WhatsApp does: pick the chat, and what was shared waits in its box —
@@ -1408,30 +1441,36 @@ export default function Chats() {
   // behind it, each getting the whole uplink in turn rather than a share.
   const uploadQueue = useRef<Promise<void>>(Promise.resolve())
 
-  // Send what is staged: one message per file, in order, the caption (and the
-  // reply, and its @mentions) on the first. A file that fails goes back into
-  // the tray to try again, and the caption with it if it was riding on that one.
+  // Send what is staged: one message per file, in order, each with its own
+  // caption (and @mentions), the reply on the first. A file that fails goes
+  // back into the tray to try again, with its caption.
   const sendStaged = () => {
     const conv = active
     if (!conv || busy) return
-    const items = stagedRef.current
-    const caption = input.trim(); const rep = replyTo
-    const capMentions = caption ? resolveMentions(caption, picked, conv.members, user!.id) : []
-    setStaged([]); setInput(''); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
-    const pending = items.map((it, i) => addPending(conv, it.file, i === 0 ? caption : ''))
+    const items = stagedRef.current.map((s) => ({ ...s, caption: stagedCaption(s).trim() }))
+    const rep = replyTo
+    const mentionsOf = (caption: string) => (caption ? resolveMentions(caption, picked, conv.members, user!.id) : [])
+    setStaged([]); setCapId(null); setInput(''); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
+    const pending = items.map((it) => addPending(conv, it.file, it.caption))
     uploadQueue.current = uploadQueue.current.then(async () => {
       const failed: StagedFile[] = []
       for (let i = 0; i < items.length; i++) {
-        const first = i === 0
-        if (await uploadOne(conv, pending[i], items[i].file, first ? caption : '', first ? rep : null, first ? capMentions : [])) {
-          if (items[i].url) URL.revokeObjectURL(items[i].url!)
+        const it = items[i]
+        if (await uploadOne(conv, pending[i], it.file, it.caption, i === 0 ? rep : null, mentionsOf(it.caption))) {
+          if (it.url) URL.revokeObjectURL(it.url)
         } else {
-          failed.push(items[i])
-          if (first && caption) setInput((cur) => cur || caption)
+          failed.push(it)
         }
       }
       loadConvos()
-      if (failed.length && activeIdRef.current === conv.id) setStaged((cur) => [...failed, ...cur])
+      if (!failed.length || activeIdRef.current !== conv.id) return
+      // Back into an empty tray, the first one's caption goes back in the box,
+      // where it is edited; into a tray in use, they keep their own.
+      if (!stagedRef.current.length) {
+        setCapId(failed[0].id)
+        setInput((cur) => cur || failed[0].caption)
+      }
+      setStaged((cur) => [...failed, ...cur])
     }).catch(() => {}) // one batch going wrong must not stall every one after it
   }
 
@@ -1844,7 +1883,9 @@ export default function Chats() {
     el.style.height = 'auto'
     // Empty, scrollHeight is the placeholder's — a wrapped hint kept the box two
     // or three rows tall after every send. One row is right for an empty box.
-    if (el.value) el.style.height = Math.min(el.scrollHeight, 132) + 'px'
+    // The cap is the stylesheet's, in lines (styles.css .composer-input).
+    const cap = parseFloat(getComputedStyle(el).maxHeight) || 150
+    if (el.value) el.style.height = Math.min(el.scrollHeight, cap) + 'px'
   }
   useEffect(() => { autoGrow(inputRef.current) }, [input])
   // Each chat's unsent text, saved as it is typed — never an edit in progress,
@@ -3391,22 +3432,36 @@ export default function Chats() {
                 </div>
               )}
               {/* What will go with the next Send: pictures as thumbnails, other
-                  files by name. A picture opens full size, to be checked
-                  before it goes; ✕ takes one back out. */}
+                  files by name. With more than one, a tap picks the file the
+                  box is captioning (ringed), and a second tap on a picture
+                  opens it full size to check; ✕ takes one back out. */}
               {staged.length > 0 && (
-                <div className="stage-strip" role="group" aria-label={`${staged.length} file${staged.length === 1 ? '' : 's'} ready to send`}>
-                  {staged.map((s) => (
-                    <div key={s.id} className={'stage-item' + (s.url ? ' pic' : '')} title={s.file.name}>
-                      {s.url ? <button type="button" className="stage-open" onClick={() => setStagedAt(s.id)} aria-label={`View ${s.file.name}`}><img src={s.url} alt="" /></button>
-                        : (<>
-                          <span className={'stage-ic' + (isAudio({ name: s.file.name, type: s.file.type }) ? ' audio' : '')}>
-                            {isAudio({ name: s.file.name, type: s.file.type }) ? <Ic name="mic" size={16} /> : (/\.([a-z0-9]{1,5})$/i.exec(s.file.name)?.[1] || 'FILE').toUpperCase()}
-                          </span>
-                          <span className="stage-meta"><span className="stage-name">{s.file.name}</span><span className="stage-size">{fmtSize(s.file.size)}</span></span>
-                        </>)}
+                <div className={'stage-strip' + (staged.length > 1 ? ' multi' : '')} role="group" aria-label={`${staged.length} file${staged.length === 1 ? '' : 's'} ready to send`}>
+                  {staged.map((s, i) => {
+                    const sel = staged.length > 1 && s.id === capFor
+                    const said = stagedCaption(s).trim()
+                    const label = staged.length > 1
+                      ? (sel ? (s.url ? `View ${s.file.name}` : `Writing the caption for ${s.file.name}`) : `Write the caption for ${s.file.name}`)
+                      : `View ${s.file.name}`
+                    const audio = isAudio({ name: s.file.name, type: s.file.type })
+                    const fileCard = (<>
+                      <span className={'stage-ic' + (audio ? ' audio' : '')}>
+                        {audio ? <Ic name="mic" size={16} /> : (/\.([a-z0-9]{1,5})$/i.exec(s.file.name)?.[1] || 'FILE').toUpperCase()}
+                      </span>
+                      <span className="stage-meta"><span className="stage-name">{s.file.name}</span><span className="stage-size">{fmtSize(s.file.size)}</span></span>
+                    </>)
+                    return (
+                    <div key={s.id} className={'stage-item' + (s.url ? ' pic' : '') + (sel ? ' sel' : '')} title={said ? `${s.file.name}: ${said}` : s.file.name}>
+                      {s.url ? <button type="button" className="stage-open" onClick={() => (staged.length > 1 ? pickStaged(s.id) : setStagedAt(s.id))} aria-label={label} aria-pressed={staged.length > 1 ? sel : undefined}><img src={s.url} alt="" /></button>
+                        : staged.length > 1 ? (
+                          <button type="button" className="stage-open stage-file" onClick={() => pickStaged(s.id)} aria-label={label} aria-pressed={sel}>{fileCard}</button>
+                        ) : fileCard}
+                      {staged.length > 1 && <span className="stage-num" aria-hidden="true">{i + 1}</span>}
+                      {said && !sel && <span className="stage-said" aria-hidden="true" title={said}><Ic name="chat" size={10} /></span>}
                       <button className="stage-x" aria-label={`Remove ${s.file.name}`} title="Remove" onClick={() => unstage(s.id)}><Ic name="close" size={12} /></button>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
               <div className="chat-input chat-compose">
@@ -3518,7 +3573,10 @@ export default function Chats() {
                       className="composer-input"
                       data-va="chats.composer"
                       rows={1}
-                      placeholder={editing ? 'Edit your message…' : staged.length ? 'Add a caption…' : placeholder}
+                      placeholder={editing ? 'Edit your message…' : staged.length > 1 ? (() => {
+                        const i = staged.findIndex((s) => s.id === capFor)
+                        return `Caption for ${staged[i]?.url ? 'photo' : 'file'} ${i + 1} of ${staged.length}…`
+                      })() : staged.length ? 'Add a caption…' : placeholder}
                       value={input}
                       onChange={onComposerChange}
                       onKeyDown={onComposerKey}
@@ -3736,7 +3794,7 @@ export default function Chats() {
       {stagedAt && (
         <PhotoViewer
           label="Picture to send"
-          items={staged.filter((s) => s.url).map((s) => ({ id: s.id, src: s.url!, alt: s.file.name, title: s.file.name, subtitle: `Not sent yet · ${fmtSize(s.file.size)}` }))}
+          items={staged.filter((s) => s.url).map((s) => ({ id: s.id, src: s.url!, alt: s.file.name, title: s.file.name, subtitle: `Not sent yet · ${fmtSize(s.file.size)}`, caption: stagedCaption(s) || undefined }))}
           startId={stagedAt}
           onClose={() => setStagedAt(null)}
         />
