@@ -158,8 +158,13 @@ async function sendToDevices(rows, { title, body, data, tag, rich }) {
       if (res.ok) { sent++; return }
       const err = await res.json().catch(() => ({}))
       const status = err?.error?.status || ''
-      // Prune tokens FCM says are gone/invalid so they don't pile up.
-      if (res.status === 404 || status === 'NOT_FOUND' || status === 'UNREGISTERED' || status === 'INVALID_ARGUMENT') {
+      // Prune tokens FCM says are gone/invalid so they don't pile up. A bare
+      // INVALID_ARGUMENT is also FCM's answer to a payload it will not take
+      // (too big, a bad field), and pruning on that silently cut a phone off
+      // until the app was next opened and registered again. Only a refusal
+      // that names the token itself means the token is bad.
+      const badToken = status === 'INVALID_ARGUMENT' && /registration token/i.test(err?.error?.message || '')
+      if (res.status === 404 || status === 'NOT_FOUND' || status === 'UNREGISTERED' || badToken) {
         db.prepare('DELETE FROM device_tokens WHERE token=?').run(tok)
       } else {
         console.warn('  [push] send failed', res.status, JSON.stringify(err).slice(0, 150))

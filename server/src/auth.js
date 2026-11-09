@@ -34,7 +34,7 @@ export function signToken(user, sessionId = null) {
 // A token is good only while its session is. Tokens issued before sessions
 // existed carry no sid — those stay valid rather than logging everyone out on
 // deploy; they simply can't be listed or revoked until their next sign-in.
-function sessionOk(payload) {
+export function sessionOk(payload) {
   if (!payload?.sid) return true
   const row = db.prepare('SELECT revoked_at FROM sessions WHERE id=?').get(payload.sid)
   return !!row && !row.revoked_at
