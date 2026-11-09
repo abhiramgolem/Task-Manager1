@@ -42,8 +42,11 @@ public class CallMessagingService extends MessagingService {
 
     @Override
     public void onNewToken(@NonNull String token) {
-        // Unchanged: Capacitor still hands new tokens to push.ts, which
-        // re-registers the device with the server.
+        // Capacitor hands new tokens to push.ts, which re-registers the device
+        // with the server, but only while the app is running. Closed, the token
+        // would go nowhere until the app was next opened, and every push in
+        // between would go to the old one (PushSetupPlugin).
         super.onNewToken(token);
+        PushSetupPlugin.sendNewToken(getApplicationContext(), token);
     }
 }

@@ -4175,6 +4175,10 @@ body.chats-page .content { max-width: none; }
 .composer-box .composer-input {
   flex: 1; min-width: 0; align-self: center; border: 0; background: transparent; box-shadow: none; border-radius: 0;
   padding: 8px 4px; font-size: 15px; line-height: 1.4;
+  /* Lines, not pixels, so it holds at any font size: a long message is read
+     back whole before it is sent, as on WhatsApp Web. Then it scrolls.
+     autoGrow (Chats.tsx) reads this cap. */
+  max-height: calc(1.4em * 10 + 16px);
 }
 .composer-box .composer-input:focus { border: 0; box-shadow: none; outline: none; }
 .composer-box .composer-input::placeholder { white-space: nowrap; overflow: hidden; }
@@ -4226,6 +4230,22 @@ body.chats-page .content { max-width: none; }
   border: 0; border-radius: 50%; background: rgba(15,23,42,.72); color: #fff; cursor: pointer;
 }
 .stage-x:hover { background: rgba(15,23,42,.9); }
+/* Several files: each is a button that picks the one the box is captioning,
+   ringed in the accent and numbered, so "Caption for photo 2 of 3" points at
+   something. A file that already has its caption wears a small speech mark. */
+.stage-strip.multi { padding-top: 6px; }
+.stage-item.sel { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+.stage-strip.multi .stage-open { cursor: pointer; }
+.stage-file { display: flex; align-items: center; gap: 9px; text-align: left; color: inherit; font: inherit; }
+.stage-num {
+  position: absolute; left: 4px; bottom: 4px; min-width: 18px; height: 18px; padding: 0 5px; display: grid; place-items: center;
+  border-radius: 9px; background: rgba(15,23,42,.72); color: #fff; font-size: 11px; font-weight: 700; pointer-events: none;
+}
+.stage-item.sel .stage-num { background: var(--primary); }
+.stage-said {
+  position: absolute; right: 4px; bottom: 4px; width: 18px; height: 18px; display: grid; place-items: center;
+  border-radius: 50%; background: rgba(15,23,42,.72); color: #fff; pointer-events: none;
+}
 
 /* Files dragged over the thread: the pane says where they will go. */
 .chat-layout .chat-pane { position: relative; }
@@ -5409,8 +5429,9 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
   .chat-peer-actions .jump-pop { right: 4px; }
   .chat-layout .chat-log { padding: 10px; }
   .chat-layout .composer { padding: 6px 8px 8px; }
-  /* 16px: iOS zooms the page into any field set smaller when it takes focus. */
-  .composer-box .composer-input { font-size: 16px; }
+  /* 16px: iOS zooms the page into any field set smaller when it takes focus.
+     Six lines before it scrolls, as WhatsApp's box on a phone. */
+  .composer-box .composer-input { font-size: 16px; max-height: calc(1.4em * 6 + 16px); }
   /* A file's bubble is as wide as what it holds. The 85% cap above resolves
      against a column sized by the bubble itself, which shrank a 240px picture's
      bubble to ~230px and left the picture hanging out of its right edge. */
@@ -5510,6 +5531,15 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .chat-layout .bubble .bubble-foot-spacer { font-size: 11px; }
 /* Under a file's caption the time sits at the end, clear of the words. */
 .chat-layout .file-bubble .bubble-foot { float: right; margin: 4px 0 0 10px; }
+/* A phone reads messages at WhatsApp's size: 16px text, not the desktop's
+   14.5px, which on a phone held at arm's length was hard to read. */
+@media (max-width: 720px) {
+  .chat-layout .bubble { font-size: 16px; line-height: 1.38; padding: 6px 10px 8px; }
+  .chat-layout .bubble .msg-sender { font-size: 13.5px; }
+  .chat-layout .bubble .bubble-foot,
+  .chat-layout .bubble.user .bubble-foot,
+  .chat-layout .bubble .bubble-foot-spacer { font-size: 11.5px; }
+}
 /* The dark theme fills every textarea; inside the pill it is the pill. */
 :root[data-theme="dark"] .chat-layout .composer-box .composer-input { background: transparent; }
 .chat-layout .bubble.user .ticks,

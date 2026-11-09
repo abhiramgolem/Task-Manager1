@@ -33,6 +33,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ShareTargetPlugin.class);
         registerPlugin(AppUpdatePlugin.class);
         registerPlugin(FileDownloadPlugin.class);
+        registerPlugin(PushSetupPlugin.class);
         super.onCreate(savedInstanceState);
         // A recreated activity (rotation, process restore) carries the original
         // launch intent again; answering it a second time would rejoin a call

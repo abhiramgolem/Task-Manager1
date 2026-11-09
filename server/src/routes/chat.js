@@ -981,12 +981,27 @@ r.delete('/conversations/:id/members/:userId', (req, res) => {
 })
 
 // ---------- messages ----------
+// A message as long as a push can carry. FCM refuses a payload over 4 KB, and
+// a JS character is at most 3 bytes of UTF-8 (an emoji is two characters, 4
+// bytes), so 600 characters stay under 1.8 KB with room for the rest of it.
+const PUSH_TEXT_MAX = 600
+function clipForPush(text) {
+  if (text.length <= PUSH_TEXT_MAX) return text
+  let cut = PUSH_TEXT_MAX
+  // Never split an emoji's surrogate pair: half of one is an invalid string.
+  const c = text.charCodeAt(cut - 1)
+  if (c >= 0xd800 && c <= 0xdbff) cut--
+  return text.slice(0, cut) + '…'
+}
 function deliver(conv, msgRow, sender, mentioned = []) {
   touchConvo(conv.id)
   const others = participantsOf(conv.id).filter((u) => u !== sender.id)
   const label = conv.type === 'group' ? `${sender.name} in ${conv.name || 'Group'}` : sender.name
   const preview = snippet(msgRow)
   const short = preview.length > 70 ? preview.slice(0, 70) + '…' : preview
+  // The phone shows the whole message when its notification is pulled down,
+  // as WhatsApp does; 70 characters is only for the bell's one-line list.
+  const full = clipForPush(preview)
   const pinged = new Set(mentioned)
   const at = { conversationId: conv.id, messageId: msgRow.id } // tapping it opens this line
   // On the phone a chat is ONE notification, as in Cliq and WhatsApp: titled
@@ -1005,13 +1020,13 @@ function deliver(conv, msgRow, sender, mentioned = []) {
       LIMIT ${UNREAD_CAP})`)
   // `rich`: the same line for a phone that draws the chat's notification
   // itself, listing each message under its sender (push.js sendPushToUser).
-  const rich = { chat: chatTitle, sender: sender.name, text: short, group: conv.type === 'group' }
+  const rich = { chat: chatTitle, sender: sender.name, text: full, group: conv.type === 'group' }
   const pushFor = (uid, lastReadAt, line) => {
     const n = unreadOf.get(conv.id, uid, lastReadAt || '', uid).c
     const count = n > 1 ? ` · ${n >= UNREAD_CAP ? `${UNREAD_CAP}+` : n} new messages` : ''
     return { title: chatTitle + count, body: line, tag, rich: { ...rich, act: notifActionFor(conv.id, uid) } }
   }
-  const groupLine = conv.type === 'group' ? `${sender.name}: ${short}` : short
+  const groupLine = conv.type === 'group' ? `${sender.name}: ${full}` : full
   for (const uid of others) {
     const p = db.prepare('SELECT muted, muted_until, last_read_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, uid)
     // A timed mute that has run out is not a mute any more. Checked on read
@@ -1024,7 +1039,7 @@ function deliver(conv, msgRow, sender, mentioned = []) {
     // other message in the thread.
     if (pinged.has(uid) && !dndLive) {
       notify(conv.org_id, uid, 'chat_mention', `${sender.name} mentioned you${conv.type === 'group' ? ` in ${conv.name || 'Group'}` : ''}: ${short}`, null, at,
-        pushFor(uid, p?.last_read_at, `${sender.name} mentioned you: ${short}`))
+        pushFor(uid, p?.last_read_at, `${sender.name} mentioned you: ${full}`))
       continue
     }
     // DND silences everything, including a direct mention — that is the contract
