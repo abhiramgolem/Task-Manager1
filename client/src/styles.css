@@ -4591,6 +4591,77 @@ button.reply-quote {
 .pc-multi { display: flex; align-items: center; gap: 9px; margin-top: 10px; font-size: 13.5px; cursor: pointer; }
 .pc-warn { font-size: 12.5px; color: var(--danger-ink); margin: 4px 0; }
 
+/* ---- daily update card (components/chat/DailyUpdate.tsx) ---------------------
+   In the thread: the card's name and day, then each number with its target, a
+   bar, and a tick on the bar where the month says it should be by today. */
+.du-card { padding: 4px 4px 2px; color: var(--text); }
+.du-head { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.du-ic { width: 22px; height: 22px; flex-shrink: 0; display: grid; place-items: center; border-radius: 6px; background: #0d9488; color: #fff; }
+.du-title { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.du-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.du-row { padding: 6px 0; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
+.du-line { display: flex; align-items: baseline; gap: 10px; }
+.du-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.du-val { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.du-of { font-weight: 500; color: var(--muted); }
+.du-today { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.du-bar { position: relative; height: 6px; margin-top: 6px; border-radius: 3px; background: color-mix(in srgb, currentColor 14%, transparent); }
+.du-bar span { display: block; height: 100%; border-radius: 3px; transition: width .25s; }
+.du-bar span.good { background: #16a34a; }
+.du-bar span.behind { background: #d97706; }
+.du-bar i { position: absolute; top: -3px; width: 2px; height: 12px; margin-left: -1px; border-radius: 1px; background: var(--text); opacity: .55; }
+.du-sub { font-size: 12px; margin-top: 3px; }
+.du-sub.good { color: #15803d; }
+.du-sub.behind { color: #b45309; }
+:root[data-theme="dark"] .du-sub.good { color: #4ade80; }
+:root[data-theme="dark"] .du-sub.behind { color: #fbbf24; }
+.du-note { margin-top: 6px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* The sheet: set up once, then fill in. */
+.du-loading { display: grid; place-items: center; padding: 30px; }
+.du-sheet-title { display: inline-flex; align-items: center; gap: 7px; }
+.du-intro { margin: 0 0 10px; font-size: 13.5px; color: var(--muted); }
+.du-def { padding: 8px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; display: grid; gap: 6px; }
+.du-def-top, .du-def-more { display: flex; gap: 6px; align-items: center; }
+.du-def-more .ta-input { flex: 1; min-width: 0; }
+.du-def-more .du-unit { flex: 0 0 84px; }
+.ta-input.bad { border-color: var(--danger-ink); }
+.du-mode { display: flex; gap: 4px; padding: 3px; border-radius: 9px; background: var(--bg); }
+.du-mode button { flex: 1; padding: 6px 6px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.du-mode button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.du-add { margin-bottom: 4px; }
+.du-remind { flex-wrap: wrap; }
+.du-time { width: auto; padding: 5px 8px; }
+.du-days { display: flex; gap: 6px; margin: 8px 0 4px 27px; }
+.du-days button { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.du-days button.on { background: #0d9488; border-color: #0d9488; color: #fff; }
+.du-stop { display: block; margin: 14px 0 0; padding: 0; border: 0; background: none; color: var(--danger-ink); font: inherit; font-size: 13px; cursor: pointer; }
+.du-fill-day { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.du-again { font-size: 12.5px; padding: 7px 10px; border-radius: 8px; margin-bottom: 8px; background: color-mix(in srgb, #d97706 12%, var(--surface)); }
+.du-field { margin-bottom: 10px; }
+.du-field label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.du-field-name { font-weight: 600; font-size: 14px; }
+.du-field-hint { font-size: 12px; color: var(--muted); text-align: right; }
+.du-field .ta-input { font-size: 16px; }
+.du-field-total { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.du-note-in { resize: vertical; }
+.du-sheet .wa-sheet-foot { justify-content: space-between; }
+
+/* Under the chat's header: how many have posted today. */
+.du-today-wrap { border-bottom: 1px solid var(--border); background: var(--surface); }
+.du-today-bar { display: flex; align-items: center; gap: 6px; padding: 5px 8px; }
+.du-today-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 3px 4px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+.du-today-main:hover { background: var(--bg); }
+.du-today-main > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.du-people { list-style: none; margin: 0; padding: 0 8px 6px; max-height: 260px; overflow-y: auto; }
+.du-people button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 6px 4px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.du-people button:disabled { cursor: default; }
+.du-people button:not(:disabled):hover { background: var(--bg); }
+.du-person { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.du-state { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.du-state.ok { color: #15803d; }
+:root[data-theme="dark"] .du-state.ok { color: #4ade80; }
+
 /* A shared place: three map tiles centred on the pin, and its name. */
 .loc-card { display: block; width: 264px; max-width: 100%; border-radius: 10px; overflow: hidden; color: inherit; text-decoration: none; background: var(--surface); border: 1px solid var(--border); }
 .loc-map { position: relative; display: block; overflow: hidden; background: #e5e7eb; max-width: 100%; }
@@ -4665,6 +4736,7 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .ag-ic.doc { background: #7c3aed; } .ag-ic.media { background: #db2777; } .ag-ic.cam { background: #e11d48; }
 .ag-ic.loc { background: #16a34a; } .ag-ic.contact { background: #0284c7; } .ag-ic.poll { background: #d97706; }
 .ag-ic.task { background: var(--primary); } .ag-ic.paste { background: #475569; }
+.ag-ic.update { background: #0d9488; }
 
 /* Sheets: a card in the middle on a wide screen, from the bottom on a phone. */
 .wa-sheet { max-width: 440px; padding: 0; overflow: hidden; }

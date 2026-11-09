@@ -20,6 +20,7 @@ import assistantRoutes from './routes/assistant.js'
 import notificationRoutes from './routes/notifications.js'
 import digestRoutes from './routes/digest.js'
 import chatRoutes, { callLiveHooks } from './routes/chat.js'
+import dailyUpdateRoutes from './routes/dailyUpdates.js'
 import platformRoutes from './routes/platform.js'
 import usageRoutes from './routes/usage.js'
 import scoreRoutes from './routes/scores.js'
@@ -90,6 +91,7 @@ app.use('/api/dashboards', dashboardRoutes)
 app.use('/api/assistant', assistantRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/digest', digestRoutes)
+app.use('/api/chat', dailyUpdateRoutes) // daily update cards; per-route auth
 app.use('/api/chat', chatRoutes)
 app.use('/api/platform', platformRoutes)
 app.use('/api/usage', usageRoutes)

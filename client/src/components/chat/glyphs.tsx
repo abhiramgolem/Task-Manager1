@@ -8,6 +8,8 @@ const Svg = ({ size = 18, children, fill = 'none' }: G & { children: React.React
 )
 
 export const CopyGlyph = ({ size = 19 }: G) => <Svg size={size}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></Svg>
+// A line going up: the daily update card (DailyUpdate.tsx).
+export const TrendGlyph = ({ size }: G) => <Svg size={size}><path d="M3 17l6-6 4 4 8-8" /><path d="M15 7h6v6" /></Svg>
 export const PollGlyph = ({ size }: G) => <Svg size={size}><path d="M5 20V10" /><path d="M12 20V4" /><path d="M19 20v-7" /></Svg>
 export const PinDropGlyph = ({ size }: G) => <Svg size={size}><path d="M12 22s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z" /><circle cx="12" cy="10" r="2.5" /></Svg>
 export const ContactGlyph = ({ size }: G) => <Svg size={size}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Svg>

@@ -12,7 +12,7 @@ import { LocationCard } from './MessageCards'
 // sheet from the bottom on a phone (.wa-sheet), with lib/useDialog's focus
 // handling: focus moves in, Tab stays in, Escape closes, focus goes back.
 
-function Sheet({ label, title, onClose, children, foot, className }: {
+export function Sheet({ label, title, onClose, children, foot, className }: {
   label: string; title: React.ReactNode; onClose: () => void; children: React.ReactNode; foot?: React.ReactNode; className?: string
 }) {
   const ref = useDialog<HTMLDivElement>(onClose)

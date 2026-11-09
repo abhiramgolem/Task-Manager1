@@ -42,11 +42,22 @@ export interface ContactRef { id: string; name: string; email?: string; role?: s
 // 'poll', 'task', 'location' or 'contact', each with its own field below.
 export interface Msg {
   id: string; conversation_id: string; sender_id: string; body: string; created_at: string
-  kind?: 'system' | 'poll' | 'task' | 'location' | 'contact' | null
+  kind?: 'system' | 'poll' | 'task' | 'location' | 'contact' | 'update' | null
   edited_at?: string | null; forwarded?: boolean; reply_to?: string | null; reply?: ReplyPreview | null; file?: ChatFile | null
   reactions: Reaction[]; mentions?: MentionRef[]; starred: boolean; seen: boolean; delivered?: boolean; deleted?: boolean; uploading?: boolean; progress?: number
   pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null; meeting?: MeetingCard | null
   system?: string | null; poll?: Poll | null; task?: TaskRef | null; location?: LocationRef | null; contact?: ContactRef | null
+  update?: UpdateMeta | null
+}
+// A daily update card (server routes/dailyUpdates.js). A metric is 'total'
+// when its owner enters the month's figure so far, 'daily' when they enter
+// today's and the month is added up; `total` is the month either way.
+export interface UpdateMetricDef { id: string; label: string; target: number | null; unit: string; mode: 'total' | 'daily' }
+export interface UpdateMetric extends UpdateMetricDef { value: number | null; total: number | null }
+export interface UpdateMeta { template_id: string; title: string; day: string; metrics: UpdateMetric[]; note?: string }
+export interface UpdateTemplate {
+  id: string; conversation_id: string; title: string; metrics: UpdateMetricDef[]
+  remind_at: string | null; remind_days: number[]; last_posted_date: string | null
 }
 export interface OrgUser { id: string; name: string; email: string; role: string; avatar_color?: string; avatar_file?: string | null }
 export type Workload = Record<string, { open: number; overdue: number }>

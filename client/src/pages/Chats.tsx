@@ -26,13 +26,14 @@ import type { Member, Conversation, MentionRef, ChatFile, Msg, OrgUser, Location
 import { fileUrl, isAudio, isEditable, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
 import ChatVideo from '../components/chat/ChatVideo'
 import {
-  CopyGlyph, Ticks, PollGlyph, PinDropGlyph, ContactGlyph, CameraGlyph, GalleryGlyph, DocGlyph, TaskGlyph,
+  CopyGlyph, Ticks, PollGlyph, TrendGlyph, PinDropGlyph, ContactGlyph, CameraGlyph, GalleryGlyph, DocGlyph, TaskGlyph,
   ArchiveGlyph, InfoGlyph, SelectGlyph, ExportGlyph, PencilGlyph, ChevronDown, DotsV, SparkGlyph,
 } from '../components/chat/glyphs'
 import TaskAssignSheet, { Draft } from '../components/chat/TaskAssignSheet'
 import { TaskCard, PollCard, PollVotesSheet, LocationCard, ContactCard, LinkPreview, CallSummaryCard } from '../components/chat/MessageCards'
 import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPicker, CallsSheet, DescriptionEditor } from '../components/chat/ChatDialogs'
 import MediaViewer from '../components/chat/MediaViewer'
+import { UpdateCard, UpdateSheet, TodayUpdates } from '../components/chat/DailyUpdate'
 import PhotoViewer from '../components/PhotoViewer'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
 import ChatInfoPanel from '../components/ChatInfoPanel'
@@ -571,6 +572,10 @@ export default function Chats() {
   // touch screen) by tapping a second message while one is selected.
   const [multi, setMulti] = useState<string[] | null>(null)
   const [pollOpen, setPollOpen] = useState(false)
+  // The daily update card's sheet (DailyUpdate.tsx), and a counter that makes
+  // the "posted today" line under the header ask again.
+  const [updateOpen, setUpdateOpen] = useState(false)
+  const [todayTick, setTodayTick] = useState(0)
   const [votesFor, setVotesFor] = useState<string | null>(null)
   const [locOpen, setLocOpen] = useState(false)
   const [contactOpen, setContactOpen] = useState(false)
@@ -885,6 +890,8 @@ export default function Chats() {
     const review = params.get('review')
     const reviewView: InfoView | null = review ? { view: 'summary', meetingId: review, review: true } : null
     if (!c || !user) return
+    // ?update=1: the daily update reminder, which opens the card to fill in.
+    if (params.get('update')) setUpdateOpen(true)
     if (c === activeIdRef.current) {
       // Already open (a notification for the chat on screen). The thread will
       // not reload, so land on the line from here. The link arrived as an
@@ -1098,8 +1105,8 @@ export default function Chats() {
     if (recording) { finishVoiceNote(true); return true }
     if (mentionQ) { setMentionQ(null); return true }
     if (reactionsOf) { setReactionsOf(null); return true }
-    if (assignFor || infoFor || deleteFor || pollOpen || votesFor || locOpen || contactOpen || callsOpen || descOpen) {
-      setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
+    if (assignFor || infoFor || deleteFor || pollOpen || updateOpen || votesFor || locOpen || contactOpen || callsOpen || descOpen) {
+      setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setUpdateOpen(false); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
       return true
     }
     if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen) { setMenuId(null); setReactFor(null); setConvoMenu(null); setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); return true }
@@ -1117,7 +1124,7 @@ export default function Chats() {
     if (activeId) { setActiveId(''); return true } // open chat → back to the list
     if (showArchived) { setShowArchived(false); return true }
     return false
-  }), [viewerAt, stagedAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
+  }), [viewerAt, stagedAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, updateOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
 
   // Escape closes the top-most of this page's own popups — a menu or picker,
   // then the selected message — one layer per press. Dialogs, the emoji picker
@@ -1203,6 +1210,9 @@ export default function Chats() {
           setConvos((cs) => cs.map((c) => (c.id === d.conversationId && c.last_from_me && c.last_at
             ? { ...c, last_seen: !!d.read_upto && c.last_at <= d.read_upto, last_delivered: (!!d.delivered_upto && c.last_at <= d.delivered_upto) || (!!d.read_upto && c.last_at <= d.read_upto) }
             : c)))
+        } else if (d.type === 'updates-today') {
+          // Someone posted a daily update here, or started or stopped reporting.
+          if (inActive) setTodayTick((n) => n + 1)
         } else if (d.type === 'poll') {
           if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, poll: d.poll } : m)))
         } else if (d.type === 'reaction') {
@@ -3080,6 +3090,11 @@ export default function Chats() {
             </div>
           )}
 
+          {active && (
+            <TodayUpdates convId={active.id} refreshKey={todayTick} meId={user!.id} onFill={() => setUpdateOpen(true)}
+              onOpen={(mid) => { if (!scrollToMessage(mid)) setLandOn(mid) }} />
+          )}
+
           {inSearchOpen && (
             <div className="in-search">
               <input autoFocus placeholder="Search messages…" value={inSearch} onChange={(e) => setInSearch(e.target.value)}
@@ -3262,6 +3277,7 @@ export default function Chats() {
                           {m.kind === 'poll' && m.poll && (
                             <PollCard msg={m} meId={user!.id} members={active?.members || []} onVote={(picks) => vote(m, picks)} onViewVotes={() => setVotesFor(m.id)} />
                           )}
+                          {m.kind === 'update' && m.update && <UpdateCard update={m.update} />}
                           {m.kind === 'task' && m.task && <TaskCard task={m.task} meId={user!.id} onOpen={() => setOpenTaskId(m.task!.id)} />}
                           {m.kind === 'location' && m.location && <LocationCard loc={m.location} />}
                           {m.kind === 'contact' && <ContactCard contact={m.contact || null} meId={user!.id} onMessage={messageUser} />}
@@ -3516,6 +3532,7 @@ export default function Chats() {
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setLocOpen(true) }}><span className="ag-ic loc"><PinDropGlyph size={20} /></span>Location</button>
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setContactOpen(true) }}><span className="ag-ic contact"><ContactGlyph size={20} /></span>Contact</button>
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setPollOpen(true) }}><span className="ag-ic poll"><PollGlyph size={20} /></span>Poll</button>
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); setUpdateOpen(true) }}><span className="ag-ic update"><TrendGlyph size={20} /></span>Daily update</button>
                     <button role="menuitem" onClick={() => { setAttachMenu(false); draftFromComposer() }}><span className="ag-ic task"><TaskGlyph size={20} /></span>Task</button>
                     {touchUI && canReadClipboardImages() && (
                       <button role="menuitem" onClick={pasteFromClipboard}>
@@ -3747,6 +3764,7 @@ export default function Chats() {
       )}
       {deleteFor && <DeleteDialog count={deleteFor.length} canEveryone={canDeleteForAll(deleteFor)} onPick={(scope) => doDelete(deleteFor, scope)} onClose={() => setDeleteFor(null)} />}
       {pollOpen && <PollComposer onSend={sendPoll} onClose={() => setPollOpen(false)} />}
+      {updateOpen && activeId && <UpdateSheet convId={activeId} onClose={() => setUpdateOpen(false)} onPosted={() => { setUpdateOpen(false); setTodayTick((n) => n + 1) }} />}
       {votesFor && active && (() => {
         const vm = messages.find((x) => x.id === votesFor)
         return vm?.poll ? <PollVotesSheet msg={vm} members={active.members} meId={user!.id} onClose={() => setVotesFor(null)} /> : null
