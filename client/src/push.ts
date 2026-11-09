@@ -7,7 +7,6 @@
 // opens the relevant screen.
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { api, API_BASE } from './api'
-import { confirmDialog } from './lib/confirm'
 import { nativeCallsAvailable, configureNativeCalls } from './lib/nativeCall'
 import { notifTarget, replacesEntry } from './lib/notifTarget'
 import { shareTargetAvailable } from './lib/shareTarget'
@@ -25,8 +24,6 @@ const REREGISTER_MS = 6 * 3600_000
 interface PushSetup {
   setTokenSync(o: { url: string; token: string; uid: string; sid: string; exp: string; sig: string }): Promise<void>
   clearTokenSync(): Promise<void>
-  status(): Promise<{ batteryUnrestricted: boolean; backgroundRestricted: boolean; notificationsEnabled: boolean; manufacturer: string }>
-  openAppSettings(): Promise<void>
 }
 const PushSetupNative = registerPlugin<PushSetup>('PushSetup')
 const pushSetupAvailable = () => Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('PushSetup')
@@ -176,32 +173,3 @@ export async function unregisterPush() {
   started = false
 }
 
-// A phone that puts VoTask to sleep, or force-stops it when it is swiped off
-// the recent apps, gets no pushes at all until VoTask is opened again. That is
-// the phone's battery manager, not the network or the server, and only the
-// person can lift it. Asked from Chats, where missed messages are the cost,
-// at most three times, a week apart.
-const BATTERY_ASK_KEY = 'votask_battery_ask'
-export async function askBackgroundDelivery() {
-  if (!pushSetupAvailable()) return
-  let asked = { n: 0, at: 0 }
-  try { asked = { ...asked, ...JSON.parse(localStorage.getItem(BATTERY_ASK_KEY) || '{}') } } catch { return }
-  if (asked.n >= 3 || Date.now() - asked.at < 7 * 86400_000) return
-  let st
-  try { st = await PushSetupNative.status() } catch { return }
-  if (st.batteryUnrestricted && st.notificationsEnabled) return
-  try { localStorage.setItem(BATTERY_ASK_KEY, JSON.stringify({ n: asked.n + 1, at: Date.now() })) } catch { return }
-  const where = /xiaomi|redmi|poco/i.test(st.manufacturer)
-    ? 'In App info, turn on Autostart, then open Battery saver and choose No restrictions.'
-    : /vivo|oppo|realme|oneplus|iqoo/i.test(st.manufacturer)
-      ? 'In App info, open Battery, allow background activity, and turn on Auto launch if your phone has it.'
-      : 'In App info, open Battery and choose Unrestricted.'
-  const yes = await confirmDialog({
-    title: st.notificationsEnabled ? 'Get chat messages when VoTask is closed' : 'Turn on VoTask notifications',
-    message: st.notificationsEnabled
-      ? `Your phone is saving battery by stopping VoTask in the background, so new messages can wait until you open the app. ${where}`
-      : 'Notifications are off for VoTask, so new messages and tasks only show when you open the app. In App info, open Notifications and turn them on.',
-    confirmText: 'Open settings', cancelText: 'Not now',
-  })
-  if (yes) { try { await PushSetupNative.openAppSettings() } catch {} }
-}

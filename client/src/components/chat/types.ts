@@ -52,7 +52,8 @@ export interface Msg {
 // A daily update card (server routes/dailyUpdates.js). A metric is 'total'
 // when its owner enters the month's figure so far, 'daily' when they enter
 // today's and the month is added up; `total` is the month either way.
-export interface UpdateMetricDef { id: string; label: string; target: number | null; unit: string; mode: 'total' | 'daily' }
+// `stretch`: the top of a target range ("6L-18L"); the bar measures `target`.
+export interface UpdateMetricDef { id: string; label: string; target: number | null; stretch?: number | null; unit: string; mode: 'total' | 'daily' }
 export interface UpdateMetric extends UpdateMetricDef { value: number | null; total: number | null }
 export interface UpdateMeta { template_id: string; title: string; day: string; metrics: UpdateMetric[]; note?: string }
 export interface UpdateTemplate {

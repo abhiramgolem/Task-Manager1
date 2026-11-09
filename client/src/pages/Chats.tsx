@@ -4,7 +4,7 @@ import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '.
 import { useAuth } from '../auth'
 import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
-import { clearChatNotifications, askBackgroundDelivery } from '../push'
+import { clearChatNotifications } from '../push'
 import { takeShare, onShare, type Shared } from '../lib/shareTarget'
 import { saveFile, shareOut } from '../lib/saveFile'
 import { toast } from '../lib/toast'
@@ -575,6 +575,7 @@ export default function Chats() {
   // The daily update card's sheet (DailyUpdate.tsx), and a counter that makes
   // the "posted today" line under the header ask again.
   const [updateOpen, setUpdateOpen] = useState(false)
+  const [updateEdit, setUpdateEdit] = useState<string | null>(null) // a posted card being corrected
   const [todayTick, setTodayTick] = useState(0)
   const [votesFor, setVotesFor] = useState<string | null>(null)
   const [locOpen, setLocOpen] = useState(false)
@@ -1106,7 +1107,7 @@ export default function Chats() {
     if (mentionQ) { setMentionQ(null); return true }
     if (reactionsOf) { setReactionsOf(null); return true }
     if (assignFor || infoFor || deleteFor || pollOpen || updateOpen || votesFor || locOpen || contactOpen || callsOpen || descOpen) {
-      setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setUpdateOpen(false); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
+      setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setUpdateOpen(false); setUpdateEdit(null); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
       return true
     }
     if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen) { setMenuId(null); setReactFor(null); setConvoMenu(null); setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); return true }
@@ -1196,7 +1197,7 @@ export default function Chats() {
           setTypingIn((t) => { if (!t[d.conversationId]) return t; const n = { ...t }; delete n[d.conversationId]; return n })
           loadConvos()
         } else if (d.type === 'edit') {
-          if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, body: d.body, edited_at: d.edited_at, mentions: d.mentions || m.mentions } : m)))
+          if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, body: d.body, edited_at: d.edited_at, mentions: d.mentions || m.mentions, update: d.update || m.update } : m)))
           loadConvos()
         } else if (d.type === 'receipts') {
           // Where everyone else has got to: my messages up to there turn grey
@@ -1356,10 +1357,6 @@ export default function Chats() {
   // Each staged file's caption as it stands, the picked one's being the box.
   const stagedCaption = (s: StagedFile) => (s.id === capFor ? input : s.caption)
   useEffect(() => () => stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)), [])
-  // Chat is where a phone that stops VoTask in the background costs the most,
-  // so it is where the app asks to be let run (push.ts). A moment after
-  // opening, not over the list as it first draws.
-  useEffect(() => { const t = setTimeout(askBackgroundDelivery, 2500); return () => clearTimeout(t) }, [])
 
   // ---- shared from another app --------------------------------------------
   // As WhatsApp does: pick the chat, and what was shared waits in its box —
@@ -2191,6 +2188,9 @@ export default function Chats() {
     setPicked(m.mentions || [])
     requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(m.body.length, m.body.length) })
   }
+  // A daily update card is corrected in its own sheet, not in the composer.
+  const canEditUpdate = (m: Msg) => m.sender_id === user!.id && m.kind === 'update' && !m.deleted && !m.id.startsWith('tmp_')
+  const editUpdateCard = (m: Msg) => { setMenuId(null); setSelectedId(null); setMulti(null); setUpdateEdit(m.id); setUpdateOpen(true) }
   // Straight into the box: choosing Reply means the next thing is typing.
   const startReply = (m: Msg) => { setMenuId(null); if (editing) endEdit(); setReplyTo(m); requestAnimationFrame(() => inputRef.current?.focus()) }
 
@@ -2206,16 +2206,18 @@ export default function Chats() {
     const mine = m.sender_id === user!.id
     const record = isRecordLine(m)
     const editable = mine && isEditable(m)
+    const updateEditable = canEditUpdate(m)
     const fromGroupPeer = active?.type === 'group' && !mine && !record && active.members.some((x) => x.id === m.sender_id)
     const list: (MsgAction | false)[] = [
       !record && { key: 'reply', label: 'Reply', icon: 'reply', bar: true, run: () => startReply(m) },
       editable && { key: 'edit', label: 'Edit', glyph: 'pencil', bar: true, run: () => startEdit(m) },
+      updateEditable && { key: 'edit', label: 'Edit', glyph: 'pencil', bar: true, run: () => editUpdateCard(m) },
       !record && m.kind !== 'task' && { key: 'task', label: readOnly ? 'Make a task' : 'Assign as task', icon: 'taskAdd', bar: true, run: () => toTask({ messageId: m.id }, m) },
       { key: 'star', label: m.starred ? 'Unstar' : 'Star', icon: 'star', bar: true, on: m.starred, run: () => toggleStar(m) },
       isForwardable(m) && { key: 'forward', label: 'Forward', icon: 'forward', bar: true, run: () => setForwardMsgs([m]) },
       // The only copy. A "Copy link" (to this message) used to follow it and
       // read as the same action twice, so it was taken out on request.
-      !record && { key: 'copy', label: 'Copy', glyph: 'copy', bar: !editable, run: () => copy(m) },
+      !record && { key: 'copy', label: 'Copy', glyph: 'copy', bar: !editable && !updateEditable, run: () => copy(m) },
       mine && !record && { key: 'info', label: 'Message info', run: () => setInfoFor(m) },
       fromGroupPeer && { key: 'private', label: 'Reply privately', run: () => replyPrivately(m) },
       { key: 'select', label: 'Select', run: () => startMulti(m) },
@@ -2910,7 +2912,7 @@ export default function Chats() {
                 <span className="sel-count" aria-live="polite">{list.length} selected</span>
                 <div className="chat-peer-actions">
                   {one && !isRecordLine(one) && <button className="ic-btn" title="Reply" aria-label="Reply" onClick={(e) => { e.stopPropagation(); setMulti(null); startReply(one) }}><Ic name="reply" size={20} /></button>}
-                  {one && one.sender_id === user!.id && isEditable(one) && <button className="ic-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); startEdit(one) }}><PencilGlyph size={20} /></button>}
+                  {one && one.sender_id === user!.id && (isEditable(one) || canEditUpdate(one)) && <button className="ic-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); if (canEditUpdate(one)) editUpdateCard(one); else startEdit(one) }}><PencilGlyph size={20} /></button>}
                   <button className={'ic-btn' + (allStarred ? ' on' : '')} title={allStarred ? 'Unstar' : 'Star'} aria-label={allStarred ? 'Unstar' : 'Star'} disabled={!list.length} onClick={(e) => { e.stopPropagation(); starMany(list) }}><Ic name="star" size={20} /></button>
                   <button className="ic-btn" title="Copy" aria-label="Copy" disabled={!list.length || list.some(isRecordLine)} onClick={(e) => { e.stopPropagation(); copyMany(list) }}><CopyGlyph size={20} /></button>
                   <button className="ic-btn" title="Forward" aria-label="Forward" disabled={!list.length || !list.every(isForwardable)} onClick={(e) => { e.stopPropagation(); setForwardMsgs(list); setMulti(null) }}><Ic name="forward" size={20} /></button>
@@ -3352,7 +3354,7 @@ export default function Chats() {
                           setReactFor(reactFor === m.id ? null : m.id); setMenuId(null)
                         }}><Ic name="smile" size={16} /></button>
                         <button className="msg-tool-btn" title="Reply" aria-label="Reply" onClick={(e) => { e.stopPropagation(); startReply(m) }}><Ic name="reply" size={16} /></button>
-                        {mine && isEditable(m) && <button className="msg-tool-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); startEdit(m) }}><PencilGlyph size={16} /></button>}
+                        {mine && (isEditable(m) || canEditUpdate(m)) && <button className="msg-tool-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); if (canEditUpdate(m)) editUpdateCard(m); else startEdit(m) }}><PencilGlyph size={16} /></button>}
                         {m.kind !== 'task' && <button className="msg-tool-btn task-tool" title="Assign as task" aria-label="Assign as task" onClick={(e) => { e.stopPropagation(); toTask({ messageId: m.id }, m) }}><Ic name="taskAdd" size={16} /></button>}
                         <div className="msg-menu-wrap">
                           <button className="msg-tool-btn" title="More" aria-label="More actions" aria-haspopup="menu" aria-expanded={menuId === m.id}
@@ -3764,7 +3766,7 @@ export default function Chats() {
       )}
       {deleteFor && <DeleteDialog count={deleteFor.length} canEveryone={canDeleteForAll(deleteFor)} onPick={(scope) => doDelete(deleteFor, scope)} onClose={() => setDeleteFor(null)} />}
       {pollOpen && <PollComposer onSend={sendPoll} onClose={() => setPollOpen(false)} />}
-      {updateOpen && activeId && <UpdateSheet convId={activeId} onClose={() => setUpdateOpen(false)} onPosted={() => { setUpdateOpen(false); setTodayTick((n) => n + 1) }} />}
+      {updateOpen && activeId && <UpdateSheet convId={activeId} editId={updateEdit} onClose={() => { setUpdateOpen(false); setUpdateEdit(null) }} onPosted={() => { setUpdateOpen(false); setUpdateEdit(null); setTodayTick((n) => n + 1) }} />}
       {votesFor && active && (() => {
         const vm = messages.find((x) => x.id === votesFor)
         return vm?.poll ? <PollVotesSheet msg={vm} members={active.members} meId={user!.id} onClose={() => setVotesFor(null)} /> : null

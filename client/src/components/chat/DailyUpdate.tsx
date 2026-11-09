@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { api, userAvatarUrl } from '../../api'
 import { Avatar, Ic } from '../../ui'
 import { toast } from '../../lib/toast'
@@ -38,9 +38,30 @@ export function fmtAmount(n: number | null | undefined): string {
   if (a >= 1e3) return `${sign}${t(a / 1e3)}k`
   return sign + t(a)
 }
+// A target as typed in set-up: one number, or a range "6L-18L" / "3L to 6L".
+// NaN when either end is not a number.
+export function parseTarget(raw: string): { target: number | null; stretch: number | null } | null {
+  const r = /^\s*(\S.*?)\s*(?:-|–|to)\s*(\S.*)$/i.exec(raw || '')
+  const target = parseAmount(r ? r[1] : raw)
+  const stretch = r ? parseAmount(r[2]) : null
+  if (Number.isNaN(target) || Number.isNaN(stretch)) return null
+  return { target, stretch }
+}
+// A number put back in a box to be edited: the short form only when it reads
+// back as exactly the same number, since 3,39,398 shown as 3.39L would be
+// saved as 3,39,000.
+const forInput = (n: number | null | undefined) => {
+  if (n == null || !Number.isFinite(n)) return ''
+  const short = fmtAmount(n)
+  return parseAmount(short) === n ? short : String(n)
+}
 // ₹ goes in front; any other unit (pcs, leads) after.
 const withUnit = (n: number | null | undefined, unit: string) =>
   unit === '₹' ? `₹${fmtAmount(n)}` : `${fmtAmount(n)}${unit ? ' ' + unit : ''}`
+
+// "₹6L–18L" for a range, "₹1.69L" for one number.
+const targetLabel = (m: UpdateMetricDef) =>
+  m.stretch ? `${withUnit(m.target, m.unit)}–${fmtAmount(m.stretch)}` : withUnit(m.target, m.unit)
 
 const daysInMonth = (day: string) => { const [y, m] = day.split('-').map(Number); return new Date(y, m, 0).getDate() }
 const dayLabel = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
@@ -75,7 +96,7 @@ export function UpdateCard({ update }: { update: UpdateMeta }) {
               <span className="du-label">{m.label}</span>
               <span className="du-val">
                 {withUnit(m.total, m.unit)}
-                {m.target ? <span className="du-of"> / {withUnit(m.target, m.unit)}</span> : null}
+                {m.target ? <span className="du-of"> / {targetLabel(m)}</span> : null}
               </span>
             </div>
             {m.mode === 'daily' && m.value != null && <div className="du-today">+{withUnit(m.value, m.unit)} today</div>}
@@ -98,27 +119,33 @@ export function UpdateCard({ update }: { update: UpdateMeta }) {
 
 // ---- set up / fill in ---------------------------------------------------------------
 type Draft = { id: string; label: string; target: string; unit: string; mode: 'total' | 'daily' }
-const newRow = (): Draft => ({ id: Math.random().toString(36).slice(2, 10), label: '', target: '', unit: '', mode: 'total' })
+const newRow = (): Draft => ({ id: Math.random().toString(36).slice(2, 10), label: '', target: '', unit: '', mode: 'daily' })
 const WEEK = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 const WEEK_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-export function UpdateSheet({ convId, onClose, onPosted }: { convId: string; onClose: () => void; onPosted: () => void }) {
-  const [loaded, setLoaded] = useState(false)
-  const [tpl, setTpl] = useState<UpdateTemplate | null>(null)
-  const [last, setLast] = useState<UpdateMeta | null>(null)
-  const [day, setDay] = useState('')
-  const [editing, setEditing] = useState(false)
-  const load = () => api.get(`/chat/conversations/${convId}/update-template`)
-    .then((d: any) => { setTpl(d.template); setLast(d.last); setDay(d.day); setEditing(!d.template); setLoaded(true) })
-    .catch((e: any) => { toast.error(e.message || 'Could not open your daily update'); onClose() })
-  useEffect(() => { load() }, [convId])
+interface Loaded { template: UpdateTemplate | null; last: UpdateMeta | null; last_id: string | null; last_base: Record<string, number | null>; day: string }
 
-  if (!loaded) return <Sheet label="Daily update" title="Daily update" onClose={onClose}><div className="du-loading"><span className="spinner" /></div></Sheet>
-  if (editing) {
-    return <SetupForm convId={convId} tpl={tpl} onClose={tpl ? () => setEditing(false) : onClose}
-      onSaved={(t) => { setTpl(t); setEditing(false) }} onStopped={onClose} />
+// `editId`: open on that posted card to correct it (only the latest can be).
+export function UpdateSheet({ convId, editId = null, onClose, onPosted }: { convId: string; editId?: string | null; onClose: () => void; onPosted: () => void }) {
+  const [d, setD] = useState<Loaded | null>(null)
+  const [setup, setSetup] = useState(false)
+  const [fixing, setFixing] = useState<string | null>(editId)
+  useEffect(() => {
+    api.get(`/chat/conversations/${convId}/update-template`)
+      .then((r: any) => {
+        if (editId && r.last_id !== editId) { toast.info('Only your latest update can be edited'); onClose(); return }
+        setD(r); setSetup(!r.template)
+      })
+      .catch((e: any) => { toast.error(e.message || 'Could not open your daily update'); onClose() })
+  }, [convId, editId])
+
+  if (!d) return <Sheet label="Daily update" title="Daily update" onClose={onClose}><div className="du-loading"><span className="spinner" /></div></Sheet>
+  if (setup) {
+    return <SetupForm convId={convId} tpl={d.template} onClose={d.template ? () => setSetup(false) : onClose}
+      onSaved={(t) => { setD({ ...d, template: t }); setSetup(false) }} onStopped={onClose} />
   }
-  return <FillForm convId={convId} tpl={tpl!} last={last} day={day} onEdit={() => setEditing(true)} onClose={onClose} onPosted={onPosted} />
+  return <FillForm key={fixing || 'new'} convId={convId} data={d} editId={fixing} onSetup={() => setSetup(true)}
+    onFixLast={() => setFixing(d.last_id)} onClose={onClose} onPosted={onPosted} />
 }
 
 function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
@@ -126,7 +153,7 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
 }) {
   const [title, setTitle] = useState(tpl?.title || 'Daily update')
   const [rows, setRows] = useState<Draft[]>(() => tpl
-    ? tpl.metrics.map((m) => ({ id: m.id, label: m.label, target: m.target ? fmtAmount(m.target) : '', unit: m.unit, mode: m.mode }))
+    ? tpl.metrics.map((m) => ({ id: m.id, label: m.label, target: m.target ? forInput(m.target) + (m.stretch ? '-' + forInput(m.stretch) : '') : '', unit: m.unit, mode: m.mode }))
     : [newRow(), newRow()])
   const [remind, setRemind] = useState(!!tpl?.remind_at || !tpl)
   const [at, setAt] = useState(tpl?.remind_at || '18:00')
@@ -134,18 +161,18 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
   const [busy, setBusy] = useState(false)
   const set = (i: number, patch: Partial<Draft>) => setRows((cur) => cur.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const used = rows.filter((r) => r.label.trim())
-  const badTarget = used.find((r) => Number.isNaN(parseAmount(r.target)))
+  const badTarget = used.find((r) => !parseTarget(r.target))
   const save = async () => {
     if (busy || !used.length || badTarget) return
     setBusy(true)
     try {
-      const d: any = await api.put(`/chat/conversations/${convId}/update-template`, {
+      const res: any = await api.put(`/chat/conversations/${convId}/update-template`, {
         title: title.trim() || 'Daily update',
         metrics: used.map((r) => ({ id: r.id, label: r.label.trim(), target: r.target.trim() || null, unit: r.unit.trim(), mode: r.mode })),
         remind_at: remind ? at : null,
         remind_days: days,
       })
-      onSaved(d.template)
+      onSaved(res.template)
     } catch (e: any) { toast.error(e.message || 'Could not save your card'); setBusy(false) }
   }
   const stop = async () => {
@@ -174,19 +201,19 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
               onClick={() => setRows((cur) => cur.filter((_, j) => j !== i))}><Ic name="close" size={14} /></button>
           </div>
           <div className="du-def-more">
-            <input className={'ta-input' + (Number.isNaN(parseAmount(r.target)) ? ' bad' : '')} inputMode="decimal" placeholder="Monthly target (optional)"
+            <input className={'ta-input' + (!parseTarget(r.target) ? ' bad' : '')} placeholder="Monthly target, e.g. 1.69L or 6L-18L"
               aria-label={`${r.label || `Number ${i + 1}`} monthly target`} value={r.target} onChange={(e) => set(i, { target: e.target.value })} />
             <input className="ta-input du-unit" maxLength={10} placeholder="Unit" list="du-units" aria-label={`${r.label || `Number ${i + 1}`} unit`}
               value={r.unit} onChange={(e) => set(i, { unit: e.target.value })} />
           </div>
           <div className="du-mode" role="radiogroup" aria-label={`How you enter ${r.label || `number ${i + 1}`}`}>
-            <button type="button" role="radio" aria-checked={r.mode === 'total'} className={r.mode === 'total' ? 'on' : ''} onClick={() => set(i, { mode: 'total' })}>I enter the month's total</button>
             <button type="button" role="radio" aria-checked={r.mode === 'daily'} className={r.mode === 'daily' ? 'on' : ''} onClick={() => set(i, { mode: 'daily' })}>I enter today's, app adds up</button>
+            <button type="button" role="radio" aria-checked={r.mode === 'total'} className={r.mode === 'total' ? 'on' : ''} onClick={() => set(i, { mode: 'total' })}>I enter the month's total</button>
           </div>
         </div>
       ))}
       <datalist id="du-units"><option value="₹" /><option value="pcs" /><option value="leads" /><option value="calls" /></datalist>
-      {badTarget && <div className="pc-warn">"{badTarget.label}": write the target as a number, like 1.69L, 45k or 100.</div>}
+      {badTarget && <div className="pc-warn">"{badTarget.label}": write the target as a number or a range, like 1.69L, 100 or 6L-18L.</div>}
       {rows.length < 12 && <button type="button" className="btn btn-ghost btn-sm du-add" onClick={() => setRows((cur) => [...cur, newRow()])}><Ic name="plus" size={14} /> Add a number</button>}
 
       <label className="pc-multi du-remind">
@@ -196,9 +223,9 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
       </label>
       {remind && (
         <div className="du-days" role="group" aria-label="Days to remind me">
-          {WEEK.map((w, d) => (
-            <button key={d} type="button" aria-pressed={days.includes(d)} aria-label={WEEK_FULL[d]} className={days.includes(d) ? 'on' : ''}
-              onClick={() => setDays((cur) => (cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d].sort()))}>{w}</button>
+          {WEEK.map((w, dd) => (
+            <button key={dd} type="button" aria-pressed={days.includes(dd)} aria-label={WEEK_FULL[dd]} className={days.includes(dd) ? 'on' : ''}
+              onClick={() => setDays((cur) => (cur.includes(dd) ? cur.filter((x) => x !== dd) : [...cur, dd].sort()))}>{w}</button>
           ))}
         </div>
       )}
@@ -207,70 +234,106 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
   )
 }
 
-function FillForm({ convId, tpl, last, day, onEdit, onClose, onPosted }: {
-  convId: string; tpl: UpdateTemplate; last: UpdateMeta | null; day: string; onEdit: () => void; onClose: () => void; onPosted: () => void
+// A new update starts empty: last time's numbers were left in the boxes, and
+// every one had to be cleared before typing today's. What was there shows as a
+// hint instead. Editing a posted update is the one case that starts filled in.
+function FillForm({ convId, data, editId, onSetup, onFixLast, onClose, onPosted }: {
+  convId: string; data: Loaded; editId: string | null; onSetup: () => void; onFixLast: () => void; onClose: () => void; onPosted: () => void
 }) {
-  const sameMonth = !!last && last.day.slice(0, 7) === day.slice(0, 7)
+  const { template: tpl, last, day } = data
+  const fixing = !!editId && !!last
   const postedToday = !!last && last.day === day
-  const prev = useMemo(() => {
-    const by: Record<string, UpdateMetric> = {}
-    if (sameMonth) for (const m of last!.metrics) by[m.id] = m
-    return by
-  }, [last, sameMonth])
-  // A running total starts at its last figure, ready to be changed; today's
-  // count starts empty (or at what was posted earlier today, if re-posting).
+  // What the post is measured against: the month before it. A second post
+  // today replaces the first, so it starts from the same place the first did.
+  const base: Record<string, number | null> = fixing || postedToday ? data.last_base : (() => {
+    const t: Record<string, number | null> = {}
+    for (const m of last?.metrics || []) t[m.id] = m.total
+    return t
+  })()
+  const metrics: UpdateMetricDef[] = fixing ? last!.metrics : tpl!.metrics
+  const was: Record<string, UpdateMetric> = {}
+  for (const m of last?.metrics || []) was[m.id] = m
   const [vals, setVals] = useState<Record<string, string>>(() => {
     const v: Record<string, string> = {}
-    for (const m of tpl.metrics) {
-      const p = prev[m.id]
-      if (m.mode === 'total') v[m.id] = p?.total != null ? fmtAmount(p.total) : ''
-      else v[m.id] = postedToday && p?.value != null ? fmtAmount(p.value) : ''
-    }
+    if (fixing) for (const m of last!.metrics) v[m.id] = forInput(m.value)
     return v
   })
-  const [note, setNote] = useState('')
+  // A daily count's month, typed over what the app added up: a card started
+  // mid-month, or a figure corrected from the CRM.
+  const [fix, setFix] = useState<Record<string, string>>(() => {
+    const f: Record<string, string> = {}
+    if (fixing) {
+      for (const m of last!.metrics) {
+        if (m.mode !== 'daily' || m.total == null) continue
+        const added = (base[m.id] || 0) + (m.value || 0)
+        if (Math.abs(added - m.total) > 0.005) f[m.id] = forInput(m.total)
+      }
+    }
+    return f
+  })
+  // The correction box opens on request; most days the added-up month is right.
+  const [fixOpen, setFixOpen] = useState<Set<string>>(() => new Set(Object.keys(fix)))
+  const [note, setNote] = useState(fixing ? last!.note || '' : '')
   const [busy, setBusy] = useState(false)
-  // The month before today, for a daily count's running total.
-  const baseOf = (m: UpdateMetricDef) => {
-    const p = prev[m.id]
-    if (!p) return 0
-    return postedToday ? (p.total || 0) - (p.value || 0) : (p.total || 0)
-  }
-  const bad = tpl.metrics.find((m) => Number.isNaN(parseAmount(vals[m.id] || '')))
-  const any = tpl.metrics.some((m) => parseAmount(vals[m.id] || '') != null) || !!note.trim()
+  const num = (s?: string) => parseAmount(s || '')
+  const bad = metrics.find((m) => Number.isNaN(num(vals[m.id])) || Number.isNaN(num(fix[m.id])))
+  const any = metrics.some((m) => num(vals[m.id]) != null) || !!note.trim()
   const post = async () => {
     if (busy || bad || !any) return
     setBusy(true)
     try {
       const values: Record<string, number | null> = {}
-      for (const m of tpl.metrics) values[m.id] = parseAmount(vals[m.id] || '')
-      await api.post(`/chat/conversations/${convId}/update`, { values, note: note.trim() })
+      const totals: Record<string, number> = {}
+      for (const m of metrics) {
+        values[m.id] = num(vals[m.id])
+        const t = num(fix[m.id])
+        if (m.mode === 'daily' && t != null) totals[m.id] = t
+      }
+      if (fixing) await api.put(`/chat/message/${editId}/update`, { values, totals, note: note.trim() })
+      else await api.post(`/chat/conversations/${convId}/update`, { values, totals, note: note.trim() })
       onPosted()
     } catch (e: any) { toast.error(e.message || 'Could not post your update'); setBusy(false) }
   }
+  const title = fixing ? last!.title : tpl!.title
   return (
-    <Sheet label={tpl.title} title={<span className="du-sheet-title"><TrendGlyph size={17} /> {tpl.title}</span>} onClose={onClose} className="du-sheet"
+    <Sheet label={title} title={<span className="du-sheet-title"><TrendGlyph size={17} /> {fixing ? `Edit ${title}` : title}</span>} onClose={onClose} className="du-sheet"
       foot={<>
-        <button className="btn btn-ghost" onClick={onEdit}><Ic name="edit" size={14} /> Edit card</button>
-        <button className="btn btn-primary" disabled={busy || !!bad || !any} onClick={post}>{busy ? 'Posting…' : 'Post update'}</button>
+        {!fixing ? <button className="btn btn-ghost" onClick={onSetup}><Ic name="edit" size={14} /> Edit card</button> : <span />}
+        <button className="btn btn-primary" disabled={busy || !!bad || !any} onClick={post}>{busy ? 'Saving…' : fixing ? 'Save changes' : 'Post update'}</button>
       </>}>
-      <div className="du-fill-day">{dayLabel(day)}</div>
-      {postedToday && <div className="du-again">You've posted today already. This one replaces it in the month's totals.</div>}
-      {tpl.metrics.map((m) => {
-        const n = parseAmount(vals[m.id] || '')
-        const total = m.mode === 'daily' ? baseOf(m) + (Number.isFinite(n) ? (n as number) : 0) : n
+      <div className="du-fill-day">{dayLabel(fixing ? last!.day : day)}</div>
+      {!fixing && postedToday && (
+        <div className="du-again">
+          <span>You've posted today already. A new one replaces it in the month's totals.</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onFixLast}><Ic name="edit" size={13} /> Edit today's</button>
+        </div>
+      )}
+      {metrics.map((m) => {
+        const n = num(vals[m.id])
+        const added = (base[m.id] || 0) + (Number.isFinite(n) ? (n as number) : 0)
+        const prevTotal = was[m.id]?.total
         return (
           <div key={m.id} className="du-field">
             <label htmlFor={`du-${m.id}`}>
               <span className="du-field-name">{m.label}</span>
-              <span className="du-field-hint">{m.mode === 'daily' ? 'Today' : 'This month so far'}{m.target ? ` · target ${withUnit(m.target, m.unit)}` : ''}</span>
+              <span className="du-field-hint">{m.mode === 'daily' ? 'Today' : 'This month so far'}{m.target ? ` · target ${targetLabel(m)}` : ''}</span>
             </label>
             <input id={`du-${m.id}`} className={'ta-input' + (Number.isNaN(n) ? ' bad' : '')} inputMode="decimal" enterKeyHint="next"
-              placeholder={m.mode === 'daily' ? '0' : prev[m.id]?.total != null ? fmtAmount(prev[m.id].total) : 'e.g. 45k'}
+              placeholder={m.mode === 'daily' ? '0' : prevTotal != null && !fixing ? `Last: ${fmtAmount(prevTotal)} (empty keeps it)` : 'e.g. 45k'}
               value={vals[m.id] || ''} onChange={(e) => setVals((v) => ({ ...v, [m.id]: e.target.value }))} />
-            {m.mode === 'daily' && Number.isFinite(total) && (n != null || baseOf(m) > 0) && (
-              <div className="du-field-total">Month: {withUnit(total as number, m.unit)}{m.target ? ` of ${withUnit(m.target, m.unit)}` : ''}</div>
-            )}
+            {m.mode === 'daily' && (fixOpen.has(m.id) ? (
+              <div className="du-month">
+                <label htmlFor={`du-t-${m.id}`}>Month so far</label>
+                <input id={`du-t-${m.id}`} className={'ta-input' + (Number.isNaN(num(fix[m.id])) ? ' bad' : '')} inputMode="decimal" autoFocus={!fixing}
+                  placeholder={fmtAmount(added)} value={fix[m.id] || ''} onChange={(e) => setFix((f) => ({ ...f, [m.id]: e.target.value }))} />
+              </div>
+            ) : (
+              <div className="du-month">
+                <span>Month so far: {withUnit(added, m.unit)}</span>
+                <button type="button" className="du-correct" onClick={() => setFixOpen((o) => new Set(o).add(m.id))}
+                  aria-label={`Correct ${m.label} month so far`}>Correct</button>
+              </div>
+            ))}
           </div>
         )
       })}
