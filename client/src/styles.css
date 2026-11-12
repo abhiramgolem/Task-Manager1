@@ -4619,37 +4619,27 @@ button.reply-quote {
 .du-ic { width: 22px; height: 22px; flex-shrink: 0; display: grid; place-items: center; border-radius: 6px; background: #0d9488; color: #fff; }
 .du-title { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .du-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.du-row { padding: 6px 0; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
-.du-line { display: flex; align-items: baseline; gap: 10px; }
-.du-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.du-val { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.du-of { font-weight: 500; color: var(--muted); }
-.du-today { font-size: 12px; color: var(--muted); margin-top: 1px; }
-.du-bar { position: relative; height: 6px; margin-top: 6px; border-radius: 3px; background: color-mix(in srgb, currentColor 14%, transparent); }
-.du-bar span { display: block; height: 100%; border-radius: 3px; transition: width .25s; }
-.du-bar span.good { background: #16a34a; }
-.du-bar span.behind { background: #d97706; }
-.du-bar i { position: absolute; top: -3px; width: 2px; height: 12px; margin-left: -1px; border-radius: 1px; background: var(--text); opacity: .55; }
-.du-sub { font-size: 12px; margin-top: 3px; }
-.du-sub.good { color: #15803d; }
-.du-sub.behind { color: #b45309; }
-:root[data-theme="dark"] .du-sub.good { color: #4ade80; }
-:root[data-theme="dark"] .du-sub.behind { color: #fbbf24; }
 .du-note { margin-top: 6px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.du-text { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.du-tline { min-height: 1.5em; }
+.du-v { font-variant-numeric: tabular-nums; }
+.du-body-in { font-family: inherit; resize: vertical; }
+.du-tokens { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 6px 0 10px; }
+.du-count { margin-left: auto; font-size: 12.5px; color: var(--muted); }
+.du-date { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+.du-date .ta-input { width: auto; }
+.du-fill { padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.du-fill .du-tline { padding: 2px 0; }
+.du-blank { width: auto; min-width: 3ch; max-width: 16ch; padding: 3px 6px; margin: 0 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 16px; font-weight: 700; }
+.du-blank::placeholder { color: var(--muted); font-weight: 500; opacity: .6; }
+.du-blank:focus { outline: 2px solid var(--primary); outline-offset: 0; border-color: transparent; }
+.du-hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 
 /* The sheet: set up once, then fill in. */
 .du-loading { display: grid; place-items: center; padding: 30px; }
 .du-sheet-title { display: inline-flex; align-items: center; gap: 7px; }
 .du-intro { margin: 0 0 10px; font-size: 13.5px; color: var(--muted); }
-.du-def { padding: 8px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; display: grid; gap: 6px; }
-.du-def-top, .du-def-more { display: flex; gap: 6px; align-items: center; }
-.du-def-more .ta-input { flex: 1; min-width: 0; }
-.du-def-more .du-unit { flex: 0 0 84px; }
 .ta-input.bad { border-color: var(--danger-ink); }
-.du-mode { display: flex; gap: 4px; padding: 3px; border-radius: 9px; background: var(--bg); }
-.du-mode button { flex: 1; padding: 6px 6px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
-.du-mode button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
-.du-add { margin-bottom: 4px; }
 .du-remind { flex-wrap: wrap; }
 .du-time { width: auto; padding: 5px 8px; }
 .du-days { display: flex; gap: 6px; margin: 8px 0 4px 27px; }
@@ -4660,15 +4650,6 @@ button.reply-quote {
 .du-again { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; padding: 7px 10px; border-radius: 8px; margin-bottom: 8px; background: color-mix(in srgb, #d97706 12%, var(--surface)); }
 .du-again > span { flex: 1 1 180px; }
 /* A daily count's month under its box: added up, and typed over to correct. */
-.du-month { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 12.5px; color: var(--muted); }
-.du-month label { white-space: nowrap; }
-.du-field .du-month .ta-input { width: 110px; flex: 0 0 auto; padding: 5px 8px; font-size: 14px; }
-.du-correct { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.du-field { margin-bottom: 10px; }
-.du-field label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.du-field-name { font-weight: 600; font-size: 14px; }
-.du-field-hint { font-size: 12px; color: var(--muted); text-align: right; }
-.du-field .ta-input { font-size: 16px; }
 .du-note-in { resize: vertical; }
 .du-sheet .wa-sheet-foot { justify-content: space-between; }
 

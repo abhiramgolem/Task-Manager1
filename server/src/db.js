@@ -499,11 +499,11 @@ export function initSchema() {
     FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
   );
 
-  -- A person's daily update card in one chat (routes/dailyUpdates.js): the
-  -- numbers they report every day, set up once by that person and then only
-  -- filled in. metrics is JSON [{id, label, target, unit, mode}], mode 'total'
-  -- (they enter the month's figure so far) or 'daily' (they enter today's and
-  -- the month is added up). remind_at is "HH:MM" in TASK_MAIL_TZ, remind_days
+  -- A person's daily metrics card in one chat (routes/dailyUpdates.js): the
+  -- message they post every day, with blanks, set up once and then only filled
+  -- in. body is that message (added by migration, see daily_metrics_text_v1);
+  -- metrics is the old list-of-numbers form, kept only so the column stays
+  -- NOT NULL-valid. remind_at is "HH:MM" in TASK_MAIL_TZ, remind_days
   -- the weekdays it applies to (0 = Sunday). The two dates let the reminder
   -- sweep skip, by row, whoever has posted or been reminded today.
   CREATE TABLE IF NOT EXISTS daily_update_templates (
@@ -1323,6 +1323,26 @@ export function initSchema() {
     } catch (e) {
       // Never block boot on this: an unlinked one still opens the task.
       console.error('[migrate] notifications_comment_link_v1 skipped:', e.message)
+    }
+  })
+
+  // Daily metrics cards became the person's own message with blanks (body),
+  // replacing the list of numbers the app added up. A card made the old way
+  // turns into one "Label (target) = ___" line per number it had.
+  ensureColumn('daily_update_templates', 'body', "TEXT NOT NULL DEFAULT ''")
+  runOnce('daily_metrics_text_v1', () => {
+    try {
+      const short = (n) => (n >= 1e7 ? `${+(n / 1e7).toFixed(2)}Cr` : n >= 1e5 ? `${+(n / 1e5).toFixed(2)}L` : n >= 1e3 ? `${+(n / 1e3).toFixed(2)}k` : String(n))
+      const rows = db.prepare("SELECT id, metrics FROM daily_update_templates WHERE body = ''").all()
+      const set = db.prepare('UPDATE daily_update_templates SET body=? WHERE id=?')
+      for (const t of rows) {
+        let ms = []
+        try { ms = JSON.parse(t.metrics || '[]') } catch {}
+        const lines = ms.map((m) => `${m.label}${m.target ? ` (${short(m.target)}${m.stretch ? '-' + short(m.stretch) : ''})` : ''} = ___`)
+        set.run(lines.length ? lines.join('\n') : 'Today = ___', t.id)
+      }
+    } catch (e) {
+      console.error('[migrate] daily_metrics_text_v1 skipped:', e.message)
     }
   })
 

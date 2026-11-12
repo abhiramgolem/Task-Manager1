@@ -2223,8 +2223,9 @@ export default function Chats() {
     setPicked(m.mentions || [])
     requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(m.body.length, m.body.length) })
   }
-  // A daily update card is corrected in its own sheet, not in the composer.
-  const canEditUpdate = (m: Msg) => m.sender_id === user!.id && m.kind === 'update' && !m.deleted && !m.id.startsWith('tmp_')
+  // A daily metrics card is corrected in its own sheet, not in the composer.
+  // Only the text kind: older cards (a list of numbers) cannot be edited.
+  const canEditUpdate = (m: Msg) => m.sender_id === user!.id && m.kind === 'update' && typeof m.update?.text === 'string' && !m.deleted && !m.id.startsWith('tmp_')
   const editUpdateCard = (m: Msg) => { setMenuId(null); setSelectedId(null); setMulti(null); setUpdateEdit(m.id); setUpdateOpen(true) }
   // Straight into the box: choosing Reply means the next thing is typing.
   const startReply = (m: Msg) => { setMenuId(null); if (editing) endEdit(); setReplyTo(m); requestAnimationFrame(() => inputRef.current?.focus()) }
@@ -3569,7 +3570,7 @@ export default function Chats() {
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setLocOpen(true) }}><span className="ag-ic loc"><PinDropGlyph size={20} /></span>Location</button>
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setContactOpen(true) }}><span className="ag-ic contact"><ContactGlyph size={20} /></span>Contact</button>
                     <button role="menuitem" onClick={() => { setAttachMenu(false); setPollOpen(true) }}><span className="ag-ic poll"><PollGlyph size={20} /></span>Poll</button>
-                    <button role="menuitem" onClick={() => { setAttachMenu(false); setUpdateOpen(true) }}><span className="ag-ic update"><TrendGlyph size={20} /></span>Daily update</button>
+                    <button role="menuitem" onClick={() => { setAttachMenu(false); setUpdateOpen(true) }}><span className="ag-ic update"><TrendGlyph size={20} /></span>Daily metrics</button>
                     <button role="menuitem" onClick={() => { setAttachMenu(false); draftFromComposer() }}><span className="ag-ic task"><TaskGlyph size={20} /></span>Task</button>
                     {touchUI && canReadClipboardImages() && (
                       <button role="menuitem" onClick={pasteFromClipboard}>

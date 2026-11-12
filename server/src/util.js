@@ -82,7 +82,7 @@ const PUSH_TITLES = {
   chat_mention: 'You were mentioned',
   chat_call: 'Missed call',
   chat_reminder: 'Reminder',
-  update_reminder: 'Daily update',
+  update_reminder: 'Daily metrics',
   call_review: 'Call ready for review',
 }
 

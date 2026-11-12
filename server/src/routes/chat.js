@@ -176,7 +176,7 @@ function snippet(row, viewerId = null) {
   if (row.deleted_for_all) return row.sender_id === viewerId ? 'You deleted this message' : 'This message was deleted'
   if (row.kind === 'system') return systemText(parseMeta(row), viewerId)
   if (row.kind === 'poll') return '📊 ' + (row.body || 'Poll')
-  if (row.kind === 'update') return '📈 ' + (row.body || 'Daily update')
+  if (row.kind === 'update') return '📈 ' + (row.body || 'Daily metrics')
   if (row.kind === 'task') return '📋 ' + (row.body || 'Task')
   if (row.kind === 'location') return '📍 ' + (row.body || 'Location')
   if (row.kind === 'contact') return '👤 ' + (row.body || 'Contact')
