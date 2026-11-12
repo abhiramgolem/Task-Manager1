@@ -9,9 +9,10 @@
 //   {month}  the current month's name, filled in by the app at post time;
 //   {date}   a date they pick on the form (today by default), as "7 Nov".
 // Lines starting with "|" make a table, for a report kept as a sheet; in one,
-// {sum} is a total row's cell the form adds up for them (see sumsOf).
-// Nothing is carried from day to day or measured against a target: the card
-// reads like the message they used to post.
+// {sum} is a total row's cell and {run:COLUMN} a month total the form adds up
+// for them (dailyMath.js). Only a month total carries anything from day to
+// day, and only where the card asks for one: the card reads like the message
+// they used to post.
 //
 // The card is an ordinary chat message (kind 'update', the text and values in
 // meta), so it is delivered, notified, searched, replied to and deleted like
@@ -27,6 +28,7 @@ import { authRequired } from '../auth.js'
 import { id, now, notify } from '../util.js'
 import { zonedNow } from '../taskMail.js'
 import { member, canPost, ADMINS_ONLY, deliver, shapeMessage, receiptCtx, parseMeta, pushToConversation } from './chat.js'
+import { SLOT, cellsOf, cellMap, computeAll, runMonthStart } from '../dailyMath.js'
 
 const r = Router()
 
@@ -34,9 +36,8 @@ const DEFAULT_TITLE = 'Daily metrics'
 const MAX_BODY = 4000
 const MAX_BLANKS = 80
 const MAX_VALUE = 30
-// A value slot: a typed blank, or a total ({sum} / {sum:Row A;Row B}) that the
-// form fills in and the person may type over. See sumsOf.
-const BLANK = /_{3,}|\{sum(?::[^}\n]*)?\}/g
+// A value slot: a typed blank, a total ({sum…}) or a month total ({run:…}).
+const BLANK = SLOT
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const MON = MONTHS.map((m) => m.slice(0, 3))
 
@@ -55,60 +56,6 @@ export function fillText(text, values, { month, date }) {
     .replace(BLANK, () => values[i++] || '-')
     .replace(/\{month\}/g, month || '')
     .replace(/\{date\}/g, date ? dateLabel(date) : '')
-}
-
-// ---- tables and totals ----------------------------------------------------------
-// Lines starting with "|" are a table ("| AMAZON | 35 | 30 | ___ |"); its
-// first line is the header, and a row whose first cell is *bold* is a total
-// row. A total cell is {sum}: the rows above it up to the previous total row,
-// or {sum:Row A;Row B}: those rows by their first cell. Either adds the same
-// column of those rows. Same rules as the client's sumsOf (DailyUpdate.tsx).
-const cellsOf = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
-const rowName = (cell) => cell.replace(/\*/g, '').trim().toLowerCase()
-const numOf = (s) => { const t = String(s ?? '').replace(/[,₹\s]/g, ''); return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null }
-const decimalsOf = (s) => { const m = /\.(\d+)/.exec(String(s ?? '').replace(/[,₹\s]/g, '')); return m ? m[1].length : 0 }
-
-// `values` with every empty total worked out. A total someone typed stays.
-export function sumsOf(text, values) {
-  const out = values.slice()
-  let slot = 0
-  const tables = [] // [{ rows: [{ cells: [{ text, slots: [i], sum }] }] }]
-  let cur = null
-  for (const line of String(text || '').split('\n')) {
-    const isRow = line.trim().startsWith('|')
-    if (!isRow) { cur = null; slot += (line.match(BLANK) || []).length; continue }
-    if (!cur) { cur = { rows: [] }; tables.push(cur) }
-    cur.rows.push({
-      cells: cellsOf(line).map((t) => {
-        const toks = t.match(BLANK) || []
-        const c = { text: t, slots: toks.map(() => slot++), sum: toks.length === 1 && toks[0].startsWith('{sum') ? toks[0] : null }
-        return c
-      }),
-    })
-  }
-  const cellValue = (c) => (c.slots.length ? out[c.slots[0]] : c.text)
-  for (const tb of tables) {
-    tb.rows.forEach((row, r) => row.cells.forEach((c, col) => {
-      if (!c.sum || out[c.slots[0]]) return
-      let from = []
-      const names = /^\{sum:(.*)\}$/.exec(c.sum)
-      if (names) {
-        const want = names[1].split(';').map(rowName).filter(Boolean)
-        from = tb.rows.filter((x, j) => j > 0 && want.includes(rowName(x.cells[0]?.text || '')))
-      } else {
-        for (let j = r - 1; j >= 1; j--) {
-          if (/^\*.*\*$/.test(tb.rows[j].cells[0]?.text || '')) break
-          from.push(tb.rows[j])
-        }
-      }
-      const parts = from.map((x) => x.cells[col]).filter(Boolean).map(cellValue)
-      const nums = parts.map(numOf).filter((n) => n != null)
-      if (!nums.length) return
-      const dp = Math.min(2, Math.max(0, ...parts.map(decimalsOf)))
-      out[c.slots[0]] = nums.reduce((a, b) => a + b, 0).toFixed(dp)
-    }))
-  }
-  return out
 }
 
 // What was typed into the blanks, in order: an array, or { "0": .., "1": .. }
@@ -186,12 +133,35 @@ function postableConv(user, convId) {
 // Everyone in the chat sees the "posted today" line change.
 const announce = (convId) => pushToConversation(convId, { type: 'updates-today', conversationId: convId })
 
+// What a card's month totals ({run:…}) add to on `day`: the cells of its latest
+// post earlier in the same running month (dailyMath.runMonth), by row and
+// column name. With none, `fresh` when the card was in use before this month
+// began (so the month starts from 0); a card new this month has its month
+// total typed once instead.
+export function runBase(templateId, day) {
+  const start = runMonthStart(day)
+  const row = db.prepare(`
+    SELECT m.meta FROM daily_update_posts p JOIN chat_messages m ON m.id = p.message_id
+    WHERE p.template_id = ? AND p.day >= ? AND p.day < ? AND m.deleted_for_all = 0
+    ORDER BY p.day DESC, p.created_at DESC LIMIT 1`).get(templateId, start, day)
+  if (row) {
+    let meta = {}
+    try { meta = JSON.parse(row.meta || '{}') } catch {}
+    return { prev: typeof meta.text === 'string' ? cellMap(meta.text, meta.values) : {}, fresh: false }
+  }
+  const before = db.prepare(`
+    SELECT 1 FROM daily_update_posts p JOIN chat_messages m ON m.id = p.message_id
+    WHERE p.template_id = ? AND p.day < ? AND m.deleted_for_all = 0 LIMIT 1`).get(templateId, start)
+  return { prev: {}, fresh: !!before }
+}
+
 // The card's meta and its message body from what was typed.
 function buildPost({ templateId, title, text, day, month, values, date, note }) {
   const typed = cleanValues(values, blanksOf(text))
   const cleanNote = String(note || '').trim().slice(0, 1000)
   if (typed.every((v) => !v) && !cleanNote) throw { status: 400, error: 'Fill in at least one number' }
-  const vals = sumsOf(text, typed)
+  const base = runBase(templateId, day)
+  const vals = computeAll(text, typed, base.prev, base.fresh)
   let d = null
   if (hasDate(text)) {
     if (date && !isDay(date)) throw { status: 400, error: 'Pick a date' }
@@ -254,9 +224,10 @@ function ownPost(user, messageId) {
   return { m, meta }
 }
 
-// Correct a card already posted: the same text, new values. Any of mine, since
-// nothing is worked out from earlier posts. The month stays the one it was
-// posted in.
+// Correct a card already posted: the same text, new values. Any of mine. Its
+// month totals are worked out again from the post before it; cards posted
+// after it keep the totals they were posted with. The month stays the one it
+// was posted in.
 export function editDailyUpdate(user, messageId, values = [], note = '', date = null) {
   const got = ownPost(user, messageId)
   if (got.error) throw got
@@ -283,29 +254,53 @@ export function templatesFor(userId) {
 }
 
 // ---- routes ------------------------------------------------------------------
-// Mine in this chat, my latest post (its values are the hints on the form),
-// and, with ?edit=<message id>, that post to correct.
+// Whose card a request is about: the caller's own, or, with ?user=<id>, a
+// teammate's in this chat, which a manager or admin may open to see what they
+// see and to fix it for them. Posting stays with the person themselves.
+function cardOwner(req) {
+  const convId = req.params.id
+  if (!member(convId, req.user.id)) return { status: 404, error: 'Conversation not found' }
+  const want = String(req.query.user || '')
+  if (!want || want === req.user.id) return { user: req.user, own: true }
+  if (!['manager', 'admin'].includes(req.user.role)) return { status: 403, error: "Only a manager can open someone else's card" }
+  const u = db.prepare('SELECT id, org_id, name FROM users WHERE id=? AND org_id=?').get(want, req.user.org_id)
+  if (!u || !member(convId, u.id)) return { status: 404, error: 'They are not in this chat' }
+  return { user: u, own: false }
+}
+
+// The card in this chat (mine, or ?user= for a manager), its latest post (its
+// values are the hints on the form), what its month totals add to, and, with
+// ?edit=<message id>, my post to correct.
 r.get('/conversations/:id/update-template', authRequired, (req, res) => {
-  if (!member(req.params.id, req.user.id)) return res.status(404).json({ error: 'Conversation not found' })
-  const t = templateOf(req.user.id, req.params.id)
+  const who = cardOwner(req)
+  if (who.error) return res.status(who.status).json({ error: who.error })
+  const t = templateOf(who.user.id, req.params.id)
   const day = zonedNow().date
   const row = t && db.prepare(`
     SELECT p.message_id, p.day FROM daily_update_posts p JOIN chat_messages m ON m.id = p.message_id
     WHERE p.template_id = ? AND m.deleted_for_all = 0 ORDER BY p.day DESC, p.created_at DESC LIMIT 1`).get(t.id)
   const last = row ? parseMeta(db.prepare('SELECT * FROM chat_messages WHERE id=?').get(row.message_id)) : null
   let edit = null
-  if (req.query.edit) {
+  if (req.query.edit && who.own) {
     const got = ownPost(req.user, String(req.query.edit))
     if (got.error) return res.status(got.status).json({ error: got.error })
     edit = { id: got.m.id, ...got.meta }
   }
-  res.json({ template: shapeTemplate(t), last, last_id: row?.message_id || null, last_base: {}, posted_today: row?.day === day, day, month: monthOf(day), edit })
+  const base = t ? runBase(t.id, edit ? edit.day : day) : { prev: {}, fresh: false }
+  res.json({
+    template: shapeTemplate(t), last, last_id: row?.message_id || null, last_base: {}, posted_today: row?.day === day,
+    day, month: monthOf(day), edit, run_prev: base.prev, run_fresh: base.fresh,
+    owner: { id: who.user.id, name: who.user.name }, own: who.own,
+  })
 })
 
 r.put('/conversations/:id/update-template', authRequired, (req, res) => {
-  const me = req.user
-  const got = postableConv(me, req.params.id)
+  const who = cardOwner(req)
+  if (who.error) return res.status(who.status).json({ error: who.error })
+  // A manager saving a teammate's card must be able to post in this chat too.
+  const got = postableConv(req.user, req.params.id)
   if (got.error) return res.status(got.status).json({ error: got.error })
+  const me = who.user
   const title = String(req.body?.title || '').trim().slice(0, 80) || DEFAULT_TITLE
   const body = String(req.body?.body || '').replace(/\r\n?/g, '\n').replace(/\s+$/, '')
   if (!body.trim()) return res.status(400).json({ error: 'Write the message you post every day' })
@@ -340,7 +335,9 @@ r.put('/conversations/:id/update-template', authRequired, (req, res) => {
 // Stop reporting here: off the "who has posted" list, no more reminders. The
 // cards already posted stay in the chat.
 r.delete('/conversations/:id/update-template', authRequired, (req, res) => {
-  const n = db.prepare('DELETE FROM daily_update_templates WHERE user_id=? AND conversation_id=?').run(req.user.id, req.params.id).changes
+  const who = cardOwner(req)
+  if (who.error) return res.status(who.status).json({ error: who.error })
+  const n = db.prepare('DELETE FROM daily_update_templates WHERE user_id=? AND conversation_id=?').run(who.user.id, req.params.id).changes
   if (n) announce(req.params.id)
   res.json({ ok: true })
 })

@@ -74,32 +74,33 @@ const CARDS = [
     'Reviews received so far: ___',
     'Sample orders received so far: ___',
   ] },
-  // Her sales sheet: she types each channel's month-so-far and yesterday's
-  // sales; the totals add themselves up ({sum}) and can be typed over.
+  // Her sales sheet: she types each channel's sales for yesterday; CUMM SALES
+  // adds them up through the month ({run:YESTERDAY}) and the total rows add
+  // up the channels ({sum}). Any of them can be typed over.
   { key: 'srilatha', who: [['srilatha'], ['sri', 'latha'], ['latha']], body: [
     '| CATEGORY | HIGHER TARGET | LOWER TARGET | DAILY TARGET | CUMM SALES | YESTERDAY |',
-    '| AMAZON | 35 | 30 | 1.00 | ___ | ___ |',
-    '| FLIPKART | 12 | 8 | 0.27 | ___ | ___ |',
-    '| RK WORLD(RICE) | 30 | 15 | 0.50 | ___ | ___ |',
-    '| MEESHO | 1 | 1 | 0.02 | ___ | ___ |',
-    '| Shopdeck Rice | 1 | 0 | 0.00 | ___ | ___ |',
-    '| Jio Mart | 1 | 0 | 0.00 | ___ | ___ |',
-    '| Clicktech | 30 | 15 | 0.50 | ___ | ___ |',
-    "| Shopdeck D'cal | 1 | 0 | 0.00 | ___ | ___ |",
-    '| SWIGGY | 10 | 5 | 0.17 | ___ | ___ |',
+    '| AMAZON | 35 | 30 | 1.00 | {run:YESTERDAY} | ___ |',
+    '| FLIPKART | 12 | 8 | 0.27 | {run:YESTERDAY} | ___ |',
+    '| RK WORLD(RICE) | 30 | 15 | 0.50 | {run:YESTERDAY} | ___ |',
+    '| MEESHO | 1 | 1 | 0.02 | {run:YESTERDAY} | ___ |',
+    '| Shopdeck Rice | 1 | 0 | 0.00 | {run:YESTERDAY} | ___ |',
+    '| Jio Mart | 1 | 0 | 0.00 | {run:YESTERDAY} | ___ |',
+    '| Clicktech | 30 | 15 | 0.50 | {run:YESTERDAY} | ___ |',
+    "| Shopdeck D'cal | 1 | 0 | 0.00 | {run:YESTERDAY} | ___ |",
+    '| SWIGGY | 10 | 5 | 0.17 | {run:YESTERDAY} | ___ |',
     '| *TOTAL ONLINE SALES* | 120 | 74 | 2.45 | {sum} | {sum} |',
-    '| Dcal Vinay | 20 | 10 | 0.33 | ___ | ___ |',
-    '| Dcal Yaseen | 15 | 5 | 0.17 | ___ | ___ |',
-    '| Dcal Alekhya | 15 | 5 | 0.17 | ___ | ___ |',
-    '| DCAL PRASANNA | 15 | 3 | 0.10 | ___ | ___ |',
+    '| Dcal Vinay | 20 | 10 | 0.33 | {run:YESTERDAY} | ___ |',
+    '| Dcal Yaseen | 15 | 5 | 0.17 | {run:YESTERDAY} | ___ |',
+    '| Dcal Alekhya | 15 | 5 | 0.17 | {run:YESTERDAY} | ___ |',
+    '| DCAL PRASANNA | 15 | 3 | 0.10 | {run:YESTERDAY} | ___ |',
     '| *DCAL TOTAL* | 15 | 5 | 0.17 | {sum} | {sum} |',
-    '| Rice Saba | 15 | 5 | 0.17 | ___ | ___ |',
-    '| Rice sujitha | 10 | 3 | 0.10 | ___ | ___ |',
+    '| Rice Saba | 15 | 5 | 0.17 | {run:YESTERDAY} | ___ |',
+    '| Rice sujitha | 10 | 3 | 0.10 | {run:YESTERDAY} | ___ |',
     '| *RICE TOTAL* | 25 | 8 | 0.27 | {sum} | {sum} |',
     '| *TOTAL OFFLINE SALES* | 40 | 13 | 0.43 | {sum:DCAL TOTAL;RICE TOTAL} | {sum:DCAL TOTAL;RICE TOTAL} |',
-    '| *PARTNERSHIPS* | 20 | 10 | 0.33 | ___ | ___ |',
-    '| *EXPORTS* | 0 | 10 | 0.33 | ___ | ___ |',
-    '| *GCOM SALES* | 30 | 15 | 0.50 | ___ | ___ |',
+    '| *PARTNERSHIPS* | 20 | 10 | 0.33 | {run:YESTERDAY} | ___ |',
+    '| *EXPORTS* | 0 | 10 | 0.33 | {run:YESTERDAY} | ___ |',
+    '| *GCOM SALES* | 30 | 15 | 0.50 | {run:YESTERDAY} | ___ |',
     '| *CUMMULATIVE* | 160 | 97 | 3.22 | {sum:TOTAL ONLINE SALES;TOTAL OFFLINE SALES;PARTNERSHIPS;EXPORTS;GCOM SALES} | {sum:TOTAL ONLINE SALES;TOTAL OFFLINE SALES;PARTNERSHIPS;EXPORTS;GCOM SALES} |',
   ] },
 ]
@@ -111,7 +112,36 @@ const REMIND_DAYS = '1,2,3,4,5,6'
 
 const squash = (s) => String(s || '').toLowerCase().replace(/\s+/g, '')
 
+// Sheets made before month totals existed had CUMM SALES as a box typed every
+// day. Once: each such cell becomes {run:YESTERDAY}, so the month adds itself
+// up from yesterday's figure. Rows people added or took out are left as they
+// are; only a CUMM SALES cell that was a typed box changes.
+function upgradeCummColumns() {
+  const key = 'daily_metrics_cumm_run_v1'
+  if (db.prepare('SELECT 1 FROM app_meta WHERE key=?').get(key)) return
+  const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+  const set = db.prepare('UPDATE daily_update_templates SET body=?, updated_at=? WHERE id=?')
+  for (const t of db.prepare("SELECT id, body FROM daily_update_templates WHERE body LIKE '%|%'").all()) {
+    let head = null
+    let changed = false
+    const out = t.body.split('\n').map((line) => {
+      if (!line.trim().startsWith('|')) { head = null; return line }
+      const c = cells(line)
+      if (!head) { head = c.map((x) => x.replace(/\*/g, '').trim().toLowerCase()); return line }
+      const cum = head.indexOf('cumm sales')
+      const y = head.indexOf('yesterday')
+      if (cum < 0 || y < 0 || c[cum] !== '___') return line
+      c[cum] = '{run:YESTERDAY}'
+      changed = true
+      return `| ${c.join(' | ')} |`
+    })
+    if (changed) { set.run(out.join('\n'), now(), t.id); console.log(`  [update-cards] CUMM SALES now adds itself up on card ${t.id}`) }
+  }
+  db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').run(key, now())
+}
+
 export function seedUpdateCards() {
+  upgradeCummColumns()
   const marker = (k) => `seed_daily_metrics_132cr:${k}`
   const done = (k) => !!db.prepare('SELECT 1 FROM app_meta WHERE key=?').get(marker(k))
   const todo = CARDS.filter((c) => !done(c.key))

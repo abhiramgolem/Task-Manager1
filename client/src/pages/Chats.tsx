@@ -619,6 +619,7 @@ export default function Chats() {
   // the "posted today" line under the header ask again.
   const [updateOpen, setUpdateOpen] = useState(false)
   const [updateEdit, setUpdateEdit] = useState<string | null>(null) // a posted card being corrected
+  const [updateFor, setUpdateFor] = useState<string | null>(null) // a teammate's card, opened by a manager
   const [todayTick, setTodayTick] = useState(0)
   const [votesFor, setVotesFor] = useState<string | null>(null)
   const [locOpen, setLocOpen] = useState(false)
@@ -1368,7 +1369,7 @@ export default function Chats() {
       return true
     }
     if (assignFor || infoFor || deleteFor || pollOpen || updateOpen || votesFor || locOpen || contactOpen || callsOpen || descOpen) {
-      setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setUpdateOpen(false); setUpdateEdit(null); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
+      setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setUpdateOpen(false); setUpdateEdit(null); setUpdateFor(null); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
       return true
     }
     if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen || dayPickOpen) { setMenuId(null); setReactFor(null); setConvoMenu(null); setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); setDayPickOpen(false); return true }
@@ -3502,7 +3503,8 @@ export default function Chats() {
 
           {active && (
             <TodayUpdates convId={active.id} refreshKey={todayTick} meId={user!.id} onFill={() => setUpdateOpen(true)}
-              onOpen={(mid) => { if (!scrollToMessage(mid)) setLandOn(mid) }} />
+              onOpen={(mid) => { if (!scrollToMessage(mid)) setLandOn(mid) }}
+              onCard={isManager ? (uid) => { setUpdateEdit(null); setUpdateFor(uid); setUpdateOpen(true) } : undefined} />
           )}
 
           {inSearchOpen && (
@@ -4202,7 +4204,9 @@ export default function Chats() {
       )}
       {deleteFor && <DeleteDialog count={deleteFor.length} canEveryone={canDeleteForAll(deleteFor)} onPick={(scope) => doDelete(deleteFor, scope)} onClose={() => setDeleteFor(null)} />}
       {pollOpen && <PollComposer onSend={sendPoll} onClose={() => setPollOpen(false)} />}
-      {updateOpen && activeId && <UpdateSheet convId={activeId} editId={updateEdit} onClose={() => { setUpdateOpen(false); setUpdateEdit(null) }} onPosted={() => { setUpdateOpen(false); setUpdateEdit(null); setTodayTick((n) => n + 1) }} />}
+      {updateOpen && activeId && <UpdateSheet key={updateFor || 'me'} convId={activeId} editId={updateEdit} userId={updateFor}
+        onClose={() => { setUpdateOpen(false); setUpdateEdit(null); setUpdateFor(null) }}
+        onPosted={() => { setUpdateOpen(false); setUpdateEdit(null); setUpdateFor(null); setTodayTick((n) => n + 1) }} />}
       {votesFor && active && (() => {
         const vm = messages.find((x) => x.id === votesFor)
         return vm?.poll ? <PollVotesSheet msg={vm} members={active.members} meId={user!.id} onClose={() => setVotesFor(null)} /> : null
