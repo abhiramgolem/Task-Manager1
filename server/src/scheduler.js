@@ -2,6 +2,8 @@
 // at the target hour it runs the digest once per day, guarded by app_meta so a
 // restart can't double-send.
 import { db } from './db.js'
+import { runBackup } from './backup.js'
+import { diskStatus } from './fileStore.js'
 import { sendDailyDigests } from './digest.js'
 import { runChatDue } from './routes/chat.js'
 import { runUpdateReminders } from './routes/dailyUpdates.js'
@@ -85,6 +87,31 @@ async function tick() {
   // Daily update cards whose owner's reminder time has come and who has not
   // posted today (routes/dailyUpdates.js). One indexed read when nothing is due.
   try { runUpdateReminders() } catch (e) { console.error('[scheduler] update reminders failed:', e.message) }
+
+  // Nightly database backup (backup.js), in the quiet hours on the team's clock.
+  // Not awaited inside the tick's marker logic: the marker goes first, so a
+  // backup that crashes the night's tick isn't retried every minute.
+  if (z.hour >= 2 && z.hour < 6 && getMeta('db_backup_last') !== z.date) {
+    setMeta('db_backup_last', z.date)
+    await runBackup()
+  }
+
+  // Say so in the log, once an hour, while the disk is running low — before it
+  // fills and every write in the app starts failing.
+  if (z.minute === 0) {
+    const d = diskStatus()
+    if (d && d.pct < 0.2) console.warn(`[disk] LOW: ${Math.round(d.free / 1048576)} MB free of ${Math.round(d.total / 1048576)} MB (${Math.round(d.pct * 100)}%) — raise the Render disk size`)
+  }
+}
+
+// One tick at a time. setInterval doesn't wait for an async tick, so a slow SMTP
+// send or backup let the next minute's tick start alongside it and send the
+// same alert twice.
+let ticking = false
+async function safeTick() {
+  if (ticking) return
+  ticking = true
+  try { await tick() } catch (e) { console.error('[scheduler] tick failed:', e.message) } finally { ticking = false }
 }
 
 export function startScheduler() {
@@ -96,5 +123,5 @@ export function startScheduler() {
   const hhmm = (at) => `${String(at.hour).padStart(2, '0')}:${String(at.minute).padStart(2, '0')}`
   console.log(`  Per-owner task mail (${tz()}): summary ${hhmm(dailyAt())}, critical-only ${hhmm(criticalAt())}, ` +
     `critical-assigned within a minute, deadline warning at ${String((deadlineHour() + 23) % 24).padStart(2, '0')}:00 — ${target}`)
-  setInterval(tick, 60 * 1000) // check every minute
+  setInterval(safeTick, 60 * 1000) // check every minute
 }

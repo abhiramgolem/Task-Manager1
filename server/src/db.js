@@ -1370,7 +1370,17 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_chat_convo_sender ON chat_messages(conversation_id, created_at, sender_id);
     CREATE INDEX IF NOT EXISTS idx_emb_hash ON embeddings(source_type, source_id, content_hash);
     CREATE INDEX IF NOT EXISTS idx_emb_updated ON embeddings(updated_at);
+    -- "Hidden for me" rows (delete-for-me, Clear chat) are looked up by user on
+    -- every unread poll, chat-list load and delivery; the primary key leads with
+    -- message_id, so without this each lookup read the whole table — which Clear
+    -- chat grows by one row per message.
+    CREATE INDEX IF NOT EXISTS idx_hidden_user ON chat_message_hidden(user_id, message_id);
   `)
+  // The sender's own id for a message, chosen on the phone before it is sent.
+  // A send whose answer was lost (flaky network) is retried with the same id
+  // and gets the message that already exists instead of posting it twice.
+  ensureColumn('chat_messages', 'client_id', 'TEXT')
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_client ON chat_messages(sender_id, client_id) WHERE client_id IS NOT NULL')
 }
 
 // Run a migration body exactly once, tracked by a key in app_meta.

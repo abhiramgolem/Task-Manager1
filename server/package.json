@@ -5,7 +5,7 @@
   "type": "module",
   "description": "SmartTask AI - meeting-to-task backend (Express + SQLite)",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node --max-old-space-size=384 src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/seed.js",
     "rag:index": "node src/ragBackfill.js",

@@ -3762,6 +3762,13 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
 .lb-late-days { grid-column: 2; grid-row: 1 / span 2; font-size: 12px; font-weight: 800; color: #f97316; white-space: nowrap; }
 .lb-late-days.open { color: #ef4444; }
 
+/* ---- Crash screen (components/ErrorBoundary.tsx) ----------------------------- */
+.eb-wrap { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg, var(--surface)); }
+.eb-card { max-width: 420px; width: 100%; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); text-align: center; }
+.eb-title { font-size: 17px; font-weight: 800; color: var(--text); }
+.eb-text { margin: 8px 0 18px; color: var(--muted); font-size: 13.5px; }
+.eb-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
 /* ---- App feedback (rate this app) ------------------------------------------- */
 .fb-modal { width: 480px; max-width: 94vw; }
 .fb-modal .card-pad { max-height: min(78vh, 720px); overflow-y: auto; }

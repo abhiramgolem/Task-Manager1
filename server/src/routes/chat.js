@@ -215,14 +215,51 @@ export function receiptCtx(convId, viewerId) {
   return { othersMinRead: oldest(others.map(readPos)), othersMinDelivered: oldest(others.map(deliveredPos)) }
 }
 
+// receiptCtx for EVERY participant of a conversation from one read of its
+// participant rows: uid -> { othersMinRead, othersMinDelivered }. Calling
+// receiptCtx per member read the whole member list once per member — N² rows
+// per message, and N³ once every reader's "read" pushed receipts in turn; in a
+// 150-person all-hands group one message held the server for seconds.
+// "Minimum of everyone but me" comes from the two smallest values: whoever holds
+// the smallest sees the second smallest, everyone else sees the smallest.
+function minExcluding(vals) {
+  let nulls = 0, a = null, ai = -1, b = null
+  vals.forEach((v, i) => {
+    if (!v) { nulls++; return }
+    if (a === null || v < a) { b = a; a = v; ai = i } else if (b === null || v < b) b = v
+  })
+  return (i) => {
+    if (vals.length <= 1) return null
+    if (nulls - (vals[i] ? 0 : 1) > 0) return null // someone else has no position yet
+    return i === ai ? b : a
+  }
+}
+export function receiptMap(convId) {
+  const rows = db.prepare('SELECT user_id, last_read_at, read_receipt_at, last_delivered_at, joined_at FROM chat_participants WHERE conversation_id=?').all(convId)
+  const read = minExcluding(rows.map(readPos)), delivered = minExcluding(rows.map(deliveredPos))
+  const out = new Map()
+  rows.forEach((r, i) => out.set(r.user_id, { othersMinRead: read(i), othersMinDelivered: delivered(i) }))
+  return out
+}
+const NO_RECEIPTS = { othersMinRead: null, othersMinDelivered: null }
+
 // Tell each participant where everyone else now is, so the ticks on their own
 // messages change colour without a reload. Each one gets their own numbers —
 // "everyone else" is a different set for every reader.
+// Debounced per conversation: when a message lands in a big group, every member
+// with it open reports "read" within the same second, and each report used to
+// trigger a full round of pushes. One round a second carries the same news.
+const receiptTimers = new Map()
 function pushReceipts(convId) {
-  for (const uid of participantsOf(convId)) {
-    const c = receiptCtx(convId, uid)
-    pushToUser(uid, { type: 'receipts', conversationId: convId, read_upto: c.othersMinRead, delivered_upto: c.othersMinDelivered })
-  }
+  if (receiptTimers.has(convId)) return
+  receiptTimers.set(convId, setTimeout(() => {
+    receiptTimers.delete(convId)
+    try {
+      for (const [uid, c] of receiptMap(convId)) {
+        pushToUser(uid, { type: 'receipts', conversationId: convId, read_upto: c.othersMinRead, delivered_upto: c.othersMinDelivered })
+      }
+    } catch (e) { console.warn('[chat] receipts push failed:', e.message) }
+  }, 800))
 }
 
 // Something from someone else newer than `since` — the only case in which a
@@ -422,12 +459,15 @@ function summarizeConvo(conv, viewerId) {
     ORDER BY created_at DESC LIMIT 1`).get(conv.id, viewerId)
   // Group event lines ("Ravi joined") are not something to catch up on, so
   // they never count as unread — as in WhatsApp.
+  // Capped: a busy group never opened counted its whole history on every load
+  // of the chat list. 500 is far past anything a badge or divider shows.
   const unread = db.prepare(`
-    SELECT COUNT(*) c FROM chat_messages
+    SELECT COUNT(*) c FROM (SELECT 1 FROM chat_messages
     WHERE conversation_id=? AND sender_id!=? AND deleted_for_all=0
       AND COALESCE(kind,'')<>'system'
       AND created_at > ?
-      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)`)
+      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+    LIMIT 500)`)
     .get(conv.id, viewerId, me?.last_read_at || '', viewerId).c
   const others = parts.filter((p) => p.id !== viewerId)
   const isGroup = conv.type === 'group'
@@ -648,7 +688,7 @@ r.get('/users', (req, res) => {
 })
 
 // Who is currently online (has a live WebSocket connection).
-r.get('/presence', (req, res) => res.json({ online: getOnlineUsers() }))
+r.get('/presence', (req, res) => res.json({ online: getOnlineUsers(req.user.org_id) }))
 
 // ---------- conversations ----------
 r.get('/conversations', (req, res) => {
@@ -1090,8 +1130,9 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
   const ts = now()
   for (const uid of others) if (online.has(uid)) markDelivered(conv.id, uid, ts)
   // Push the shaped message to everyone, each with their own view of the ticks.
+  const receipts = receiptMap(conv.id)
   for (const uid of [sender.id, ...others]) {
-    pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, receiptCtx(conv.id, uid)) })
+    pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, receipts.get(uid) || NO_RECEIPTS) })
   }
   indexChatMessage(msgRow.id) // RAG: index every delivered message (text/upload/forward)
 }

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import { api, setToken, getToken, User } from './api'
+import { api, setToken, getToken, User, ApiError } from './api'
 import { registerPush, unregisterPush } from './push'
 import { rememberAccount, forgetAccount, accountToken, savedAccounts, syncAccount } from './accounts'
 
@@ -22,29 +22,62 @@ interface AuthCtx {
 const Ctx = createContext<AuthCtx>(null as any)
 export const useAuth = () => useContext(Ctx)
 
+// The signed-in user as last confirmed by the server, kept so the app can open
+// while the server can't be reached (a deploy, a dead network) instead of
+// throwing everyone back to the sign-in screen.
+const ME_KEY = 'smarttask_me'
+const cacheMe = (u: User) => { try { localStorage.setItem(ME_KEY, JSON.stringify(u)) } catch { /* storage off */ } }
+// Only the cached user the current token belongs to — never another account's.
+function cachedMe(): User | null {
+  try {
+    const u = JSON.parse(localStorage.getItem(ME_KEY) || 'null')
+    const sub = JSON.parse(atob((getToken() || '').split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).sub
+    return u && u.id === sub ? u : null
+  } catch { return null }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // Opening the app checks the token. Only the server saying "not signed in"
+  // (401) signs the person out. Every other failure — no network, the server
+  // restarting after a deploy, a timeout — used to sign them out too, so a
+  // one-minute deploy logged out everyone who opened the app during it, and they
+  // all signed back in at once. Now the app opens as the cached user and keeps
+  // asking in the background until the server answers.
   useEffect(() => {
     if (!getToken()) { setLoading(false); return }
-    api.get('/auth/me')
+    let live = true, delay = 2000
+    const attempt = () => api.get('/auth/me')
       // syncAccount, not rememberAccount: the switcher should show the current
       // name and photo, but a token rejected below must not be re-saved.
-      .then((d) => { setUser(d.user); syncAccount(d.user); registerPush() })
-      .catch(() => setToken(null))
-      .finally(() => setLoading(false))
+      .then((d) => { if (!live) return; setUser(d.user); cacheMe(d.user); syncAccount(d.user); registerPush() })
+      .catch((e) => {
+        if (!live) return
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) { setToken(null); setUser(null); return }
+        const cached = cachedMe()
+        if (cached) setUser((u) => u || cached)
+        setTimeout(() => { if (live) attempt() }, delay)
+        delay = Math.min(delay * 2, 30_000)
+      })
+      .finally(() => { if (live) setLoading(false) })
+    attempt()
+    return () => { live = false }
   }, [])
 
-  // Clear per-login UI flags so a fresh sign-in re-shows them (e.g. the voice
-  // coachmark greets the user on every login, not just the first ever).
-  const resetPerLoginUi = () => { try { localStorage.removeItem('befach_voice_coach') } catch { /* storage off */ } }
+  // Per-login UI flags. The voice coachmark used to be cleared here so it greeted
+  // the user on every sign-in — which on a phone meant a popup over the tab bar
+  // after every login, however many times they had pressed "Got it". Once
+  // dismissed it now stays dismissed.
+  const resetPerLoginUi = () => {}
 
   const login = async (email: string, password: string) => {
     const d = await api.post('/auth/login', { email, password })
     resetPerLoginUi()
     setToken(d.token)
     setUser(d.user)
+    cacheMe(d.user)
     rememberAccount(d.user, d.token)
     registerPush() // ask for notification permission + register this device (native only)
   }
@@ -55,6 +88,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     resetPerLoginUi()
     setToken(d.token)
     setUser(d.user)
+    cacheMe(d.user)
     rememberAccount(d.user, d.token)
     registerPush()
   }
@@ -64,6 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     resetPerLoginUi()
     setToken(d.token)
     setUser(d.user)
+    cacheMe(d.user)
     rememberAccount(d.user, d.token)
     registerPush()
   }
@@ -73,6 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     resetPerLoginUi()
     setToken(d.token)
     setUser(d.user)
+    cacheMe(d.user)
     rememberAccount(d.user, d.token)
     registerPush()
   }
@@ -111,7 +147,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(null)
     window.location.href = '/login'
   }
-  const refresh = async () => { try { const d = await api.get('/auth/me'); setUser(d.user); syncAccount(d.user) } catch {} }
+  const refresh = async () => { try { const d = await api.get('/auth/me'); setUser(d.user); cacheMe(d.user); syncAccount(d.user) } catch {} }
 
   return <Ctx.Provider value={{ user, loading, login, loginWithGoogle, signup, acceptInvite, logout, refresh, switchTo, addAccount }}>{children}</Ctx.Provider>
 }

@@ -14,6 +14,7 @@ export async function postToCliq(text) {
     return { sent: false, mode: 'preview' }
   }
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(15000), // a hung provider must not leave this waiting ~5 min
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ text }), // Zoho Cliq incoming webhook expects { text }

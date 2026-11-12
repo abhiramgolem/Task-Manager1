@@ -6,7 +6,7 @@ export interface ReportRange { from: string; to: string; label: string }
 // new window with the print dialog (the manager can Save as PDF or print).
 // Dependency-free — the report is a self-contained HTML document.
 export async function downloadManagerReport(range: ReportRange, orgName = 'Befach') {
-  const d = await api.get(`/dashboards/report?from=${range.from}&to=${range.to}`)
+  const d = await api.get(`/dashboards/report?from=${range.from}&to=${range.to}`, { timeoutMs: 120_000 })
   const c = d.counts
   const now = new Date().toLocaleString(undefined, {
     day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',

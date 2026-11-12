@@ -30,7 +30,9 @@ function attachSarvamRelay(server, { path, allowUser, pickLanguage, accept, onTr
   // `noServer` + manual upgrade routing so multiple WS endpoints can share one
   // HTTP server. (Binding with `{ server, path }` makes ws abort every mismatched
   // upgrade with a 400, which would kill the other endpoints' handshakes.)
-  const wss = new WebSocketServer({ noServer: true })
+  // Audio arrives as short PCM frames; 1 MB is generous for one and stops a
+  // single frame from claiming the library's 100 MiB default.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
   server.on('upgrade', (req, socket, head) => {
     let pathname
     try { pathname = new URL(req.url, 'http://localhost').pathname } catch { return }

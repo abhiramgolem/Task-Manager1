@@ -2,6 +2,7 @@ import multer from 'multer'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pipeline } from 'node:stream'
+import { fileURLToPath } from 'node:url'
 import { id } from './util.js'
 
 // Big uploads (chat files, task attachments) in and out of the data disk. Chat
@@ -9,6 +10,8 @@ import { id } from './util.js'
 // cannot drift apart, and so both count against the one disk they share.
 
 export const MB = 1024 * 1024
+// The data disk: the database, chat files, task files and avatars all live on it.
+const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data')
 // That disk also holds the SQLite database. A file that fills it does not just
 // fail to save — every later write in the app fails with it — so a file is only
 // let in if this much is still free once it lands.
@@ -43,6 +46,31 @@ export function streamingStorage(dir, prefix) {
 
 const freeBytes = (dir) => {
   try { const s = fs.statfsSync(dir); return s.bavail * s.bsize } catch { return Infinity }
+}
+
+// The whole data disk at a glance: { free, total, pct } (pct = share still free),
+// or null where the platform can't say. Cached for 30 s — it is asked on every
+// upload request (index.js) and statfs, though cheap, need not run per request.
+let diskCache = { at: 0, v: null }
+export function diskStatus(dir = DATA_DIR) {
+  if (Date.now() - diskCache.at < 30_000) return diskCache.v
+  let v = null
+  try {
+    const s = fs.statfsSync(dir)
+    const free = s.bavail * s.bsize, total = s.blocks * s.bsize
+    v = { free, total, pct: total ? free / total : 1 }
+  } catch {}
+  diskCache = { at: Date.now(), v }
+  return v
+}
+// A full disk doesn't just refuse the file: SQLite then fails every write, and
+// the whole app stops — no message can be sent, no task saved. Only the big
+// upload routes checked for room; avatars, voice notes, call audio and meeting
+// recordings went straight to disk. Anything multipart is now refused while the
+// disk is below the headroom, so the database always keeps room to write.
+export function uploadsBlocked() {
+  const d = diskStatus()
+  return !!d && d.free - reserved < DISK_HEADROOM
 }
 
 const NO_ROOM = 'The server is out of storage space for a file this size'

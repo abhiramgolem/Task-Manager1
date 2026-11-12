@@ -14,6 +14,9 @@ function init() {
       port: Number(SMTP_PORT || 587),
       secure: Number(SMTP_PORT) === 465,
       auth: { user: SMTP_USER, pass: SMTP_PASS },
+      // nodemailer's defaults wait up to 10 minutes on a stuck mail server, and
+      // the scheduler's tick waits with it.
+      connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000,
     })
     mode = 'smtp'
   }

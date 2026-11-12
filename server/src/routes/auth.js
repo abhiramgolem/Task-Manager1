@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { OAuth2Client } from 'google-auth-library'
 import { db } from '../db.js'
-import { signToken, verifyPassword, hashPassword, authRequired, platformAdminEmails, createSession } from '../auth.js'
+import { signToken, verifyPassword, hashPassword, verifyPasswordAsync, authRequired, platformAdminEmails, createSession } from '../auth.js'
 import { audit, id, now, genToken, appUrl, inDays, isCommonPassword } from '../util.js'
 import { sendMail } from '../mailer.js'
 import { sendVerificationEmail, confirmOwnEmail } from '../emailCodes.js'
@@ -104,22 +104,23 @@ r.post('/signup', (req, res) => {
   res.status(201).json({ token: signToken(user, createSession(user, req)), user: userWithWorkspace(user) })
 })
 
-r.post('/login', (req, res) => {
+r.post('/login', async (req, res) => {
+  try {
   const { email, password } = req.body || {}
-  if (!email || !password) return res.status(400).json({ error: 'email and password required' })
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase().trim())
-  if (!user || !verifyPassword(password, user.password_hash)) {
+  if (!email || !password) return res.status(400).json({ error: 'Enter your email and password.' })
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(String(email).toLowerCase().trim())
+  if (!user || !(await verifyPasswordAsync(password, user.password_hash))) {
     // Someone who joined by link and is still awaiting approval has no users row
     // yet, so the generic message above would have them re-typing a password that
     // is actually correct. Tell them what is really happening — but only if the
     // password matches the pending request, so this can never be used to probe
     // which addresses have asked to join.
     const jr = db.prepare("SELECT jr.*, o.name org_name FROM join_requests jr JOIN organizations o ON o.id = jr.org_id WHERE jr.email = ? AND jr.status = 'pending'")
-      .get(email.toLowerCase().trim())
-    if (jr && verifyPassword(password, jr.password_hash)) {
+      .get(String(email).toLowerCase().trim())
+    if (jr && await verifyPasswordAsync(password, jr.password_hash)) {
       return res.status(403).json({ error: `Your request to join ${jr.org_name} is waiting for a manager to approve it.` })
     }
-    return res.status(401).json({ error: 'Invalid credentials' })
+    return res.status(401).json({ error: 'That email and password do not match. Check them and try again.' })
   }
   // Sync platform-admin status from the env allowlist (grants or revokes on login).
   const isPlatform = platformAdminEmails().includes(String(user.email).toLowerCase()) ? 1 : 0
@@ -129,6 +130,10 @@ r.post('/login', (req, res) => {
   }
   audit(user.org_id, user.id, 'auth.login', 'user', user.id)
   res.json({ token: signToken(user, createSession(user, req)), user: userWithWorkspace(user) })
+  } catch (e) {
+    console.error('[auth] login failed:', e.message)
+    if (!res.headersSent) res.status(500).json({ error: 'Could not sign you in right now. Please try again.' })
+  }
 })
 
 // GOOGLE SIGN-IN (login-only). The client obtains a Google ID token — from the
@@ -322,10 +327,10 @@ function publicUser(u) {
 
 // Re-confirm the CURRENT user's password. Used to gate sensitive voice actions
 // (e.g. removing a teammate) behind the manager's own password.
-r.post('/verify-password', authRequired, (req, res) => {
+r.post('/verify-password', authRequired, async (req, res) => {
   const { password } = req.body || {}
   const u = db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.user.id)
-  if (!u || !password || !verifyPassword(String(password), u.password_hash)) {
+  if (!u || !password || !(await verifyPasswordAsync(String(password), u.password_hash).catch(() => false))) {
     return res.status(401).json({ error: 'Incorrect password' })
   }
   res.json({ ok: true })

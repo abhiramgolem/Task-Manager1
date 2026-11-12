@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db } from '../db.js'
-import { authRequired, requireRole, hashPassword, verifyPassword, verifyToken } from '../auth.js'
+import { authRequired, requireRole, hashPassword, hashPasswordAsync, verifyPassword, verifyToken } from '../auth.js'
 import { id, now, audit, orgAllowedDomains, emailDomainAllowed } from '../util.js'
 import { publicUser } from './auth.js'
 import { sendVerificationEmail, clearEmailConfirmations, sendManagerCode, checkManagerCode, findProof, useProof } from '../emailCodes.js'
@@ -293,7 +293,7 @@ r.delete('/:id', requireRole('manager', 'admin'), (req, res) => {
 
 // BULK IMPORT users from an Excel/CSV file (admin). Upserts by email.
 // Expected columns (case-insensitive): name, email, role, department, aliases, language, password
-r.post('/import', requireRole('manager', 'admin'), upload.single('file'), (req, res) => {
+r.post('/import', requireRole('manager', 'admin'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file required (field "file")' })
   let rows
   try {
@@ -316,6 +316,17 @@ r.post('/import', requireRole('manager', 'admin'), upload.single('file'), (req, 
 
   let created = 0, updated = 0
   const errors = []
+  // Hash every row's password BEFORE the transaction, asynchronously: done in
+  // the loop below with hashSync, 100 rows held the one server thread for ~20 s
+  // and the whole company's chat froze while an admin imported a sheet.
+  const hashes = []
+  try {
+    for (const row of rows) {
+      const pw = String(pick(row, 'password') || '').trim()
+      hashes.push(pw ? await hashPasswordAsync(pw) : null)
+    }
+    var defaultHash = await hashPasswordAsync('password123')
+  } catch (e) { return res.status(500).json({ error: 'Could not prepare the passwords: ' + e.message }) }
   const apply = db.transaction(() => {
     rows.forEach((row, i) => {
       const name = String(pick(row, 'name', 'full name') || '').trim()
@@ -339,14 +350,14 @@ r.post('/import', requireRole('manager', 'admin'), upload.single('file'), (req, 
       if (existing) {
         const sets = ['name=?', 'role=?', 'aliases=?', 'preferred_language=?', 'department_id=?', 'phone=?']
         const args = [name, role, aliases, lang, deptId, phone]
-        if (password) { sets.push('password_hash=?'); args.push(hashPassword(password)) }
+        if (password) { sets.push('password_hash=?'); args.push(hashes[i]) }
         args.push(existing.id)
         db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id=?`).run(...args)
         updated++
       } else {
         db.prepare(`INSERT INTO users (id, org_id, department_id, name, email, password_hash, role, phone, aliases, preferred_language, avatar_color, created_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-          id('usr'), org, deptId, name, email, hashPassword(password || 'password123'), role, phone, aliases, lang,
+          id('usr'), org, deptId, name, email, hashes[i] || defaultHash, role, phone, aliases, lang,
           colors[Math.floor(Math.random() * colors.length)], now())
         created++
       }

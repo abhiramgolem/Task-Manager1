@@ -2596,7 +2596,7 @@ export default function Chats() {
   const exportChat = async (c: Conversation) => {
     setHeadMenu(false)
     try {
-      const d = await api.get(`/chat/conversations/${c.id}/export`)
+      const d = await api.get(`/chat/conversations/${c.id}/export`, { timeoutMs: 120_000 })
       const stamp = (iso: string) => {
         const t = new Date(iso)
         const dd = String(t.getDate()).padStart(2, '0'), mm = String(t.getMonth() + 1).padStart(2, '0'), yy = String(t.getFullYear()).slice(2)

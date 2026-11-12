@@ -10,7 +10,14 @@ const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me'
 const EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d'
 
 export const hashPassword = (pw) => bcrypt.hashSync(pw, 10)
-export const verifyPassword = (pw, hash) => bcrypt.compareSync(pw, hash)
+// A Google-only account has no password hash; compareSync throws on that rather
+// than answering "no", which turned a wrong login into a 500.
+export const verifyPassword = (pw, hash) => !!hash && bcrypt.compareSync(String(pw), hash)
+// The async forms hash in slices between turns of the event loop. bcryptjs is
+// pure JavaScript, so the sync form holds the one server thread for ~100-250 ms
+// per call — on the login path, which anyone can call, that froze everyone.
+export const hashPasswordAsync = (pw) => bcrypt.hash(String(pw), 10)
+export const verifyPasswordAsync = async (pw, hash) => !!hash && bcrypt.compare(String(pw), hash)
 
 // Every login opens a session row, and its id rides in the token. That is what
 // makes signing out mean something: the JWT is stateless and lives 30 days, so
