@@ -126,8 +126,46 @@ export async function shareOut(o: { url?: string; name?: string; mime?: string; 
       if (e?.name === 'AbortError') return // the person closed the sheet
     }
   }
-  const words = o.url ? new URL(o.url, location.href).href : text
-  if (!words) return
-  if (nav.share) { try { await nav.share(o.url ? { title: o.name, url: words } : { text: words }) } catch {} return }
-  try { await navigator.clipboard.writeText(words); toast.success(o.url ? 'Link copied to clipboard' : 'Copied') } catch {}
+  // A file's link carries the person's sign-in token, so it is never shared
+  // or copied as a link: a picture goes on the clipboard as a picture, any
+  // other file is left to Download.
+  if (o.url) {
+    if ((o.mime || '').startsWith('image/') && await copyImage(o.url)) return
+    toast.info('This browser cannot share files. Use Download instead.')
+    return
+  }
+  if (!text) return
+  if (nav.share) { try { await nav.share({ text }) } catch {} return }
+  try { await navigator.clipboard.writeText(text); toast.success('Copied') } catch {}
+}
+
+// A picture as PNG: the one image type every browser's clipboard takes.
+async function asPng(blob: Blob): Promise<Blob> {
+  if (blob.type === 'image/png') return blob
+  const bmp = await createImageBitmap(blob)
+  const c = document.createElement('canvas')
+  c.width = bmp.width; c.height = bmp.height
+  c.getContext('2d')!.drawImage(bmp, 0, 0)
+  bmp.close()
+  return new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('png'))), 'image/png'))
+}
+
+/**
+ * Copies the picture itself, as WhatsApp's Copy does, so it pastes into
+ * another chat or document as an image. The blob goes to ClipboardItem as a
+ * promise, made in the tap itself, because Safari refuses a clipboard write
+ * that starts after an await. Says whether it worked; on false nothing was
+ * copied (an old browser, or the phone app's web view).
+ */
+export async function copyImage(url: string): Promise<boolean> {
+  const CI = (window as any).ClipboardItem
+  if (!CI || !navigator.clipboard?.write) return false
+  try {
+    const png = fetch(url).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob() }).then(asPng)
+    await navigator.clipboard.write([new CI({ 'image/png': png })])
+    toast.success('Picture copied')
+    return true
+  } catch {
+    return false
+  }
 }

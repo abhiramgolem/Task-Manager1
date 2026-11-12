@@ -7,7 +7,7 @@ import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
 import { clearChatNotifications } from '../push'
 import { takeShare, onShare, type Shared } from '../lib/shareTarget'
-import { saveFile, shareOut } from '../lib/saveFile'
+import { saveFile, shareOut, copyImage } from '../lib/saveFile'
 import { toast } from '../lib/toast'
 import { confirmDialog, resolveConfirm } from '../lib/confirm'
 import { useDialog } from '../lib/useDialog'
@@ -459,6 +459,14 @@ export default function Chats() {
   const [showStarred, setShowStarred] = useState(false)
   const [showMentions, setShowMentions] = useState(false)
   const [jumpOpen, setJumpOpen] = useState(false)
+  // The date pill over the thread while it scrolls, as Cliq and WhatsApp show
+  // it: the day being read, and a tap on it picks a day to go to.
+  const [floatDay, setFloatDay] = useState<string | null>(null)
+  const [floatShow, setFloatShow] = useState(false)
+  const [dayPickOpen, setDayPickOpen] = useState(false)
+  const floatTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // A day to land on once the pages back to it have loaded (jumpToDay).
+  const [landDay, setLandDay] = useState<string | null>(null)
   const [pinned, setPinned] = useState<Msg[]>([])
   const [pinsOpen, setPinsOpen] = useState(false)
   const [remindFor, setRemindFor] = useState<Msg | null>(null)
@@ -1265,7 +1273,25 @@ export default function Chats() {
     const away = el.scrollHeight - el.scrollTop - el.clientHeight > 300
     if (away !== awayRef.current) { awayRef.current = away; setAwayFromBottom(away); if (!away) setNewBelow(0) }
     if (el.scrollTop < 120 && hasMore && !loadingOlder) loadOlder()
+    // The day of the top line on screen: the last day line scrolled past, or
+    // the first message's day above the first one. Shown while scrolling and
+    // for a moment after.
+    const top = el.getBoundingClientRect().top + 8
+    let label: string | null = null
+    for (const s of el.querySelectorAll<HTMLElement>('.date-sep')) {
+      if (s.getBoundingClientRect().top <= top) label = s.textContent
+      else break
+    }
+    if (!label) { const first = messages.find((m) => !m.deleted); label = first ? dayLabel(first.created_at) : null }
+    if (label !== floatDay) setFloatDay(label)
+    if (floatTimer.current) clearTimeout(floatTimer.current)
+    // Not at the very bottom: opening a chat (which scrolls there) or a new
+    // message arriving should not flash it.
+    if (stuckRef.current) { if (floatShow) setFloatShow(false); return }
+    if (!floatShow) setFloatShow(true)
+    floatTimer.current = setTimeout(() => setFloatShow(false), 1600)
   }
+  useEffect(() => { setFloatDay(null); setFloatShow(false); setDayPickOpen(false) }, [activeId])
   // From far back in a long chat, a jump (as WhatsApp does) — gliding past
   // hundreds of messages takes long enough to look like nothing happened.
   const toBottom = () => {
@@ -1345,7 +1371,7 @@ export default function Chats() {
       setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setUpdateOpen(false); setUpdateEdit(null); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
       return true
     }
-    if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen) { setMenuId(null); setReactFor(null); setConvoMenu(null); setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); return true }
+    if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen || dayPickOpen) { setMenuId(null); setReactFor(null); setConvoMenu(null); setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); setDayPickOpen(false); return true }
     if (multi) { setMulti(null); return true }
     if (selectedId) { setSelectedId(null); return true }
     if (forwardMsgs) { setForwardMsgs(null); return true }
@@ -1381,9 +1407,9 @@ export default function Chats() {
       if (showInfo && (!infoDocks || (document.activeElement as HTMLElement | null)?.closest('.ci-panel'))) return
       if (document.querySelector('.confirm-center, .modal-overlay, .mv-overlay, .ci-lb')) return
       if (attachMenu) { setAttachMenu(false); inputRef.current?.focus(); return }
-      if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen) {
+      if (menuId || reactFor || convoMenu || headMenu || jumpOpen || loadOpen || dayPickOpen) {
         const inPopup = (document.activeElement as HTMLElement | null)?.closest('.msg-menu-wrap, .msg-tools, .convo-menu-wrap')
-        setMenuId(null); setReactFor(null); setConvoMenu(null); setHeadMenu(false); setJumpOpen(false); setLoadOpen(false)
+        setMenuId(null); setReactFor(null); setConvoMenu(null); setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); setDayPickOpen(false)
         inPopup?.querySelector<HTMLElement>('button')?.focus()
         return
       }
@@ -1392,7 +1418,7 @@ export default function Chats() {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [emojiFor, attachMenu, reactionsOf, showInfo, infoDocks, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, selectedId, multi])
+  }, [emojiFor, attachMenu, reactionsOf, showInfo, infoDocks, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, dayPickOpen, selectedId, multi])
   // When a selection ends with focus nowhere (the bar or tray button that had it
   // went away with the selection), hand focus back to the message itself rather
   // than to the top of the page. After the frame, so an action that moves focus
@@ -2446,6 +2472,7 @@ export default function Chats() {
   // In thread order, so a copy or a forward reads the way it was said.
   const inOrder = (list: Msg[]) => list.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))
   const copyMany = async (list: Msg[]) => {
+    if (list.length === 1 && list[0].file) { setMulti(null); return copy(list[0]) }
     const lines = inOrder(list).map((m) => `[${fmtTime(m.created_at)}, ${new Date(m.created_at).toLocaleDateString()}] ${m.sender_id === user!.id ? user!.name : senderName(m.sender_id)}: ${m.body || m.transcript || m.file?.name || ''}`)
     const text = list.length === 1 ? (list[0].body || list[0].transcript || '') : lines.join('\n')
     try { await navigator.clipboard.writeText(text); toast.success(list.length === 1 ? 'Copied' : `${list.length} messages copied`) } catch { window.prompt('Copy:', text) }
@@ -2471,8 +2498,10 @@ export default function Chats() {
     setMenuId(null)
     // A file's link carries the person's sign-in token in it (it is how the
     // app shows pictures), so it is never copied: pasted into another chat it
-    // would hand their session to whoever opened it. The caption, or the
-    // file's name, is what gets copied.
+    // would hand their session to whoever opened it. A picture is copied as
+    // the picture itself, as WhatsApp does; where the browser cannot, or for
+    // any other file, the caption or the file's name.
+    if (m.file && (m.file.type || '').startsWith('image/') && await copyImage(fileUrl(m))) return
     const text = m.body || m.file?.name || ''
     // Said out loud: from the phone's action bar there is nothing else to show
     // that the tap did anything.
@@ -2980,8 +3009,44 @@ export default function Chats() {
 
   // Scroll to the first message of a day and flash it, so the jump is visible
   // rather than the thread just silently being somewhere else.
-  const jumpToDay = (iso: string) => {
-    setJumpOpen(false)
+  const jumpToDay = async (iso: string) => {
+    setJumpOpen(false); setDayPickOpen(false)
+    // Older than what is loaded: page back to that day first, then land on it
+    // (the landDay effect), rather than stopping at the oldest day on screen.
+    const want = new Date(iso + 'T00:00:00').getTime()
+    const oldest = messages.find((m) => !m.id.startsWith('tmp_'))
+    const cid = activeIdRef.current
+    if (cid && oldest && hasMore && new Date(oldest.created_at).getTime() > want) {
+      setLoadingOlder(true)
+      const got: Msg[] = []
+      let before = oldest.created_at, more: boolean = true
+      try {
+        for (let page = 0; more && page < 40; page++) {
+          const d = await api.get(`/chat/conversations/${cid}?before=${encodeURIComponent(before)}`)
+          const batch = (d.messages || []) as Msg[]
+          more = !!d.has_more
+          if (!batch.length) break
+          got.unshift(...batch)
+          before = batch[0].created_at
+          if (new Date(before).getTime() <= want) break
+        }
+      } catch { toast.error("Couldn't load the older messages") }
+      setLoadingOlder(false)
+      if (cid !== activeIdRef.current) return
+      setMessages((cur) => [...got.filter((x) => !cur.some((y) => y.id === x.id)), ...cur])
+      setHasMore(more)
+      setLandDay(iso)
+      return
+    }
+    landOnDay(iso)
+  }
+  useEffect(() => {
+    if (!landDay) return
+    const iso = landDay
+    setLandDay(null)
+    requestAnimationFrame(() => landOnDay(iso))
+  }, [landDay, dayIndex])
+  const landOnDay = (iso: string) => {
     let target = dayIndex.find((d) => d.iso === iso)
     if (!target) {
       // A date with no messages: land on the first day AFTER it, which is what
@@ -3493,6 +3558,15 @@ export default function Chats() {
                     : 'Start a new chat with a teammate or create a group to begin messaging.'}
                   action={<button className="btn btn-primary btn-sm row" style={{ gap: 5 }} onClick={() => setShowNew(true)}><Ic name="plus" size={15} /> New chat</button>}
                 />
+              </div>
+            )}
+            {active && floatDay && messages.length > 0 && (
+              <div className={'day-float' + (floatShow || dayPickOpen ? ' show' : '')}>
+                <button type="button" className="day-float-btn" aria-expanded={dayPickOpen} aria-label={`${floatDay}. Go to a date`}
+                  onClick={() => setDayPickOpen((o) => !o)}>
+                  {floatDay} <Ic name="calendar" size={12} />
+                </button>
+                {dayPickOpen && <JumpToDate days={dayIndex} onPick={jumpToDay} onClose={() => setDayPickOpen(false)} />}
               </div>
             )}
             {active && hasMore && (

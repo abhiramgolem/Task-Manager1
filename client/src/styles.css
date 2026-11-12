@@ -2668,6 +2668,14 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 .avatar-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
 .online-dot { position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%; background: #22c55e; border: 2px solid var(--surface); }
 .online-text { color: #16a34a; font-weight: 600; }
+/* The day being read, floating over the thread while it scrolls (Chats.tsx
+   onLogScroll); a tap opens the date picker. Height 0 and sticky, so it sits
+   over the messages without pushing them down. */
+.day-float { position: sticky; top: 6px; z-index: 30; height: 0; display: flex; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.day-float.show { opacity: 1; pointer-events: auto; }
+.day-float-btn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 12px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); color: var(--text); font: inherit; font-size: 11.5px; font-weight: 600; box-shadow: 0 2px 8px rgba(16,24,40,.12); cursor: pointer; }
+.day-float-btn:hover { background: var(--bg); }
+.day-float .jump-pop { top: 32px; left: 50%; right: auto; transform: translateX(-50%); }
 .date-sep { display: flex; justify-content: center; margin: 6px 0; }
 .date-sep span { background: var(--bg); color: var(--muted); font-size: 11px; font-weight: 600; padding: 3px 12px; border-radius: 12px; border: 1px solid var(--border); }
 .btn.danger-solid { background: #ef4444; color: #fff; border-color: #ef4444; }
@@ -4653,6 +4661,43 @@ button.reply-quote {
 .du-blank::placeholder { color: var(--muted); font-weight: 500; opacity: .6; }
 .du-blank:focus { outline: 2px solid var(--primary); outline-offset: 0; border-color: transparent; }
 .du-hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.du-blank.auto { background: color-mix(in srgb, #0d9488 10%, var(--surface)); border-style: dashed; }
+/* A card kept as a sheet (lines starting with "|"): scrolls sideways on a phone. */
+.du-table-wrap { overflow-x: auto; margin: 2px 0 4px; -webkit-overflow-scrolling: touch; }
+.du-table { border-collapse: collapse; font-size: 12.5px; line-height: 1.3; min-width: 100%; }
+.du-table td { padding: 3px 5px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); white-space: nowrap; overflow-wrap: normal; }
+.du-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.du-table tr.du-th td { font-weight: 700; font-size: 11px; text-align: left; white-space: normal; vertical-align: bottom; }
+.du-table tr.du-tot td { font-weight: 700; }
+.du-table tr.du-tot td:first-child { text-align: center; }
+.du-fill .du-table .du-blank { width: 6ch; min-width: 0; font-size: 15px; padding: 2px 4px; margin: 0; text-align: right; }
+.du-fill .du-table td { padding: 2px 4px; }
+/* Room for the whole sheet on a computer; a phone's full-width sheet scrolls it. */
+.wa-sheet.du-sheet:has(.du-table) { max-width: 600px; }
+.bubble.card-bubble:has(.du-table) { width: 520px; }
+/* Edit card for a sheet (DailyTableEditor.tsx): the table as boxes. */
+.du-body-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.du-switch { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.wa-sheet.du-sheet:has(.dte) { max-width: 680px; }
+.dte-table td { padding: 2px 3px; vertical-align: middle; }
+.dte-table thead td { vertical-align: top; background: var(--bg); }
+.dte-in { width: 100%; min-width: 0; padding: 3px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.dte-h { width: auto; font-size: 11px; font-weight: 700; }
+.dte-name { width: auto; }
+.du-tot .dte-name { font-weight: 700; }
+.dte-num { width: 6ch; text-align: right; }
+.dte-colopt { display: flex; align-items: center; gap: 2px; margin-top: 3px; }
+.dte-kind { flex: 1; padding: 2px 4px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.dte-kind.on { background: #0d9488; border-color: #0d9488; color: #fff; }
+.dte-x { width: 22px; height: 22px; padding: 0; }
+.dte-rowopt { white-space: nowrap; }
+.dte-sel { padding: 2px 2px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; font-size: 11.5px; }
+.dte-slot { display: inline-block; min-width: 6ch; padding: 2px 4px; border: 1px dashed var(--border); border-radius: 5px; color: var(--muted); font-size: 11px; font-weight: 500; text-align: center; }
+.dte-slot.auto { background: color-mix(in srgb, #0d9488 10%, var(--surface)); color: #0f766e; }
+.dte-adds-row td { border-top: 0; }
+.dte-adds { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 0 4px; font-size: 11.5px; font-weight: 500; white-space: normal; color: var(--muted); }
+.dte-chip { padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer; }
+.dte-chip.on { background: #0d9488; border-color: #0d9488; color: #fff; }
 
 /* The sheet: set up once, then fill in. */
 .du-loading { display: grid; place-items: center; padding: 30px; }

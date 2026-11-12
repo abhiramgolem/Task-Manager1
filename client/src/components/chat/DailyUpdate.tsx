@@ -5,6 +5,7 @@ import { toast } from '../../lib/toast'
 import { confirmDialog } from '../../lib/confirm'
 import { Sheet } from './ChatDialogs'
 import { TrendGlyph } from './glyphs'
+import { TableEditor, parseGrid, gridText, newGrid, cellsOf, type Grid } from './DailyTableEditor'
 import type { UpdateMeta, UpdateTemplate } from './types'
 import { fmtTime } from './types'
 
@@ -14,11 +15,59 @@ import { fmtTime } from './types'
 // a number goes, {month} for the month (filled in by the app) and {date} for
 // a date they pick; each day they only type the blanks.
 
-const TOKEN = /(_{3,}|\{month\}|\{date\})/
+// A value slot is a typed blank (___) or a table total ({sum}, {sum:Row;Row})
+// that the form adds up and the person may type over.
+const SLOT_G = /_{3,}|\{sum(?::[^}\n]*)?\}/g
+const TOKEN = /(_{3,}|\{sum(?::[^}\n]*)?\}|\{month\}|\{date\})/
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const dateLabel = (ymd?: string | null) => (ymd ? `${Number(ymd.slice(8, 10))} ${MON[Number(ymd.slice(5, 7)) - 1]}` : '')
 const dayLabel = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
-const blanksIn = (text: string) => (text.match(/_{3,}/g) || []).length
+const blanksIn = (text: string) => (text.match(SLOT_G) || []).length
+const isSum = (seg: string) => seg.startsWith('{sum')
+
+// ---- tables and totals: same rules as the server's sumsOf (dailyUpdates.js) ----
+// Lines starting with "|" are a table; its first line the header, a row whose
+// first cell is *bold* a total row. {sum} adds the rows above it up to the
+// previous total row; {sum:A;B} the rows named A and B. Same column either way.
+const rowName = (cell: string) => cell.replace(/\*/g, '').trim().toLowerCase()
+const numOf = (s?: string) => { const t = String(s ?? '').replace(/[,₹\s]/g, ''); return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null }
+const decimalsOf = (s?: string) => { const m = /\.(\d+)/.exec(String(s ?? '').replace(/[,₹\s]/g, '')); return m ? m[1].length : 0 }
+const isTotalRow = (cells: string[]) => /^\*.*\*$/.test(cells[0] || '')
+
+export function sumsOf(text: string, values: string[]): string[] {
+  const out = values.slice()
+  type Cell = { text: string; slots: number[]; sum: string | null }
+  const tables: Cell[][][] = []
+  let cur: Cell[][] | null = null
+  let slot = 0
+  for (const line of text.split('\n')) {
+    if (!line.trim().startsWith('|')) { cur = null; slot += (line.match(SLOT_G) || []).length; continue }
+    if (!cur) { cur = []; tables.push(cur) }
+    cur.push(cellsOf(line).map((t) => {
+      const toks = t.match(SLOT_G) || []
+      return { text: t, slots: toks.map(() => slot++), sum: toks.length === 1 && isSum(toks[0]) ? toks[0] : null }
+    }))
+  }
+  const val = (c: Cell) => (c.slots.length ? out[c.slots[0]] : c.text)
+  for (const rows of tables) {
+    rows.forEach((row, r) => row.forEach((c, col) => {
+      if (!c.sum || out[c.slots[0]]) return
+      let from: Cell[][] = []
+      const names = /^\{sum:(.*)\}$/.exec(c.sum)
+      if (names) {
+        const want = names[1].split(';').map(rowName).filter(Boolean)
+        from = rows.filter((x, j) => j > 0 && want.includes(rowName(x[0]?.text || '')))
+      } else {
+        for (let j = r - 1; j >= 1 && !isTotalRow(rows[j].map((x) => x.text)); j--) from.push(rows[j])
+      }
+      const parts = from.map((x) => x[col]).filter(Boolean).map(val)
+      const nums = parts.map(numOf).filter((n): n is number => n != null)
+      if (!nums.length) return
+      out[c.slots[0]] = nums.reduce((a, b) => a + b, 0).toFixed(Math.min(2, Math.max(0, ...parts.map(decimalsOf))))
+    }))
+  }
+  return out
+}
 
 // Plain text with WhatsApp-style *bold*, as the team writes headings.
 function Rich({ text }: { text: string }) {
@@ -26,22 +75,47 @@ function Rich({ text }: { text: string }) {
   return <>{parts.map((p, i) => (i % 2 ? <b key={i}>{p}</b> : p))}</>
 }
 
-// The template line by line: `blank(i)` draws the i-th blank (a value on the
-// card, an input on the form).
-function Lines({ text, month, date, blank }: { text: string; month: string; date: string; blank: (i: number) => React.ReactNode }) {
+// The template line by line, "|" lines as a table: `blank(i, total)` draws the
+// i-th value slot (a value on the card, an input on the form).
+function Lines({ text, month, date, blank }: { text: string; month: string; date: string; blank: (i: number, total: boolean) => React.ReactNode }) {
   let n = 0
+  const segs = (s: string) => s.split(TOKEN).map((seg, si) => {
+    if (si % 2 === 0) return <Rich key={si} text={seg} />
+    if (seg === '{month}') return <span key={si}>{month}</span>
+    if (seg === '{date}') return <span key={si}>{date}</span>
+    const i = n++
+    return <React.Fragment key={si}>{blank(i, isSum(seg))}</React.Fragment>
+  })
+  // Runs of table lines become one table each, in order with the other lines.
+  const blocks: { table: boolean; lines: string[] }[] = []
+  for (const line of text.split('\n')) {
+    const table = line.trim().startsWith('|')
+    const last = blocks[blocks.length - 1]
+    if (table && last?.table) last.lines.push(line)
+    else blocks.push({ table, lines: [line] })
+  }
   return (
     <div className="du-text">
-      {text.split('\n').map((line, li) => (
-        <div key={li} className="du-tline">
-          {line ? line.split(TOKEN).map((seg, si) => {
-            if (si % 2 === 0) return <Rich key={si} text={seg} />
-            if (seg === '{month}') return <span key={si}>{month}</span>
-            if (seg === '{date}') return <span key={si}>{date}</span>
-            const i = n++
-            return <React.Fragment key={si}>{blank(i)}</React.Fragment>
-          }) : ' '}
+      {blocks.map((b, bi) => b.table ? (
+        <div key={bi} className="du-table-wrap">
+          <table className="du-table">
+            <tbody>
+              {b.lines.map((line, ri) => {
+                const cells = cellsOf(line)
+                const total = isTotalRow(cells)
+                return (
+                  <tr key={ri} className={ri === 0 ? 'du-th' : total ? 'du-tot' : ''}>
+                    {cells.map((c, ci) => (
+                      <td key={ci} className={ci ? 'num' : ''}>{segs(total && ci === 0 ? c.replace(/\*/g, '') : c)}</td>
+                    ))}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
+      ) : (
+        <div key={bi} className="du-tline">{b.lines[0] ? segs(b.lines[0]) : ' '}</div>
       ))}
     </div>
   )
@@ -112,6 +186,10 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
 }) {
   const [title, setTitle] = useState(tpl?.title || 'Daily metrics')
   const [body, setBody] = useState(tpl?.body || '')
+  // A card that is one table is edited as a grid of boxes; anything else (or
+  // on request) as text. The grid writes the same text the card is saved as.
+  const [grid, setGrid] = useState<Grid | null>(() => (tpl?.body ? parseGrid(tpl.body) : null))
+  const editGrid = (g: Grid) => { setGrid(g); setBody(gridText(g)) }
   const [remind, setRemind] = useState(!!tpl?.remind_at || !tpl)
   const [at, setAt] = useState(tpl?.remind_at || '11:00')
   const [days, setDays] = useState<number[]>(tpl?.remind_days?.length ? tpl.remind_days : [1, 2, 3, 4, 5, 6])
@@ -151,16 +229,27 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
       {!tpl && <p className="du-intro">Paste the message you post every day, and put ___ where you type a number. After that you only fill in the numbers.</p>}
       <label className="ta-label" htmlFor="du-title">Card name</label>
       <input id="du-title" className="ta-input" maxLength={80} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Daily metrics" />
-      <label className="ta-label" htmlFor="du-body">Your daily message</label>
-      <textarea id="du-body" ref={box} className="ta-input du-body-in" rows={9} maxLength={2000} value={body} onChange={(e) => setBody(e.target.value)}
-        placeholder={'Leads for Dcal B2C = ___\nSales target for {month} = ___/___\nJunk leads = ___'} />
-      <div className="du-tokens">
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => insert('___')}>+ Blank</button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => insert('{month}')} title="Filled in with the current month">+ Month</button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => insert('{date}')} title="You pick the date when posting">+ Date</button>
-        <span className="du-count">{blanks === 1 ? '1 blank' : `${blanks} blanks`}</span>
+      <div className="du-body-head">
+        <label className="ta-label" htmlFor={grid ? undefined : 'du-body'}>{grid ? 'Your daily sheet' : 'Your daily message'}</label>
+        {grid
+          ? <button type="button" className="du-switch" onClick={() => setGrid(null)}>Edit as text</button>
+          : parseGrid(body) ? <button type="button" className="du-switch" onClick={() => setGrid(parseGrid(body))}>Edit as table</button>
+          : !body.trim() && <button type="button" className="du-switch" onClick={() => editGrid(newGrid())}>Start a table instead</button>}
       </div>
-      {!blanks && body.trim() && <div className="pc-warn">Put ___ where you type a number each day.</div>}
+      {grid ? <TableEditor grid={grid} onChange={editGrid} /> : (
+        <>
+          <textarea id="du-body" ref={box} className="ta-input du-body-in" rows={9} maxLength={4000} value={body} onChange={(e) => setBody(e.target.value)}
+            placeholder={'Leads for Dcal B2C = ___\nSales target for {month} = ___/___\nJunk leads = ___'} />
+          <div className="du-tokens">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => insert('___')}>+ Blank</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => insert('{month}')} title="Filled in with the current month">+ Month</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => insert('{date}')} title="You pick the date when posting">+ Date</button>
+            {body.includes('|') && <button type="button" className="btn btn-ghost btn-sm" onClick={() => insert('{sum}')} title="In a table's *total* row: adds up the rows above it">+ Total</button>}
+            <span className="du-count">{blanks === 1 ? '1 blank' : `${blanks} blanks`}</span>
+          </div>
+        </>
+      )}
+      {!blanks && body.trim() && <div className="pc-warn">{grid ? 'Make at least one column Daily.' : 'Put ___ where you type a number each day.'}</div>}
 
       <label className="pc-multi du-remind">
         <input type="checkbox" checked={remind} onChange={(e) => setRemind(e.target.checked)} />
@@ -191,17 +280,27 @@ function FillForm({ convId, data, onSetup, onFixLast, onClose, onPosted }: {
   const month = edit ? edit.month || '' : data.month
   const n = blanksIn(text)
   const hint = !edit && last?.text === text ? last.values || [] : []
-  const [vals, setVals] = useState<string[]>(() => Array.from({ length: n }, (_, i) => edit?.values?.[i] || ''))
+  // Which slots are totals: those fill themselves in from the rows they add.
+  const totals = (text.match(SLOT_G) || []).map(isSum)
+  // `vals` is what was typed; a total left empty shows its sum. Editing a
+  // posted card, a total that still equals its sum goes back to adding itself.
+  const [vals, setVals] = useState<string[]>(() => {
+    const v = Array.from({ length: n }, (_, i) => edit?.values?.[i] || '')
+    const typed = v.map((x, i) => (totals[i] ? '' : x))
+    const auto = sumsOf(text, typed)
+    return v.map((x, i) => (totals[i] && x === auto[i] ? '' : x))
+  })
+  const shown = sumsOf(text, vals.map((v) => v.trim()))
   const [date, setDate] = useState(edit?.date || data.day)
   const [note, setNote] = useState(edit?.note || '')
   const [busy, setBusy] = useState(false)
   const withDate = text.includes('{date}')
-  const any = vals.some((v) => v.trim()) || !!note.trim()
+  const any = vals.some((v, i) => !totals[i] && v.trim()) || !!note.trim()
   const post = async () => {
     if (busy || !any) return
     setBusy(true)
     try {
-      const payload = { values: vals.map((v) => v.trim()), note: note.trim(), date: withDate ? date : null }
+      const payload = { values: shown, note: note.trim(), date: withDate ? date : null }
       if (edit) await api.put(`/chat/message/${edit.id}/update`, payload)
       else await api.post(`/chat/conversations/${convId}/update`, payload)
       onPosted()
@@ -228,14 +327,20 @@ function FillForm({ convId, data, onSetup, onFixLast, onClose, onPosted }: {
         </label>
       )}
       <div className="du-fill">
-        <Lines text={text} month={month} date={dateLabel(date)} blank={(i) => (
-          <input className="du-blank" inputMode="text" enterKeyHint="next" aria-label={`Blank ${i + 1}`} maxLength={30}
-            size={Math.max(3, Math.min(14, (vals[i] || hint[i] || '').length + 1))}
-            placeholder={hint[i] && hint[i] !== '-' ? hint[i] : ''} value={vals[i] || ''}
-            onChange={(e) => setVals((v) => v.map((x, j) => (j === i ? e.target.value : x)))} />
-        )} />
+        <Lines text={text} month={month} date={dateLabel(date)} blank={(i, total) => {
+          const auto = total && !vals[i]
+          return (
+            <input className={'du-blank' + (auto ? ' auto' : '')} inputMode={total ? 'decimal' : 'text'} enterKeyHint="next" maxLength={30}
+              aria-label={total ? `Total ${i + 1}, added up for you` : `Blank ${i + 1}`}
+              title={total ? 'Added up for you. Type to change it; clear it to add up again.' : undefined}
+              size={Math.max(3, Math.min(14, ((auto ? shown[i] : vals[i]) || hint[i] || '').length + 1))}
+              placeholder={total ? '' : hint[i] && hint[i] !== '-' ? hint[i] : ''} value={(auto ? shown[i] : vals[i]) || ''}
+              onChange={(e) => setVals((v) => v.map((x, j) => (j === i ? e.target.value : x)))} />
+          )
+        }} />
       </div>
       {hint.length > 0 && <div className="du-hint">Faint numbers are from your last update.</div>}
+      {totals.some(Boolean) && <div className="du-hint">Totals add themselves up. Type over one to change it.</div>}
       <label className="ta-label" htmlFor="du-note">Note (optional)</label>
       <textarea id="du-note" className="ta-input du-note-in" rows={2} maxLength={1000} placeholder="Anything else today" value={note} onChange={(e) => setNote(e.target.value)} />
     </Sheet>

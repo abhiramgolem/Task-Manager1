@@ -8,8 +8,10 @@
 //            ("0k", "1.05L", "359"), posted exactly as typed;
 //   {month}  the current month's name, filled in by the app at post time;
 //   {date}   a date they pick on the form (today by default), as "7 Nov".
-// Nothing is added up or measured against a target: the card reads like the
-// message they used to post.
+// Lines starting with "|" make a table, for a report kept as a sheet; in one,
+// {sum} is a total row's cell the form adds up for them (see sumsOf).
+// Nothing is carried from day to day or measured against a target: the card
+// reads like the message they used to post.
 //
 // The card is an ordinary chat message (kind 'update', the text and values in
 // meta), so it is delivered, notified, searched, replied to and deleted like
@@ -29,10 +31,12 @@ import { member, canPost, ADMINS_ONLY, deliver, shapeMessage, receiptCtx, parseM
 const r = Router()
 
 const DEFAULT_TITLE = 'Daily metrics'
-const MAX_BODY = 2000
-const MAX_BLANKS = 40
+const MAX_BODY = 4000
+const MAX_BLANKS = 80
 const MAX_VALUE = 30
-const BLANK = /_{3,}/g
+// A value slot: a typed blank, or a total ({sum} / {sum:Row A;Row B}) that the
+// form fills in and the person may type over. See sumsOf.
+const BLANK = /_{3,}|\{sum(?::[^}\n]*)?\}/g
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const MON = MONTHS.map((m) => m.slice(0, 3))
 
@@ -51,6 +55,60 @@ export function fillText(text, values, { month, date }) {
     .replace(BLANK, () => values[i++] || '-')
     .replace(/\{month\}/g, month || '')
     .replace(/\{date\}/g, date ? dateLabel(date) : '')
+}
+
+// ---- tables and totals ----------------------------------------------------------
+// Lines starting with "|" are a table ("| AMAZON | 35 | 30 | ___ |"); its
+// first line is the header, and a row whose first cell is *bold* is a total
+// row. A total cell is {sum}: the rows above it up to the previous total row,
+// or {sum:Row A;Row B}: those rows by their first cell. Either adds the same
+// column of those rows. Same rules as the client's sumsOf (DailyUpdate.tsx).
+const cellsOf = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+const rowName = (cell) => cell.replace(/\*/g, '').trim().toLowerCase()
+const numOf = (s) => { const t = String(s ?? '').replace(/[,₹\s]/g, ''); return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null }
+const decimalsOf = (s) => { const m = /\.(\d+)/.exec(String(s ?? '').replace(/[,₹\s]/g, '')); return m ? m[1].length : 0 }
+
+// `values` with every empty total worked out. A total someone typed stays.
+export function sumsOf(text, values) {
+  const out = values.slice()
+  let slot = 0
+  const tables = [] // [{ rows: [{ cells: [{ text, slots: [i], sum }] }] }]
+  let cur = null
+  for (const line of String(text || '').split('\n')) {
+    const isRow = line.trim().startsWith('|')
+    if (!isRow) { cur = null; slot += (line.match(BLANK) || []).length; continue }
+    if (!cur) { cur = { rows: [] }; tables.push(cur) }
+    cur.rows.push({
+      cells: cellsOf(line).map((t) => {
+        const toks = t.match(BLANK) || []
+        const c = { text: t, slots: toks.map(() => slot++), sum: toks.length === 1 && toks[0].startsWith('{sum') ? toks[0] : null }
+        return c
+      }),
+    })
+  }
+  const cellValue = (c) => (c.slots.length ? out[c.slots[0]] : c.text)
+  for (const tb of tables) {
+    tb.rows.forEach((row, r) => row.cells.forEach((c, col) => {
+      if (!c.sum || out[c.slots[0]]) return
+      let from = []
+      const names = /^\{sum:(.*)\}$/.exec(c.sum)
+      if (names) {
+        const want = names[1].split(';').map(rowName).filter(Boolean)
+        from = tb.rows.filter((x, j) => j > 0 && want.includes(rowName(x.cells[0]?.text || '')))
+      } else {
+        for (let j = r - 1; j >= 1; j--) {
+          if (/^\*.*\*$/.test(tb.rows[j].cells[0]?.text || '')) break
+          from.push(tb.rows[j])
+        }
+      }
+      const parts = from.map((x) => x.cells[col]).filter(Boolean).map(cellValue)
+      const nums = parts.map(numOf).filter((n) => n != null)
+      if (!nums.length) return
+      const dp = Math.min(2, Math.max(0, ...parts.map(decimalsOf)))
+      out[c.slots[0]] = nums.reduce((a, b) => a + b, 0).toFixed(dp)
+    }))
+  }
+  return out
 }
 
 // What was typed into the blanks, in order: an array, or { "0": .., "1": .. }
@@ -72,7 +130,17 @@ function cleanValues(raw, n) {
 export function blankLabels(text) {
   const out = []
   let heading = ''
+  let header = null
   for (const line of String(text || '').split('\n')) {
+    // A table: each slot is "<row> <column>", e.g. "AMAZON CUMM SALES".
+    if (line.trim().startsWith('|')) {
+      const cells = cellsOf(line)
+      if (!header) { header = cells.map((c) => c.replace(/\*/g, '')); continue }
+      const row = cells[0].replace(/\*/g, '').trim()
+      cells.forEach((c, col) => { for (const _ of c.match(BLANK) || []) out.push(`${row} ${header[col] || ''}`.trim()) })
+      continue
+    }
+    header = null
     const parts = line.split(BLANK)
     if (parts.length === 1) {
       const h = line.replace(/\{(month|date)\}/g, '').replace(/[^\p{L}\p{N}()&.,'\- ]/gu, '').trim()
@@ -97,6 +165,7 @@ export function blankLabels(text) {
 
 const shapeTemplate = (t) => (!t ? null : {
   id: t.id, conversation_id: t.conversation_id, title: t.title, body: t.body || '',
+  metrics: [], // the 5.1 phone app reads this; an empty list keeps its form from crashing
   remind_at: t.remind_at || null,
   remind_days: String(t.remind_days ?? '').split(',').filter((d) => d !== '').map(Number),
   last_posted_date: t.last_posted_date || null,
@@ -119,18 +188,30 @@ const announce = (convId) => pushToConversation(convId, { type: 'updates-today',
 
 // The card's meta and its message body from what was typed.
 function buildPost({ templateId, title, text, day, month, values, date, note }) {
-  const vals = cleanValues(values, blanksOf(text))
+  const typed = cleanValues(values, blanksOf(text))
   const cleanNote = String(note || '').trim().slice(0, 1000)
-  if (vals.every((v) => !v) && !cleanNote) throw { status: 400, error: 'Fill in at least one number' }
+  if (typed.every((v) => !v) && !cleanNote) throw { status: 400, error: 'Fill in at least one number' }
+  const vals = sumsOf(text, typed)
   let d = null
   if (hasDate(text)) {
     if (date && !isDay(date)) throw { status: 400, error: 'Pick a date' }
     d = date || day
   }
-  const meta = { template_id: templateId, title, day, text, values: vals, month, date: d, note: cleanNote }
+  const filled = fillText(text, vals, { month, date: d })
+  // `metrics`: the card as the phone app before the text templates (5.1 and
+  // earlier) reads it, one line per row, so it shows the lines instead of
+  // crashing the chat on a card it does not know. Newer clients read `text`.
+  const legacy = filled.split('\n').filter((l) => l.trim()).map((l, i) => ({
+    id: `l${i}`, label: (l.trim().startsWith('|') ? cellsOf(l).join('  ') : l).replace(/\*/g, '').slice(0, 200),
+    target: null, stretch: null, unit: '', mode: 'total', value: null, total: null,
+  }))
+  const meta = { template_id: templateId, title, day, text, values: vals, month, date: d, note: cleanNote, metrics: legacy }
   // The body is the message as filled in: what the chat list, a push and
   // search show, and what it would have said posted by hand.
-  const body = fillText(text, vals, { month, date: d }) + (cleanNote ? `\n\n${cleanNote}` : '')
+  // A card that opens with a table leads with its name, so the chat list and
+  // a push read "Daily metrics" rather than "| CATEGORY | HIGHER…".
+  const lead = text.trimStart().startsWith('|') ? `${title}\n` : ''
+  const body = lead + filled + (cleanNote ? `\n\n${cleanNote}` : '')
   return { meta, body }
 }
 
@@ -218,7 +299,7 @@ r.get('/conversations/:id/update-template', authRequired, (req, res) => {
     if (got.error) return res.status(got.status).json({ error: got.error })
     edit = { id: got.m.id, ...got.meta }
   }
-  res.json({ template: shapeTemplate(t), last, last_id: row?.message_id || null, posted_today: row?.day === day, day, month: monthOf(day), edit })
+  res.json({ template: shapeTemplate(t), last, last_id: row?.message_id || null, last_base: {}, posted_today: row?.day === day, day, month: monthOf(day), edit })
 })
 
 r.put('/conversations/:id/update-template', authRequired, (req, res) => {
