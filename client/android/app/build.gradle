@@ -29,12 +29,12 @@ android {
         // "4.3", "4.4" on 27, "4.5" on 28, 29 was spent on an upload of 4.6;
         // "4.6.1" on 30, "4.7" on 31, "4.7.1" on 32, "4.8" on 33, "4.9" on 34, "5.0" on 35, "5.1" on 36; 37 was built as "5.2" but its Play upload
         // was stopped part-way, so it may be taken; "5.2" was built on 38. This
-        // ships as "5.3" on 39.
+        // ships as "5.3" on 39, "5.4" on 40.
         // applicationId stays io.smarttask.app: changing it would register a
         // brand-new app on Play, orphaning the existing listing, reviews and
         // installs.
-        versionCode 39
-        versionName "5.3"
+        versionCode 40
+        versionName "5.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

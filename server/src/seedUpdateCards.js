@@ -140,8 +140,38 @@ function upgradeCummColumns() {
   db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').run(key, now())
 }
 
+// Sri Latha's CUMM SALES for November as her sheet stood on 12 Nov 2026 (sent
+// by the manager), so her card's month totals carry on from it rather than
+// from whatever her earlier cards held. Once; a later "Save as month so far"
+// replaces it.
+const SRILATHA_NOV = {
+  day: '2026-11-12',
+  cumm: {
+    'amazon': '0.15', 'flipkart': '2.79', 'rk world(rice)': '3.37', 'meesho': '0.01', 'shopdeck rice': '0.00',
+    'jio mart': '0.05', 'clicktech': '0.00', "shopdeck d'cal": '0.00', 'swiggy': '0.00', 'dcal vinay': '0.80',
+    'dcal yaseen': '1.05', 'dcal alekhya': '0.00', 'dcal prasanna': '0.00', 'rice saba': '0.00', 'rice sujitha': '1.93',
+    'partnerships': '0.00', 'exports': '0.00', 'gcom sales': '3.95',
+  },
+}
+function loadSriLathaMonth() {
+  const key = 'srilatha_cumm_2026_11_12'
+  if (db.prepare('SELECT 1 FROM app_meta WHERE key=?').get(key)) return
+  const t = db.prepare(`
+    SELECT t.id, u.name FROM daily_update_templates t JOIN users u ON u.id = t.user_id
+    JOIN chat_conversations c ON c.id = t.conversation_id
+    WHERE c.type = 'group' AND lower(replace(c.name, ' ', '')) LIKE '%132cr%' AND t.body LIKE '%{run:%'`).all()
+    .filter((x) => /latha/i.test(x.name))
+  if (t.length !== 1) { console.log(`  [update-cards] Sri Latha's month so far: ${t.length} cards match, not loaded yet`); return }
+  const cells = {}
+  for (const [row, v] of Object.entries(SRILATHA_NOV.cumm)) cells[`${row}|cumm sales`] = v
+  db.prepare('UPDATE daily_update_templates SET run_base=?, updated_at=? WHERE id=?').run(JSON.stringify({ day: SRILATHA_NOV.day, cells }), now(), t[0].id)
+  db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').run(key, now())
+  console.log(`  [update-cards] loaded ${t[0].name}'s November month so far (as of ${SRILATHA_NOV.day})`)
+}
+
 export function seedUpdateCards() {
   upgradeCummColumns()
+  loadSriLathaMonth()
   const marker = (k) => `seed_daily_metrics_132cr:${k}`
   const done = (k) => !!db.prepare('SELECT 1 FROM app_meta WHERE key=?').get(marker(k))
   const todo = CARDS.filter((c) => !done(c.key))
