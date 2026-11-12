@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api, userAvatarUrl } from '../../api'
-import { Avatar, Ic, PRIORITY_COLORS, STATUS_COLORS } from '../../ui'
+import { Avatar, Ic, PRIORITY_COLORS, STATUS_COLORS, todayKey } from '../../ui'
 import { useDialog } from '../../lib/useDialog'
 import type { ContactRef, LocationRef, MeetingCard, Member, Msg, Poll, TaskRef } from './types'
 import { PinDropGlyph, PollGlyph, SparkGlyph, TaskGlyph } from './glyphs'
@@ -31,7 +31,7 @@ export function TaskCard({ task, meId, onOpen }: { task: TaskRef; meId: string; 
   if (task.deleted) {
     return <div className="task-card gone"><TaskGlyph size={16} /> <span>This task was deleted</span></div>
   }
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayKey()
   const overdue = !!task.due_date && task.due_date < today && task.status !== 'Done'
   const forMe = task.assignee_id === meId
   return (

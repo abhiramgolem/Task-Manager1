@@ -63,7 +63,7 @@ r.put('/range', requireRole('manager', 'admin'), (req, res) => {
 
 // The signed-in user's own detail.
 r.get('/me', (req, res) => {
-  const detail = getUserDetail(req.user.id, periodParams(req))
+  const detail = getUserDetail(req.user.id, { ...periodParams(req), withTasks: true })
   if (!detail) return res.status(404).json({ error: 'No score yet' })
   res.json(detail)
 })
@@ -73,7 +73,11 @@ r.get('/:userId', (req, res) => {
   const target = db.prepare('SELECT org_id FROM users WHERE id=?').get(req.params.userId)
   if (!target) return res.status(404).json({ error: 'User not found' })
   if (target.org_id !== req.user.org_id) return res.status(403).json({ error: 'Out of organization' })
-  const detail = getUserDetail(req.params.userId, periodParams(req))
+  // The numbers are open to everyone, like the points; WHICH tasks ran late is
+  // for the person themselves and managers — an employee's Tasks page doesn't
+  // show them a colleague's work either.
+  const canSeeTasks = req.params.userId === req.user.id || ['manager', 'admin'].includes(req.user.role)
+  const detail = getUserDetail(req.params.userId, { ...periodParams(req), withTasks: canSeeTasks })
   if (!detail) return res.status(404).json({ error: 'No score yet' })
   res.json(detail)
 })

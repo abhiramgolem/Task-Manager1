@@ -15,6 +15,7 @@ import { parseDueDate } from '../ai/dates.js'
 import { recordUsage } from '../ai/usage.js'
 import { templatesFor, parseAmount, fmtAmount } from './dailyUpdates.js'
 import { db } from '../db.js'
+import { localDay } from '../clock.js'
 import { id, now, audit, emailDomainAllowed, orgAllowedDomains, BELL_SKIPPED_TYPES } from '../util.js'
 
 // Same shape routes/users.js and routes/invites.js accept, so voice can't create
@@ -292,7 +293,7 @@ async function handleCommand(req, res) {
   }
 
   const findTask = (id) => tasks.find((t) => t.id === id) || null
-  const t0 = new Date().toISOString().slice(0, 10)
+  const t0 = localDay()
   const dueFrom = (raw) => (raw ? parseDueDate(raw, t0).date || null : null)
   // A mutation the LLM aimed at a task we can't see -> ask instead of failing.
   const needTask = (verb) => {

@@ -22,7 +22,7 @@ import { attachToTask, attachable } from '../../lib/taskAttach'
 // Nothing is created until Assign is pressed: handing someone work stays a
 // deliberate act, the same rule as everywhere else in the app.
 
-export interface Draft { title: string; description?: string; priority?: string; due_date?: string; assignee_id?: string; assignee_name?: string | null }
+export interface Draft { title: string; description?: string; priority?: string; due_date?: string; assignee_id?: string; assignee_name?: string | null; source_message_id?: string }
 
 const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'] as const
 const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -89,6 +89,9 @@ export default function TaskAssignSheet({ conversation, meId, source, draft, fil
         priority,
         due_date: due || undefined,
         source_quote: source?.body || source?.transcript || undefined,
+        // The message's own picture or document goes onto the task (server-side,
+        // so nothing is downloaded and sent back up from the phone).
+        source_message_id: draft.source_message_id || (source?.file ? source.id : undefined),
       })
       // The task exists from here on; a card or a file that fails to post
       // must not pretend the assignment failed too.
@@ -137,6 +140,12 @@ export default function TaskAssignSheet({ conversation, meId, source, draft, fil
             <div className="ta-files">
               <Ic name="attach" size={14} />
               <span>{files.length === 1 ? `${files[0].name} goes with the task` : `${files.length} files go with the task`}</span>
+            </div>
+          )}
+          {!files.length && source?.file && (
+            <div className="ta-files">
+              <Ic name="attach" size={14} />
+              <span>{(source.file.type || '').startsWith('image/') ? 'The photo' : source.file.name} goes with the task</span>
             </div>
           )}
 

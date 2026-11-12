@@ -372,8 +372,17 @@ export function defaultDueDate(priority: string): string {
 // 'YYYY-MM-DD' on the viewer's own calendar. A due date is a day, not an
 // instant: toISOString() would give the UTC day, which in India is still
 // yesterday until 5:30 in the morning.
-function localDateKey(d: Date) {
+export function localDateKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+// Today, and the day a stored UTC timestamp fell on, on the viewer's calendar.
+// Use these instead of toISOString().slice(0, 10) anywhere a DAY is meant —
+// that is the UTC day, which in India runs 05:30 to 05:29.
+export const todayKey = () => localDateKey(new Date())
+export function dayKeyOf(iso?: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? String(iso).slice(0, 10) : localDateKey(d)
 }
 
 // A stored due date as that same local day. new Date('2026-10-02') is UTC

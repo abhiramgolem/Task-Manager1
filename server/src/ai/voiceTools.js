@@ -13,6 +13,7 @@
 // old design hard-coded 8 intents in a prompt, so "edit this task", "yesterday's
 // overview" and "start a meeting" simply had nowhere to land and got declined.
 import { callOpenRouter, callClaude, callOpenAI, parseJson } from './voiceTask.js'
+import { localDay } from '../clock.js'
 
 const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
@@ -176,7 +177,7 @@ const DENIAL = {
 }
 const denialFor = (name) => DENIAL[name] || "You don't have access to that."
 
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => localDay()
 
 function systemPrompt(user) {
   const allowed = toolsFor(user.role)

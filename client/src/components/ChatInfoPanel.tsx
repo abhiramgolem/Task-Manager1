@@ -825,7 +825,38 @@ function ContactDetails({ contact, canOpenTasks, onViewTasks }: { contact: Conta
           </div>
         </div>
       )}
+      <OnTimeRow userId={contact.id} />
     </>
+  )
+}
+
+// How late this person's deadlines ran this month (server/src/punctuality.js,
+// the Leaderboard's "On time" ranking) — the profile view of the same number.
+// Its own component so the fetch has hooks of its own; nothing shows until it
+// answers, and nothing at all for someone with no deadline this month.
+function OnTimeRow({ userId }: { userId: string }) {
+  const [d, setD] = useState<any>(null)
+  useEffect(() => {
+    let live = true
+    setD(null)
+    api.get(`/scores/${userId}?period=month`).then((r) => { if (live) setD(r?.delay || null) }).catch(() => {})
+    return () => { live = false }
+  }, [userId])
+  if (!d?.tasks) return null
+  const good = d.avg_delay === 0
+  const days = (n: number) => (n === 1 ? '1 day' : `${n} days`)
+  return (
+    <div className="ci-section">
+      <div className="ci-row static">
+        <span className={'ci-row-ic ' + (good ? 'ci-ac-green' : 'ci-ac-red')}><Ic name={good ? 'check' : 'calendar'} size={18} /></span>
+        <span className="ci-row-main">
+          <span className="ci-row-title">{good ? 'Every deadline met this month' : `${days(d.avg_delay)} late on average this month`}</span>
+          <span className="ci-row-sub">
+            {d.on_time_rate}% on time ({d.on_time}/{d.tasks}){d.late_done ? ` · ${d.late_done} delivered late` : ''}{d.overdue_open ? ` · ${d.overdue_open} overdue now` : ''}
+          </span>
+        </span>
+      </div>
+    </div>
   )
 }
 

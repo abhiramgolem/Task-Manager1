@@ -7,7 +7,7 @@ import { matchesWakePhrase } from '../voice/wakeSpeech'
 import { Capacitor } from '@capacitor/core'
 import { api, getToken, API_BASE, wsUrl } from '../api'
 import { useAuth } from '../auth'
-import { LANG_LABEL, EmptyState, Ic } from '../ui'
+import { LANG_LABEL, EmptyState, Ic, todayKey } from '../ui'
 import { confirmDialog } from '../lib/confirm'
 import { listReviewDrafts } from '../lib/reviewDraft'
 import { useCallAnalyses, inProgress as analysing, callLabel } from '../lib/callAnalysis'
@@ -326,7 +326,7 @@ function UploadModal({ onClose, onDone }: { onClose: () => void; onDone: (id: st
   const [mode, setMode] = useState<'text' | 'audio'>('audio')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(todayKey())
   const [participants, setParticipants] = useState<string[]>([])
   const [transcript, setTranscript] = useState('')
   const [audioFile, setAudioFile] = useState<File | null>(null)
@@ -553,7 +553,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const [title, setTitle] = useState(recovered?.title || '')
   const [description, setDescription] = useState(recovered?.description || '')
   const [participants, setParticipants] = useState<string[]>(recovered?.participants || [])
-  const date = new Date().toISOString().slice(0, 10)
+  const date = todayKey()
   const [speaker, setSpeaker] = useState(recovered?.speaker || defaultSpeaker)
   const [lang, setLang] = useState(recovered?.lang || 'en-IN')
   const [provider, setProvider] = useState('none')

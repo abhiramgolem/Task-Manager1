@@ -12,6 +12,9 @@ export interface TaskDraft {
   due_date?: string
   assignee_id?: string
   assignee_name?: string | null
+  // The chat message it came from, when that message carries a file: the task
+  // is created with the file attached (POST /tasks → attachMessageFile).
+  source_message_id?: string
 }
 
 const KEY = 'smarttask_task_draft'

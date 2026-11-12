@@ -12,7 +12,7 @@ import { useEscape } from './lib/useEscape'
 import { webPushSupported, enableWebPush, needsHomeScreen } from './lib/webPush'
 import { toast } from './lib/toast'
 import { api, getToken, userAvatarUrl } from './api'
-import { Avatar, Ic } from './ui'
+import { Avatar, Ic, todayKey } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal, { SECTIONS, SectionId } from './components/ProfileModal'
 import FeedbackModal from './components/FeedbackModal'
@@ -423,7 +423,7 @@ function VerifyEmailBanner() {
   const [show, setShow] = useState(false)
   useEffect(() => {
     if (!user || user.email_verified) { setShow(false); return }
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayKey()
     try {
       if (localStorage.getItem('befach_verify_prompt') === today) return // already shown today
       localStorage.setItem('befach_verify_prompt', today)

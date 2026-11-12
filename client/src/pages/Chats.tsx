@@ -1037,11 +1037,43 @@ export default function Chats() {
     if (hit) setLandOn(id)
     else toast.info(more ? 'That message is further back — scroll up to load earlier messages' : 'That message is no longer in this chat')
   }
+  // Keep the newest message in sight when the thread's box shrinks — above all
+  // when the keyboard opens. The box loses height from the bottom while its
+  // scrollTop stays where it was, so the last lines slid under the keyboard and
+  // you typed a reply to a message you could no longer see. WhatsApp keeps the
+  // bottom pinned instead, and so does this: if you were at the bottom before
+  // the resize (keyboard, a growing multi-line box, the reply bar, rotation), you
+  // are at the bottom after it. Someone scrolled up into history is left alone.
+  // stuckRef is kept by onLogScroll; a shrink moves no scrollTop, so it fires no
+  // scroll event and the "was at the bottom" answer survives to be read here.
+  // Watched through a callback ref, not an effect on activeId: the thread's box
+  // is not always in the page on the render that picks the chat, and an effect
+  // that found logRef empty then never looked again.
+  const stuckRef = useRef(true)
+  useEffect(() => { stuckRef.current = true }, [activeId])
+  const [logEl, setLogEl] = useState<HTMLDivElement | null>(null)
+  const logNode = useCallback((n: HTMLDivElement | null) => {
+    (logRef as React.MutableRefObject<HTMLDivElement | null>).current = n
+    setLogEl(n)
+  }, [])
+  useEffect(() => {
+    const el = logEl
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const pin = () => { if (stuckRef.current) el.scrollTop = el.scrollHeight }
+    const ro = new ResizeObserver(pin)
+    ro.observe(el)
+    // Some keyboards overlay the page instead of resizing it (iOS, a WebView
+    // that pans): the visual viewport is what shrinks then.
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', pin)
+    return () => { ro.disconnect(); vv?.removeEventListener('resize', pin) }
+  }, [logEl])
   // Watching the scroll: the ⌄ button once you are away from the bottom, and
   // the next page of history once you reach the top.
   const onLogScroll = () => {
     const el = logRef.current
     if (!el) return
+    stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
     const away = el.scrollHeight - el.scrollTop - el.clientHeight > 300
     if (away !== awayRef.current) { awayRef.current = away; setAwayFromBottom(away); if (!away) setNewBelow(0) }
     if (el.scrollTop < 120 && hasMore && !loadingOlder) loadOlder()
@@ -3138,7 +3170,7 @@ export default function Chats() {
             </div>
           )}
           <div className="chat-log-wrap">
-          <div className={'chat-log' + (multi ? ' picking' : '')} ref={logRef} onScroll={onLogScroll}>
+          <div className={'chat-log' + (multi ? ' picking' : '')} ref={logNode} onScroll={onLogScroll}>
             {/* The New chat button is offered whether or not there are existing
                 chats. Gating it on an empty list meant the one screen with room
                 for it lost the button the moment you had a single conversation,

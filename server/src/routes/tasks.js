@@ -13,6 +13,8 @@ import { interpretVoiceSearch } from '../ai/voiceSearch.js'
 import { resolveCategory, normalizeCategory } from '../categories.js'
 import { recordUsage } from '../ai/usage.js'
 import { MB, bigFileUpload, sendStoredFile } from '../fileStore.js'
+import { attachMessageFile } from '../taskFromMessage.js'
+import { localDay } from '../clock.js'
 
 // The configured speech-to-text provider, for usage attribution.
 const STT_PROVIDER = (process.env.TRANSCRIPTION_PROVIDER || 'sarvam').toLowerCase()
@@ -732,7 +734,7 @@ r.post('/parse-voice', async (req, res) => {
     // Resolve a spoken deadline ("by Friday", "tomorrow", "repu", "kal") to an
     // absolute YYYY-MM-DD, anchored to today. Try the AI's extracted phrase first,
     // then fall back to scanning the whole transcript.
-    const today = new Date().toISOString().slice(0, 10)
+    const today = localDay()
     const due = parseDueDate(parsed.due_date_raw || '', today).date || parseDueDate(transcript, today).date
     res.json({
       title: parsed.title,
@@ -781,6 +783,8 @@ r.post('/', (req, res) => {
     confidence, b.parent_task_id || null,
     0, 'none', b.source_quote || null, category, assignee ? now() : null, visible, now(), now())
   audit(req.user.org_id, req.user.id, 'task.create', 'task', tid, b.title)
+  // Made from a chat message: its picture / document comes along as an attachment.
+  if (b.source_message_id) attachMessageFile({ id: tid, org_id: req.user.org_id }, b.source_message_id, req.user)
   // Notify the assignee when someone assigns them a task (not their own).
   if (assignee && assignee.id !== req.user.id) {
     notify(req.user.org_id, assignee.id, 'task_assigned', `${req.user.name} assigned you "${b.title}"`, tid)

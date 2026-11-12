@@ -7,19 +7,24 @@
 //
 // Everything is RBAC-scoped: an employee only ever sees their own tasks.
 import { db } from '../db.js'
+import { localDay, sqlDayShift } from '../clock.js'
 
 const OPEN_STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Reopened']
 
 const pad = (n) => String(n).padStart(2, '0')
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-const today = () => ymd(new Date())
-const shift = (days) => { const d = new Date(); d.setDate(d.getDate() + days); return d }
+// The team's calendar (clock.js), not the server's: Render runs in UTC, where
+// "today" lags IST until 05:30. Noon of the local day, so the Date arithmetic
+// below (weekday, month starts) can't slip a day whatever zone the process is in.
+const todayAt = () => new Date(localDay() + 'T12:00:00')
+const today = () => localDay()
+const shift = (days) => { const d = todayAt(); d.setDate(d.getDate() + days); return d }
 
 export const PERIODS = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'custom']
 
 // Resolve a spoken period into an inclusive [from, to] date window + a spoken label.
 export function dateRange(period, from, to) {
-  const t = new Date()
+  const t = todayAt()
   switch (period) {
     case 'yesterday': { const d = shift(-1); return { from: ymd(d), to: ymd(d), label: 'Yesterday' } }
     case 'this_week': { const d = shift(-((t.getDay() + 6) % 7)); return { from: ymd(d), to: today(), label: 'This week' } }
@@ -58,9 +63,9 @@ export function overview(user, range) {
   const inWindow = (col) => `
     SELECT COUNT(*) c FROM tasks t
     WHERE t.org_id=@org AND t.parent_task_id IS NULL ${s}
-      AND t.${col} IS NOT NULL AND substr(t.${col},1,10) BETWEEN @from AND @to`
+      AND t.${col} IS NOT NULL AND date(t.${col}, @shift) BETWEEN @from AND @to`
 
-  const winArgs = baseArgs(user, { from: range.from, to: range.to })
+  const winArgs = baseArgs(user, { from: range.from, to: range.to, shift: sqlDayShift() })
   const created = one(inWindow('created_at'), winArgs)
   const assigned = one(inWindow('assigned_at'), winArgs)
   const completed = one(inWindow('completed_at'), winArgs)

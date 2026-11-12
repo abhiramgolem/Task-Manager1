@@ -31,6 +31,7 @@ import departmentRoutes from './routes/departments.js'
 import mcpRoutes from './routes/mcp.js'
 import uploadRoutes from './routes/uploads.js'
 import { startScheduler } from './scheduler.js'
+import { backfillChatTaskFiles } from './taskFromMessage.js'
 import { seedUpdateCards } from './seedUpdateCards.js'
 import { attachLiveTranscribe, attachAssistantLive, attachCallLive } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -40,6 +41,7 @@ import { warmRagSearch } from './ai/ragRetrieve.js'
 
 initSchema()
 ensureSeed()
+try { backfillChatTaskFiles() } catch (e) { console.error('[task] chat file backfill failed:', e.message) }
 
 const app = express()
 // The Android app is cross-origin and sends an Authorization header, so every

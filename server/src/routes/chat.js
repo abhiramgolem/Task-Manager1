@@ -16,6 +16,7 @@ import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
 import { sendCallPush } from '../push.js'
 import { MB, bigFileUpload, streamingStorage, sendStoredFile } from '../fileStore.js'
+import { localDay } from '../clock.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
 // real-time delivery, replies (also privately, from a group), reactions, stars,
@@ -2310,6 +2311,9 @@ r.post('/task-draft', async (req, res) => {
   let mentionIds = Array.isArray(req.body?.mentions) ? req.body.mentions.map(String) : []
   let sourceSender = me.id
   let convId = null
+  // A message with a picture or document: named in the draft so the task is
+  // created with that file attached, whichever form finishes it.
+  let fileMessageId = null
 
   if (req.body?.messageId) {
     const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.body.messageId)
@@ -2317,6 +2321,7 @@ r.post('/task-draft', async (req, res) => {
     text = m.body || ''
     sourceSender = m.sender_id
     convId = m.conversation_id
+    if (m.file_stored) fileMessageId = m.id
     mentionIds = db.prepare('SELECT user_id FROM chat_mentions WHERE message_id=?').all(m.id).map((x) => x.user_id)
 
     // A VOICE NOTE carries its content in the transcript, not the body. Reading
@@ -2394,7 +2399,7 @@ r.post('/task-draft', async (req, res) => {
   const addressed = [...mentioned.map((u) => u.name), ...(target ? [target.name] : [])]
   const title = titleFromText(text, addressed) || body.slice(0, 80)
 
-  const due = parseDueDate(body, new Date().toISOString().slice(0, 10))
+  const due = parseDueDate(body, localDay())
   res.json({
     title,
     description: body === title ? '' : body,
@@ -2402,6 +2407,7 @@ r.post('/task-draft', async (req, res) => {
     due_date: due?.date || '',
     assignee_id: target ? target.id : '',
     assignee_name: target ? target.name : null,
+    ...(fileMessageId ? { source_message_id: fileMessageId } : {}),
   })
 })
 
@@ -3271,7 +3277,7 @@ r.get('/workload', (req, res) => {
 // (the info panel's member list) — still one grouped query either way.
 function workloadFor(orgId, userIds = null) {
   if (userIds && !userIds.length) return {}
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDay()
   const only = userIds ? ` AND assignee_id IN (${userIds.map(() => '?').join(',')})` : ''
   const rows = db.prepare(`
     SELECT assignee_id AS user_id,
