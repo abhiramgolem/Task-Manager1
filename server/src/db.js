@@ -1330,6 +1330,10 @@ export function initSchema() {
   // replacing the list of numbers the app added up. A card made the old way
   // turns into one "Label (target) = ___" line per number it had.
   ensureColumn('daily_update_templates', 'body', "TEXT NOT NULL DEFAULT ''")
+  // A card's month totals as someone set them by hand ("month so far" as of a
+  // day's report): JSON { day, cells: { "row|column": "figure" } }. Later
+  // posts in that month add to it (routes/dailyUpdates.js runBase).
+  ensureColumn('daily_update_templates', 'run_base', 'TEXT')
   runOnce('daily_metrics_text_v1', () => {
     try {
       const short = (n) => (n >= 1e7 ? `${+(n / 1e7).toFixed(2)}Cr` : n >= 1e5 ? `${+(n / 1e5).toFixed(2)}L` : n >= 1e3 ? `${+(n / 1e3).toFixed(2)}k` : String(n))

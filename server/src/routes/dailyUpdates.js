@@ -28,7 +28,7 @@ import { authRequired } from '../auth.js'
 import { id, now, notify } from '../util.js'
 import { zonedNow } from '../taskMail.js'
 import { member, canPost, ADMINS_ONLY, deliver, shapeMessage, receiptCtx, parseMeta, pushToConversation } from './chat.js'
-import { SLOT, cellsOf, cellMap, computeAll, runMonthStart } from '../dailyMath.js'
+import { SLOT, cellsOf, cellMap, computeAll, runMonthStart, tablesOf, addDay } from '../dailyMath.js'
 
 const r = Router()
 
@@ -138,12 +138,21 @@ const announce = (convId) => pushToConversation(convId, { type: 'updates-today',
 // column name. With none, `fresh` when the card was in use before this month
 // began (so the month starts from 0); a card new this month has its month
 // total typed once instead.
+//
+// Figures set by hand (the card's run_base, "month so far" as of a day's
+// report) stand in for a post of that day: they win over any post on or
+// before that day, and later posts add to them.
 export function runBase(templateId, day) {
   const start = runMonthStart(day)
   const row = db.prepare(`
-    SELECT m.meta FROM daily_update_posts p JOIN chat_messages m ON m.id = p.message_id
+    SELECT m.meta, p.day FROM daily_update_posts p JOIN chat_messages m ON m.id = p.message_id
     WHERE p.template_id = ? AND p.day >= ? AND p.day < ? AND m.deleted_for_all = 0
     ORDER BY p.day DESC, p.created_at DESC LIMIT 1`).get(templateId, start, day)
+  let set = null
+  try { set = JSON.parse(db.prepare('SELECT run_base FROM daily_update_templates WHERE id=?').get(templateId)?.run_base || 'null') } catch {}
+  if (set?.day && set.cells && set.day >= start && set.day < day && (!row || row.day <= set.day)) {
+    return { prev: set.cells, fresh: false }
+  }
   if (row) {
     let meta = {}
     try { meta = JSON.parse(row.meta || '{}') } catch {}
@@ -286,7 +295,10 @@ r.get('/conversations/:id/update-template', authRequired, (req, res) => {
     if (got.error) return res.status(got.status).json({ error: got.error })
     edit = { id: got.m.id, ...got.meta }
   }
-  const base = t ? runBase(t.id, edit ? edit.day : day) : { prev: {}, fresh: false }
+  // The person filling in today adds to the month as it stood before today. A
+  // manager looking at the card sees the month so far as of today instead,
+  // which is what "Save as month so far" sets.
+  const base = t ? runBase(t.id, edit ? edit.day : who.own ? day : addDay(day, 1)) : { prev: {}, fresh: false }
   res.json({
     template: shapeTemplate(t), last, last_id: row?.message_id || null, last_base: {}, posted_today: row?.day === day,
     day, month: monthOf(day), edit, run_prev: base.prev, run_fresh: base.fresh,
@@ -340,6 +352,31 @@ r.delete('/conversations/:id/update-template', authRequired, (req, res) => {
   const n = db.prepare('DELETE FROM daily_update_templates WHERE user_id=? AND conversation_id=?').run(who.user.id, req.params.id).changes
   if (n) announce(req.params.id)
   res.json({ ok: true })
+})
+
+// Set a card's month totals by hand: "month so far" as of today's report, from
+// the figures typed into its month-total boxes ({run:…}; `values` by slot, as
+// the form holds them). From tomorrow the card adds each day's figure to these.
+// The person themselves, or a manager or admin for a teammate (?user=).
+r.put('/conversations/:id/update-template/month-so-far', authRequired, (req, res) => {
+  const who = cardOwner(req)
+  if (who.error) return res.status(who.status).json({ error: who.error })
+  const t = templateOf(who.user.id, req.params.id)
+  if (!t?.body) return res.status(404).json({ error: 'No card here yet' })
+  const vals = cleanValues(req.body?.values || [], blanksOf(t.body))
+  const cells = {}
+  for (const tb of tablesOf(t.body)) {
+    for (const row of tb.rows) {
+      row.cells.forEach((c, col) => {
+        const v = c.run ? vals[c.slot] : ''
+        if (v && /^-?\d+(\.\d+)?$/.test(v.replace(/[,₹\s]/g, ''))) cells[`${row.name}|${tb.head[col]}`] = v
+      })
+    }
+  }
+  if (!Object.keys(cells).length) return res.status(400).json({ error: 'Type the month so far in the shaded boxes first' })
+  const day = zonedNow().date
+  db.prepare('UPDATE daily_update_templates SET run_base=?, updated_at=? WHERE id=?').run(JSON.stringify({ day, cells }), now(), t.id)
+  res.json({ ok: true, day, count: Object.keys(cells).length })
 })
 
 const sendErr = (res, e) => { if (e?.status) return res.status(e.status).json({ error: e.error }); throw e }

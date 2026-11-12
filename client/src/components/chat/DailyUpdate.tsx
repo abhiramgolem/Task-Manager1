@@ -138,7 +138,7 @@ export function UpdateSheet({ convId, editId = null, userId = null, onClose, onP
     return <SetupForm convId={convId} tpl={d.template} userQ={userQ} owner={d.own === false ? d.owner?.name || 'them' : null} onClose={d.template ? () => setSetup(false) : onClose}
       onSaved={(t) => { setD({ ...d, template: t }); setSetup(false) }} onStopped={onClose} />
   }
-  return <FillForm key={d.edit?.id || 'new'} convId={convId} data={d} onSetup={() => setSetup(true)}
+  return <FillForm key={d.edit?.id || 'new'} convId={convId} data={d} userQ={userQ} onSetup={() => setSetup(true)}
     onFixLast={() => { setD(null); setFixing(d.last_id) }} onClose={onClose} onPosted={onPosted} />
 }
 
@@ -236,8 +236,8 @@ function SetupForm({ convId, tpl, userQ = '', owner = null, onClose, onSaved, on
 // The message with a box in each blank. A new one starts empty, last time's
 // numbers shown faintly in the boxes as a reminder; editing a posted one
 // starts filled in.
-function FillForm({ convId, data, onSetup, onFixLast, onClose, onPosted }: {
-  convId: string; data: Loaded; onSetup: () => void; onFixLast: () => void; onClose: () => void; onPosted: () => void
+function FillForm({ convId, data, userQ = '', onSetup, onFixLast, onClose, onPosted }: {
+  convId: string; data: Loaded; userQ?: string; onSetup: () => void; onFixLast: () => void; onClose: () => void; onPosted: () => void
 }) {
   const { template: tpl, last, edit } = data
   const text = edit ? edit.text || '' : tpl!.body
@@ -274,14 +274,36 @@ function FillForm({ convId, data, onSetup, onFixLast, onClose, onPosted }: {
       onPosted()
     } catch (e: any) { toast.error(e.message || 'Could not post your update'); setBusy(false) }
   }
+  // A manager setting a teammate's month totals by hand: what is typed into the
+  // month-total boxes becomes "month so far" as of today's report, and their
+  // cards add each day's figure to it from tomorrow.
+  const runSlot = (text.match(SLOT_G) || []).map((t) => t.startsWith('{run:'))
+  const typedRun = vals.some((v, i) => runSlot[i] && v.trim())
+  const saveMonth = async () => {
+    if (busy || !typedRun) return
+    const yes = await confirmDialog({
+      title: `Set ${data.owner?.name || 'their'} month so far?`,
+      message: 'The figures in the month-total boxes become the month so far as of today. From tomorrow their card adds each day to these.',
+      confirmText: 'Save', cancelText: 'Cancel',
+    })
+    if (!yes) return
+    setBusy(true)
+    try {
+      // Every month-total box as it shows, typed or worked out: what they see is what is kept.
+      const r: any = await api.put(`/chat/conversations/${convId}/update-template/month-so-far${userQ ? `?${userQ}` : ''}`, { values: shown })
+      toast.success(`Month so far saved (${r.count} figures)`)
+      onClose()
+    } catch (e: any) { toast.error(e.message || 'Could not save the month so far'); setBusy(false) }
+  }
   const title = edit ? edit.title : tpl!.title
   return (
     <Sheet label={title} title={<span className="du-sheet-title"><TrendGlyph size={17} /> {edit ? `Edit ${title}` : title}</span>} onClose={onClose} className="du-sheet"
       foot={<>
         {!edit && tpl ? <button className="btn btn-ghost" onClick={onSetup}><Ic name="edit" size={14} /> {preview ? 'Edit their card' : 'Edit card'}</button> : <span />}
         {!preview && <button className="btn btn-primary" disabled={busy || !any} onClick={post}>{busy ? 'Saving…' : edit ? 'Save changes' : 'Post update'}</button>}
+        {preview && runSlot.some(Boolean) && <button className="btn btn-primary" disabled={busy || !typedRun} onClick={saveMonth}>{busy ? 'Saving…' : 'Save as month so far'}</button>}
       </>}>
-      {preview && <div className="du-again"><span>This is how {data.owner?.name ? `${data.owner.name}'s` : 'their'} card looks to them. Only they can post it; you can fix the card itself.</span></div>}
+      {preview && <div className="du-again"><span>This is how {data.owner?.name ? `${data.owner.name}'s` : 'their'} card looks to them. Only they can post it; you can fix the card itself{runSlot.some(Boolean) ? ', or type the month so far into the shaded month-total boxes and save it' : ''}.</span></div>}
       <div className="du-fill-day">{dayLabel(edit ? edit.day : data.day)}</div>
       {!preview && !edit && data.posted_today && data.last_id && (
         <div className="du-again">
