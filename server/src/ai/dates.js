@@ -2,6 +2,8 @@
 // Returns { date: 'YYYY-MM-DD' | null, raw: <matched phrase> | null }.
 // `ref` is the meeting date (anchor for relative phrases).
 
+import { localDay } from '../clock.js'
+
 const WEEKDAYS = {
   sunday: 0, sun: 0, ravivar: 0, aadivaram: 0, bhanuvaram: 0, 'ఆదివారం': 0,
   monday: 1, mon: 1, somvar: 1, somavaram: 1, 'సోమవారం': 1, 'सोमवार': 1,
@@ -36,7 +38,7 @@ function nextWeekday(refDate, target, forceNextWeek = false) {
 }
 
 export function parseDueDate(text, refISO) {
-  const ref = new Date((refISO || new Date().toISOString().slice(0, 10)) + 'T00:00:00')
+  const ref = new Date((refISO || localDay()) + 'T00:00:00')
   // Normalize: lowercase, strip punctuation to spaces, collapse whitespace, pad with spaces.
   const t = ' ' + text.toLowerCase().replace(/[.,!?;:।'"()]/g, ' ').replace(/\s+/g, ' ').trim() + ' '
 

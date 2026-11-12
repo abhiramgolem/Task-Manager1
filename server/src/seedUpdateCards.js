@@ -1,56 +1,106 @@
-// Daily update cards for the team that already posts its numbers in the 132cr
-// group, so they start on the card instead of each setting one up. Built from
-// the messages they were posting by hand (November 2026); each person can edit
+// Daily metrics cards for the team that already posts its numbers in the 132cr
+// group, so they start on the card instead of each setting one up. Each card is
+// the message that person was posting by hand (November 2026), word for word
+// apart from spelling, with ___ where they type a number each day. {month} is
+// filled in by the app; {date} is picked on the form. Each person can edit
 // theirs from the card's sheet afterwards.
 //
 // Runs at every boot until each card is made, because the group and the names
 // can only be found on the live database: a person not found yet (not in the
 // group, a name spelt differently) is retried next boot and logged. Once a
 // card is made it is marked in app_meta and never made again, so someone who
-// stops their card does not get it back on the next deploy.
+// stops their card does not get it back on the next deploy. A card made by the
+// earlier seed (a list of numbers the app added up) is replaced by the text.
 import { db } from './db.js'
 import { id, now } from './util.js'
 import { zonedNow } from './taskMail.js'
 
-const daily = (mid, label, extra = {}) => ({ id: mid, label, target: null, stretch: null, unit: '', mode: 'daily', ...extra })
-const rupees = { unit: '₹' }
+const TITLE = 'Daily metrics'
 
 // `who`: ways to find the person among the group's members, tried in order;
 // each is a list of pieces their name (lowercase, spaces removed) must hold.
 // The first that matches exactly one member is used.
 const CARDS = [
-  { key: 'sujitha', who: [['sujitha'], ['suji']], title: 'Sales update', metrics: [
-    daily('sales', 'Sales', { ...rupees, target: 600000, stretch: 1800000 }),
-    daily('reviews', 'Positive reviews received'),
-    daily('calls', 'Connected calls from CRM'),
-    daily('leads', 'Connected leads'),
-    daily('junk', 'Junk leads'),
+  { key: 'lohith', who: [['lohith'], ['lohit']], body: [
+    'Lohith',
+    'Leads for Dcal B2C = ___',
+    'Leads for Dcal B2B = ___',
+    'Leads for Rice B2B = ___',
+    'Leads for Rice B2C = ___',
+    'Website leads befach.com = ___',
   ] },
-  { key: 'yaseen', who: [['yaseen'], ['yasin'], ['yas']], title: 'Sales update', metrics: [
-    daily('sales', 'Sales', { ...rupees, target: 300000, stretch: 600000 }),
-    daily('dealers', 'Sales through dealers', { unit: 'pcs' }),
-    daily('reviews', 'Reviews received'),
-    daily('junk', 'Junk leads'),
+  { key: 'yaseen', who: [['yaseen'], ['yasin'], ['yas']], body: [
+    'Yaseen',
+    'Dcal',
+    'Yaseen sales target for {month} (3 Lakhs-6 Lakhs) = ___/___',
+    '1. Sales through dealers (pcs) = ___',
+    '2. # of reviews received = ___',
+    '3. Junk leads = ___',
   ] },
-  { key: 'vinay', who: [['vinay']], title: 'Sales update', metrics: [
-    daily('team', 'Dcal team sales', { ...rupees, target: 2500000 }),
-    daily('teamrev', 'Team positive reviews', { target: 100 }),
-    daily('sales', 'My sales', { ...rupees, target: 2000000 }),
-    daily('leads', 'Connected leads from CRM'),
-    daily('reviews', 'Positive reviews received'),
-    daily('junk', 'Junk leads'),
+  { key: 'vinay', who: [['vinay']], body: [
+    'Vinay',
+    '___ Dcal Team Sales (25L) = ___/___',
+    'No. of +ve reviews (100) received = ___/___',
+    '',
+    'Vinay',
+    '1. # Sales target for ___ (20L) = ___/___',
+    '2. # of connected leads from CRM = ___',
+    '3. # of +ve reviews received = ___/___',
+    'Junk leads = ___',
   ] },
-  { key: 'lohith', who: [['lohith'], ['lohit']], title: 'Leads update', metrics: [
-    daily('dcalb2c', 'Leads: Dcal B2C'),
-    daily('dcalb2b', 'Leads: Dcal B2B'),
-    daily('riceb2b', 'Leads: Rice B2B'),
-    daily('riceb2c', 'Leads: Rice B2C'),
-    daily('web', 'Website leads (befach.com)'),
+  { key: 'sujitha', who: [['sujitha'], ['suji']], body: [
+    'SUJITHA',
+    'Rice',
+    '1. Sales {month} (6-18 lacs) = ___/___',
+    '2. # of +ve reviews received = ___/___',
+    '3. Connected calls from CRM = ___',
+    '4. Connected leads from CRM = ___',
+    '5. Junk leads = ___',
   ] },
-  { key: 'vijayteja', who: [['vijay', 'teja'], ['vijayteja'], ['vijay']], title: 'Daily imports sales report', metrics: [
-    daily('rfq', 'RFQs generated'),
-    daily('disc', 'Customers in discussion with suppliers'),
-    daily('sales', 'Sales', rupees),
+  { key: 'vijayteja', who: [['vijay', 'teja'], ['vijayteja'], ['vijay']], body: [
+    '📊 *DAILY IMPORTS SALES REPORT*',
+    '📅 Date: {date}',
+    '',
+    '*RFQs Generated:* ___ ({date})',
+    '• Month-to-Date (MTD): ___ leads until {date}',
+    '',
+    '*Customers in Discussion with Suppliers*',
+    '• Yesterday: ___',
+    '• Month-to-Date (MTD): ___',
+    '',
+    '*Sales Performance*',
+    '• Today: ₹___ ({date})',
+    '• Month-to-Date (MTD): ₹___',
+    'Reviews received so far: ___',
+    'Sample orders received so far: ___',
+  ] },
+  // Her sales sheet: she types each channel's month-so-far and yesterday's
+  // sales; the totals add themselves up ({sum}) and can be typed over.
+  { key: 'srilatha', who: [['srilatha'], ['sri', 'latha'], ['latha']], body: [
+    '| CATEGORY | HIGHER TARGET | LOWER TARGET | DAILY TARGET | CUMM SALES | YESTERDAY |',
+    '| AMAZON | 35 | 30 | 1.00 | ___ | ___ |',
+    '| FLIPKART | 12 | 8 | 0.27 | ___ | ___ |',
+    '| RK WORLD(RICE) | 30 | 15 | 0.50 | ___ | ___ |',
+    '| MEESHO | 1 | 1 | 0.02 | ___ | ___ |',
+    '| Shopdeck Rice | 1 | 0 | 0.00 | ___ | ___ |',
+    '| Jio Mart | 1 | 0 | 0.00 | ___ | ___ |',
+    '| Clicktech | 30 | 15 | 0.50 | ___ | ___ |',
+    "| Shopdeck D'cal | 1 | 0 | 0.00 | ___ | ___ |",
+    '| SWIGGY | 10 | 5 | 0.17 | ___ | ___ |',
+    '| *TOTAL ONLINE SALES* | 120 | 74 | 2.45 | {sum} | {sum} |',
+    '| Dcal Vinay | 20 | 10 | 0.33 | ___ | ___ |',
+    '| Dcal Yaseen | 15 | 5 | 0.17 | ___ | ___ |',
+    '| Dcal Alekhya | 15 | 5 | 0.17 | ___ | ___ |',
+    '| DCAL PRASANNA | 15 | 3 | 0.10 | ___ | ___ |',
+    '| *DCAL TOTAL* | 15 | 5 | 0.17 | {sum} | {sum} |',
+    '| Rice Saba | 15 | 5 | 0.17 | ___ | ___ |',
+    '| Rice sujitha | 10 | 3 | 0.10 | ___ | ___ |',
+    '| *RICE TOTAL* | 25 | 8 | 0.27 | {sum} | {sum} |',
+    '| *TOTAL OFFLINE SALES* | 40 | 13 | 0.43 | {sum:DCAL TOTAL;RICE TOTAL} | {sum:DCAL TOTAL;RICE TOTAL} |',
+    '| *PARTNERSHIPS* | 20 | 10 | 0.33 | ___ | ___ |',
+    '| *EXPORTS* | 0 | 10 | 0.33 | ___ | ___ |',
+    '| *GCOM SALES* | 30 | 15 | 0.50 | ___ | ___ |',
+    '| *CUMMULATIVE* | 160 | 97 | 3.22 | {sum:TOTAL ONLINE SALES;TOTAL OFFLINE SALES;PARTNERSHIPS;EXPORTS;GCOM SALES} | {sum:TOTAL ONLINE SALES;TOTAL OFFLINE SALES;PARTNERSHIPS;EXPORTS;GCOM SALES} |',
   ] },
 ]
 
@@ -62,7 +112,7 @@ const REMIND_DAYS = '1,2,3,4,5,6'
 const squash = (s) => String(s || '').toLowerCase().replace(/\s+/g, '')
 
 export function seedUpdateCards() {
-  const marker = (k) => `seed_update_card_132cr:${k}`
+  const marker = (k) => `seed_daily_metrics_132cr:${k}`
   const done = (k) => !!db.prepare('SELECT 1 FROM app_meta WHERE key=?').get(marker(k))
   const todo = CARDS.filter((c) => !done(c.key))
   if (!todo.length) return
@@ -82,13 +132,20 @@ export function seedUpdateCards() {
       if (found.length === 1) { hit = found[0]; break }
     }
     if (!hit) { console.log(`  [update-cards] ${c.key}: no single member of "${g.name}" matches, not made yet`); continue }
-    const has = db.prepare('SELECT 1 FROM daily_update_templates WHERE user_id=? AND conversation_id=?').get(hit.id, g.id)
-    if (!has) {
+    const body = c.body.join('\n')
+    const has = db.prepare('SELECT id FROM daily_update_templates WHERE user_id=? AND conversation_id=?').get(hit.id, g.id)
+    if (has) {
+      // The earlier seed's card: same reminder, now their own message.
+      db.prepare('UPDATE daily_update_templates SET title=?, body=?, updated_at=? WHERE id=?').run(TITLE, body, ts, has.id)
+      console.log(`  [update-cards] replaced the card for ${hit.name} in ${g.name} with their message`)
+    } else if (db.prepare('SELECT 1 FROM app_meta WHERE key=?').get(`seed_update_card_132cr:${c.key}`)) {
+      // Made by the earlier seed and since stopped by them: stays stopped.
+    } else {
       // Counted as reminded today: a deploy after 11:00 must not set every
       // phone in the group buzzing about a card nobody has seen yet.
-      db.prepare(`INSERT INTO daily_update_templates (id, org_id, user_id, conversation_id, title, metrics, remind_at, remind_days, last_reminded_date, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(id('dut'), g.org_id, hit.id, g.id, c.title, JSON.stringify(c.metrics), REMIND_AT, REMIND_DAYS, zonedNow().date, ts, ts)
-      console.log(`  [update-cards] made "${c.title}" for ${hit.name} in ${g.name}`)
+      db.prepare(`INSERT INTO daily_update_templates (id, org_id, user_id, conversation_id, title, metrics, body, remind_at, remind_days, last_reminded_date, created_at, updated_at)
+        VALUES (?,?,?,?,?,'[]',?,?,?,?,?,?)`).run(id('dut'), g.org_id, hit.id, g.id, TITLE, body, REMIND_AT, REMIND_DAYS, zonedNow().date, ts, ts)
+      console.log(`  [update-cards] made "${TITLE}" for ${hit.name} in ${g.name}`)
     }
     db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').run(marker(c.key), ts)
   }

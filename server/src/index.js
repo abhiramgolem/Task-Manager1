@@ -1,6 +1,9 @@
 import './crashLog.js' // MUST be first — installs the crash handlers before any other module body runs
 import 'dotenv/config'
 import express from 'express'
+import './asyncErrors.js' // before any request: async route errors reach the error middleware
+import { rateLimit } from './rateLimit.js'
+import { uploadsBlocked } from './fileStore.js'
 import cors from 'cors'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -31,6 +34,7 @@ import departmentRoutes from './routes/departments.js'
 import mcpRoutes from './routes/mcp.js'
 import uploadRoutes from './routes/uploads.js'
 import { startScheduler } from './scheduler.js'
+import { backfillChatTaskFiles } from './taskFromMessage.js'
 import { seedUpdateCards } from './seedUpdateCards.js'
 import { attachLiveTranscribe, attachAssistantLive, attachCallLive } from './ws/liveTranscribe.js'
 import { attachChatHub } from './ws/chatHub.js'
@@ -40,14 +44,54 @@ import { warmRagSearch } from './ai/ragRetrieve.js'
 
 initSchema()
 ensureSeed()
+try { backfillChatTaskFiles() } catch (e) { console.error('[task] chat file backfill failed:', e.message) }
 
 const app = express()
+// Render puts one proxy in front of us; without this every request comes from
+// the proxy's address, so per-IP login limits would lock out the whole company.
+app.set('trust proxy', 1)
 // The Android app is cross-origin and sends an Authorization header, so every
 // request it makes is preceded by a CORS preflight — which browsers cache for
 // 5 s unless told otherwise. A file going up in chunks makes many requests to
 // one URL over minutes; ten minutes means one preflight, not one per chunk.
 app.use(cors({ maxAge: 600 }))
 app.use(express.json({ limit: '5mb' }))
+
+// Sign-in and sign-up are open to anyone, and each attempt costs a password hash
+// (rateLimit.js). Per address it is generous — a whole office shares one public
+// IP, and after a deploy everybody signs in at once — and per email it is tight,
+// which is what slows down guessing one person's password.
+const AUTH_OPEN = ['/api/auth/login', '/api/auth/signup', '/api/auth/google', '/api/auth/forgot-password',
+  '/api/auth/reset-password', '/api/join/request', '/api/invites/accept']
+app.use(AUTH_OPEN, rateLimit({ name: 'auth-ip', windowMs: 60_000, max: 60, key: (req) => req.ip }))
+app.use(AUTH_OPEN, rateLimit({
+  name: 'auth-email', windowMs: 60_000, max: 8,
+  key: (req) => (req.body?.email ? String(req.body.email).toLowerCase().trim().slice(0, 200) : null),
+  message: 'Too many attempts for this account. Please wait a minute and try again.',
+}))
+
+// No file onto a disk that is nearly full (fileStore.js uploadsBlocked): the
+// database lives on the same disk, and when it can't write the whole app stops.
+app.use('/api', (req, res, next) => {
+  if (req.method !== 'GET' && req.is('multipart/form-data') && uploadsBlocked()) {
+    console.warn('[disk] refused an upload: the data disk is nearly full')
+    return res.status(507).json({ error: 'The server is out of storage space, so files cannot be uploaded right now. Please tell your admin.' })
+  }
+  next()
+})
+
+// A screen in the app crashed (components/ErrorBoundary.tsx). Logged so it can be
+// fixed; no sign-in needed — a crash can happen before or during sign-in — so
+// it is rate-limited and only ever printed, never stored.
+app.use('/api/client-error', rateLimit({ name: 'client-error', windowMs: 60_000, max: 10, key: (req) => req.ip }))
+app.post('/api/client-error', (req, res) => {
+  const b = req.body || {}
+  const s = (v, n) => String(v || '').slice(0, n)
+  console.error(`[client-error] ${s(b.version, 20)} ${s(b.url, 200)} — ${s(b.message, 500)}
+${s(b.stack, 2000)}
+${s(b.component, 1500)}`)
+  res.status(204).end()
+})
 
 // API responses are per-user and must never be cached (prevents one account's
 // data — e.g. notifications — from being served to another from cache).
@@ -57,7 +101,19 @@ app.use('/api', (req, res, next) => {
   next()
 })
 
+// Render calls this every few seconds to decide whether the service is alive.
+// It used to COUNT(*) the embeddings table — the biggest in the database — on
+// every call; the count is only informational, so it is refreshed at most every
+// ten minutes and the check itself is a trivial query.
+let ragIndexed = { n: null, at: 0 }
+const ragIndexedCount = () => {
+  if (Date.now() - ragIndexed.at > 10 * 60_000) {
+    try { ragIndexed = { n: db.prepare('SELECT COUNT(*) c FROM embeddings').get().c, at: Date.now() } } catch {}
+  }
+  return ragIndexed.n
+}
 app.get('/api/health', (req, res) => {
+  try { db.prepare('SELECT 1').get() } catch { return res.status(503).json({ ok: false, error: 'database unavailable' }) }
   const ragOn = hasEmbeddings()
   res.json({
     ok: true,
@@ -77,7 +133,7 @@ app.get('/api/health', (req, res) => {
     rag: {
       enabled: ragOn,
       model: ragOn ? embedModel() : null,
-      indexed: db.prepare('SELECT COUNT(*) c FROM embeddings').get().c,
+      indexed: ragIndexedCount(),
     },
   })
 })
@@ -126,15 +182,26 @@ if (fs.existsSync(path.join(clientDist, 'index.html'))) {
   // SPA fallback: any non-/api GET returns index.html so client-side routes
   // (BrowserRouter) survive a refresh or deep link. Unknown /api/* paths are
   // excluded so they still get a proper JSON 404 instead of the HTML shell.
+  // A missing /assets/ file is a hashed chunk from an older build — a tab left
+  // open across a deploy asking for code that no longer exists. Answering with
+  // index.html (as the fallback below would) makes the browser try to run HTML
+  // as JavaScript and the page breaks with a cryptic error; a 404 lets the app's
+  // chunk-load handling reload onto the new build instead.
+  app.get(/^\/assets\//, (req, res) => res.status(404).end())
   app.get(/^(?!\/api\/).*/, (req, res) => res.sendFile(path.join(clientDist, 'index.html')))
   console.log(`  Web client: serving ${clientDist}`)
 } else {
   console.log('  Web client: not built (API-only). Build client/ to serve the website here.')
 }
 
+// Last stop for an error a route didn't answer. A client error keeps its status
+// and message (a body that isn't JSON, a payload over the limit); anything else
+// is ours, so the person sees a plain sentence and the details go to the log.
 app.use((err, req, res, next) => {
-  console.error('[error]', err)
-  res.status(500).json({ error: err.message || 'Internal error' })
+  const status = Number(err.status || err.statusCode) || 500
+  if (status >= 500) console.error('[error]', req.method, req.originalUrl, err)
+  if (res.headersSent) return
+  res.status(status).json({ error: status < 500 ? (err.expose === false ? 'Bad request' : err.message || 'Bad request') : 'Something went wrong on our side. Please try again.' })
 })
 
 const PORT = process.env.PORT || 4000
@@ -200,11 +267,41 @@ attachAssistantLive(server)
 // while they talk (same relay again; the call decides who may open one).
 attachCallLive(server, callLiveHooks)
 // Real-time internal chat push shares the same HTTP server (different path).
-attachChatHub(server)
+const chatWss = attachChatHub(server)
 
-// Release the port cleanly on exit / restart so `node --watch` (and Ctrl+C)
-// don't leave an orphaned process squatting on :4000 → no more EADDRINUSE.
-const shutdown = () => server.close(() => process.exit(0))
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)
+// Every socket path is claimed by a handler above; one nobody claims was left
+// hanging open until the client gave up. Runs after them (listeners fire in
+// order), so it only sees what they passed over.
+const WS_PATHS = new Set(['/api/chat/ws', '/api/meetings/live', '/api/assistant/live', '/api/chat/call/live'])
+const liveSockets = new Set()
+server.on('upgrade', (req, socket) => {
+  let pathname = ''
+  try { pathname = new URL(req.url, 'http://localhost').pathname } catch {}
+  if (!WS_PATHS.has(pathname)) { socket.destroy(); return }
+  liveSockets.add(socket)
+  socket.once('close', () => liveSockets.delete(socket))
+})
+
+// Shutting down (a deploy sends SIGTERM). server.close() alone waits for every
+// open WebSocket and hour-long upload to finish — they never do, so Render
+// killed the process mid-write after its grace period. Instead: stop taking new
+// requests, tell chat clients to reconnect (1012 = service restart; the app
+// reconnects and catches up), drop the remaining sockets, close the database
+// cleanly so the WAL is checkpointed, and exit within 10 s whatever happens.
+let stopping = false
+const shutdown = (signal) => {
+  if (stopping) return
+  stopping = true
+  console.log(`[shutdown] ${signal} — closing`)
+  const done = () => { try { db.close() } catch {} ; process.exit(0) }
+  setTimeout(done, 10_000).unref()
+  server.close(done)
+  try { for (const ws of chatWss?.clients || []) ws.close(1012, 'restarting') } catch {}
+  setTimeout(() => {
+    for (const s of liveSockets) { try { s.destroy() } catch {} }
+    try { server.closeAllConnections?.() } catch {}
+  }, 1500).unref()
+}
+process.on('SIGINT', () => shutdown('SIGINT'))
+process.on('SIGTERM', () => shutdown('SIGTERM'))
 process.once('SIGUSR2', () => server.close(() => process.kill(process.pid, 'SIGUSR2'))) // nodemon/watch restart

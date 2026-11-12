@@ -13,6 +13,8 @@ import { interpretVoiceSearch } from '../ai/voiceSearch.js'
 import { resolveCategory, normalizeCategory } from '../categories.js'
 import { recordUsage } from '../ai/usage.js'
 import { MB, bigFileUpload, sendStoredFile } from '../fileStore.js'
+import { attachMessageFile } from '../taskFromMessage.js'
+import { localDay } from '../clock.js'
 
 // The configured speech-to-text provider, for usage attribution.
 const STT_PROVIDER = (process.env.TRANSCRIPTION_PROVIDER || 'sarvam').toLowerCase()
@@ -732,7 +734,7 @@ r.post('/parse-voice', async (req, res) => {
     // Resolve a spoken deadline ("by Friday", "tomorrow", "repu", "kal") to an
     // absolute YYYY-MM-DD, anchored to today. Try the AI's extracted phrase first,
     // then fall back to scanning the whole transcript.
-    const today = new Date().toISOString().slice(0, 10)
+    const today = localDay()
     const due = parseDueDate(parsed.due_date_raw || '', today).date || parseDueDate(transcript, today).date
     res.json({
       title: parsed.title,
@@ -781,6 +783,8 @@ r.post('/', (req, res) => {
     confidence, b.parent_task_id || null,
     0, 'none', b.source_quote || null, category, assignee ? now() : null, visible, now(), now())
   audit(req.user.org_id, req.user.id, 'task.create', 'task', tid, b.title)
+  // Made from a chat message: its picture / document comes along as an attachment.
+  if (b.source_message_id) attachMessageFile({ id: tid, org_id: req.user.org_id }, b.source_message_id, req.user)
   // Notify the assignee when someone assigns them a task (not their own).
   if (assignee && assignee.id !== req.user.id) {
     notify(req.user.org_id, assignee.id, 'task_assigned', `${req.user.name} assigned you "${b.title}"`, tid)
@@ -1003,11 +1007,36 @@ r.post('/:id/comments', (req, res) => {
   const snippet = body.length > 80 ? body.slice(0, 77) + '…' : body
   const recipients = new Set([t.assignee_id, t.assigned_by_id].filter(Boolean))
   recipients.delete(req.user.id)
+  // "@Ravi can you check this?" in a comment reached nobody unless Ravi already
+  // owned or assigned the task — the way Cliq users pull a colleague in. A
+  // private to-do mentions no one: its owner is the only one who can open it.
+  const mentioned = (t.visible_to_manager ?? 1) ? commentMentions(t.org_id, body, req.user.id) : []
+  for (const uid of mentioned) {
+    notify(t.org_id, uid, 'task_comment', `${req.user.name} mentioned you on "${t.title}": ${snippet}`, t.id, { commentId: cid })
+    recipients.delete(uid) // one notification each, the mention being the more specific
+  }
   for (const uid of recipients) {
     notify(t.org_id, uid, 'task_comment', `${req.user.name} commented on "${t.title}": ${snippet}`, t.id, { commentId: cid })
   }
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
+
+// The people a comment names with @: a full name, or a first name that only one
+// person in the organisation has (the chat's rule, routes/chat.js mentionsInText).
+// Not inside an email address — sales@vinay.com names nobody.
+function commentMentions(orgId, text, senderId) {
+  const body = String(text || '')
+  if (!body.includes('@')) return []
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const named = (name) => new RegExp(`(?<![\\p{L}\\p{N}.])@${esc(name.trim()).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])`, 'iu').test(body)
+  const people = db.prepare('SELECT id, name FROM users WHERE org_id=? AND id<>?').all(orgId, senderId).filter((u) => u.name)
+  const firstCount = {}
+  for (const u of people) { const f = u.name.trim().split(/\s+/)[0].toLowerCase(); firstCount[f] = (firstCount[f] || 0) + 1 }
+  return people.filter((u) => {
+    const first = u.name.trim().split(/\s+/)[0]
+    return named(u.name) || (firstCount[first.toLowerCase()] === 1 && named(first))
+  }).map((u) => u.id)
+}
 
 // UNDO a just-posted comment: delete the CALLER'S most recent comment on the task.
 // Deliberately "latest own" rather than /comments/:cid — the voice flow posts the

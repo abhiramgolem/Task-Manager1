@@ -45,19 +45,24 @@ export interface Msg {
   kind?: 'system' | 'poll' | 'task' | 'location' | 'contact' | 'update' | null
   edited_at?: string | null; forwarded?: boolean; reply_to?: string | null; reply?: ReplyPreview | null; file?: ChatFile | null
   reactions: Reaction[]; mentions?: MentionRef[]; starred: boolean; seen: boolean; delivered?: boolean; deleted?: boolean; uploading?: boolean; progress?: number
+  // Local only: a message of mine the server has not saved (lib/outbox.ts).
+  failed?: boolean; failReason?: string | null; client_id?: string
   pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null; meeting?: MeetingCard | null
   system?: string | null; poll?: Poll | null; task?: TaskRef | null; location?: LocationRef | null; contact?: ContactRef | null
   update?: UpdateMeta | null
 }
-// A daily update card (server routes/dailyUpdates.js). A metric is 'total'
-// when its owner enters the month's figure so far, 'daily' when they enter
-// today's and the month is added up; `total` is the month either way.
-// `stretch`: the top of a target range ("6L-18L"); the bar measures `target`.
-export interface UpdateMetricDef { id: string; label: string; target: number | null; stretch?: number | null; unit: string; mode: 'total' | 'daily' }
-export interface UpdateMetric extends UpdateMetricDef { value: number | null; total: number | null }
-export interface UpdateMeta { template_id: string; title: string; day: string; metrics: UpdateMetric[]; note?: string }
+// A daily metrics card (server routes/dailyUpdates.js): the person's own
+// message with blanks. `text` is the template it was posted from ("___" a
+// blank, "{month}", "{date}"); `values` fill the blanks in order. `metrics`:
+// cards posted before the text templates, shown as they were.
+export interface UpdateMetric { id: string; label: string; target: number | null; unit: string; value: number | null; total: number | null }
+export interface UpdateMeta {
+  template_id: string; title: string; day: string; note?: string
+  text?: string; values?: string[]; month?: string; date?: string | null
+  metrics?: UpdateMetric[]
+}
 export interface UpdateTemplate {
-  id: string; conversation_id: string; title: string; metrics: UpdateMetricDef[]
+  id: string; conversation_id: string; title: string; body: string
   remind_at: string | null; remind_days: number[]; last_posted_date: string | null
 }
 export interface OrgUser { id: string; name: string; email: string; role: string; avatar_color?: string; avatar_file?: string | null }

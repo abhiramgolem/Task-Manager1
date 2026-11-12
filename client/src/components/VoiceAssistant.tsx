@@ -168,6 +168,10 @@ export default function VoiceAssistant() {
     try { seen = localStorage.getItem('befach_voice_coach') === 'seen' } catch { seen = false }
     if (seen) return
     const show = setTimeout(() => {
+      // Not over an open chat (it covered the newest messages) and not on top
+      // of the verify-email card; it waits for a quieter moment instead.
+      const cls = document.body.classList
+      if (cls.contains('chat-thread-open') || cls.contains('verify-pop-open')) return
       setCoach(true)
       try { localStorage.setItem('befach_voice_coach', 'seen') } catch { /* storage off */ }
     }, 1400)

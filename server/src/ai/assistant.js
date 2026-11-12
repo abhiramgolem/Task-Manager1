@@ -1,6 +1,7 @@
 // Natural-language assistant + search over tasks.
 // Rule/intent based so it works offline; scoped by the caller's role.
 import { db } from '../db.js'
+import { localDay, addDays } from '../clock.js'
 import { resolveUser } from './extractor.js'
 
 const OPEN_STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Reopened']
@@ -16,7 +17,7 @@ function taskRows(orgId) {
   `).all(orgId)
 }
 
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => localDay()
 const isOverdue = (t) => t.due_date && t.due_date < today() && !['Done'].includes(t.status)
 
 // Scope to what the requesting user may see.
@@ -74,8 +75,7 @@ export function answerQuery(rawQuery, user) {
     let meetings = db.prepare('SELECT * FROM meetings WHERE org_id = ? ORDER BY meeting_date DESC').all(user.org_id)
     let target = meetings[0]
     if (/yesterday/.test(q)) {
-      const y = new Date(); y.setDate(y.getDate() - 1)
-      const yi = y.toISOString().slice(0, 10)
+      const yi = addDays(localDay(), -1)
       target = meetings.find((mt) => (mt.meeting_date || '').slice(0, 10) === yi) || target
     }
     if (!target) return { answer: 'No meetings found.', tasks: [] }

@@ -186,7 +186,9 @@ final class ChatNotifier {
     }
 
     /** A reply that did not reach the server: say so under the chat, quietly. */
-    static synchronized void replyFailed(Context ctx, String cid) {
+    // The reply's own words go into the failure notice, so they can still be read
+    // and copied: before, "Reply not sent" was all that was left of them.
+    static synchronized void replyFailed(Context ctx, String cid, String typed) {
         Map<String, String> d = new HashMap<>();
         try {
             JSONObject last = new JSONObject(ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(cid + ":last", "{}"));
@@ -197,7 +199,9 @@ final class ChatNotifier {
         } catch (Exception ignored) {}
         if (d.get("conversationId") == null) return;
         d.put("sender", "VoTask");
-        d.put("text", "Reply not sent. Tap to open the chat.");
+        String t = typed == null ? "" : typed.trim();
+        if (t.length() > 300) t = t.substring(0, 300) + "…";
+        d.put("text", t.isEmpty() ? "Reply not sent. Tap to open the chat." : "Reply not sent: “" + t + "”. Tap to open the chat and send it again.");
         show(ctx, d, true);
     }
 

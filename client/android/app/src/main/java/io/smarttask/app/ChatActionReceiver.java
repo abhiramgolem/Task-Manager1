@@ -55,7 +55,7 @@ public class ChatActionReceiver extends BroadcastReceiver {
         String url = intent.getStringExtra("url");
         if (url == null || url.isEmpty()) {
             String base = CallRinger.apiBase(app);
-            if (base.isEmpty()) { if ("reply".equals(kind)) ChatNotifier.replyFailed(app, cid); return; }
+            if (base.isEmpty()) { if ("reply".equals(kind)) ChatNotifier.replyFailed(app, cid, text); return; }
             url = base + "/api/chat/conversations/" + cid + "/notif-action";
         }
         final String target = url;
@@ -72,31 +72,43 @@ public class ChatActionReceiver extends BroadcastReceiver {
             return;
         }
         final boolean reply = "reply".equals(kind);
+        final String typedText = text;
         PendingResult pending = goAsync();
         new Thread(() -> {
-            boolean ok = false;
-            HttpURLConnection c = null;
-            try {
-                c = (HttpURLConnection) new URL(target).openConnection();
-                c.setRequestMethod("POST");
-                c.setConnectTimeout(8000);
-                c.setReadTimeout(8000);
-                c.setDoOutput(true);
-                c.setRequestProperty("content-type", "application/json");
-                try (OutputStream os = c.getOutputStream()) { os.write(body.getBytes(StandardCharsets.UTF_8)); }
-                int code = c.getResponseCode();
-                ok = code >= 200 && code < 300;
-            } catch (Exception e) {
-                Log.w(TAG, kind + " failed: " + e.getMessage());
-            } finally {
-                if (c != null) c.disconnect();
-                if (reply) {
-                    if (ok) ChatNotifier.clear(app, cid);
-                    else ChatNotifier.replyFailed(app, cid);
-                }
-                pending.finish();
+            // Two tries: a phone waking from doze often has no network for the
+            // first second or two, and one dropped request used to be the end
+            // of a reply typed in the notification. Kept inside goAsync's budget.
+            boolean ok = post(target, body, kind);
+            if (!ok) {
+                try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+                ok = post(target, body, kind);
             }
+            if (reply) {
+                if (ok) ChatNotifier.clear(app, cid);
+                else ChatNotifier.replyFailed(app, cid, typedText);
+            }
+            pending.finish();
         }, "votask-chat-action").start();
+    }
+
+    private static boolean post(String target, String body, String kind) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(target).openConnection();
+            c.setRequestMethod("POST");
+            c.setConnectTimeout(5000);
+            c.setReadTimeout(5000);
+            c.setDoOutput(true);
+            c.setRequestProperty("content-type", "application/json");
+            try (OutputStream os = c.getOutputStream()) { os.write(body.getBytes(StandardCharsets.UTF_8)); }
+            int code = c.getResponseCode();
+            return code >= 200 && code < 300;
+        } catch (Exception e) {
+            Log.w(TAG, kind + " failed: " + e.getMessage());
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
     }
 
     private static String nz(String s) {

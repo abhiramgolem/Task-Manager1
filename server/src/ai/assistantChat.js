@@ -10,6 +10,7 @@
 // and scale past the MAX_TASKS_IN_CONTEXT cap. Retrieval is RBAC-filtered, so it
 // can only surface what the user could already see.
 import { db } from '../db.js'
+import { localDay } from '../clock.js'
 import { retrieve } from './ragRetrieve.js'
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
@@ -21,7 +22,7 @@ const TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 25000
 const withTimeout = () => AbortSignal.timeout(TIMEOUT_MS)
 
 const OPEN_STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Reopened']
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => localDay()
 const isOverdue = (t) => t.due_date && t.due_date < today() && t.status !== 'Done'
 
 export const hasLLM = () => !!(process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)

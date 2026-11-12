@@ -7,9 +7,10 @@
 // running meant two near-identical emails a day for everyone, so this one is now
 // the team channel only.
 import { db } from './db.js'
+import { localDay } from './clock.js'
 import { postToCliq, cliqEnabled } from './cliq.js'
 
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => localDay()
 const OPEN = "('To Do','In Progress','Blocked','In Review','Reopened')"
 
 function fmtTask(t) {

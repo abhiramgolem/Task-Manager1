@@ -56,6 +56,7 @@ export async function embedTexts(texts) {
 
   if (p === 'voyage') {
     const res = await fetch(VOYAGE_URL, {
+      signal: AbortSignal.timeout(30000), // a hung provider must not leave this waiting ~5 min
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.VOYAGE_API_KEY}` },
       body: JSON.stringify({ model: VOYAGE_MODEL, input }),
@@ -66,6 +67,8 @@ export async function embedTexts(texts) {
   }
 
   const res = await fetch(OPENAI_URL, {
+
+    signal: AbortSignal.timeout(30000), // a hung provider must not leave this waiting ~5 min
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: JSON.stringify({ model: OPENAI_MODEL, input }),

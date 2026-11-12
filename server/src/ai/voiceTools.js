@@ -13,6 +13,7 @@
 // old design hard-coded 8 intents in a prompt, so "edit this task", "yesterday's
 // overview" and "start a meeting" simply had nowhere to land and got declined.
 import { callOpenRouter, callClaude, callOpenAI, parseJson } from './voiceTask.js'
+import { localDay } from '../clock.js'
 
 const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low']
@@ -63,10 +64,10 @@ export const TOOLS = [
     desc: "Send a DIRECT CHAT MESSAGE to a teammate in the Chats section — this is real person-to-person messaging, NOT a task comment. Use whenever the user says 'message X', 'tell X in chat', 'send X a message', 'ping X', 'message him/her personally'. If they mention a task, weave it into the message text.",
     args: 'recipient_name, body (the message to send, phrased naturally in English)' },
 
-  // ---- daily update card (a chat card of the user's own daily numbers) ------
+  // ---- daily metrics card (a chat card of the user's own daily numbers) -----
   { name: 'post_daily_update', kind: 'mutate', roles: ALL,
-    desc: "Post the user's DAILY UPDATE: the card of numbers they report in a team chat every day "
-      + "(sales, leads, reviews, junk leads…). Use for 'post my daily update', 'today's update: sales 12k, "
+    desc: "Post the user's DAILY METRICS (also called daily update): the card of numbers they report in a team chat every day "
+      + "(sales, leads, reviews, junk leads…). Use for 'post my daily metrics', 'post my daily update', 'today's update: sales 12k, "
       + "2 reviews, no junk leads', 'update my numbers'. Put EVERY number they said into values, each "
       + "labelled with their own word for it. Write values in digits, keeping a spoken k / lakh / crore "
       + "('12k', '1.5 lakh', '0' for zero / none / nil). The app matches the labels to their card.",
@@ -176,7 +177,7 @@ const DENIAL = {
 }
 const denialFor = (name) => DENIAL[name] || "You don't have access to that."
 
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => localDay()
 
 function systemPrompt(user) {
   const allowed = toolsFor(user.role)

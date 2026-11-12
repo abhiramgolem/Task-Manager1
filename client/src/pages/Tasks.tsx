@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, Task, User, API_BASE, getToken } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, CategoryBadge, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, Avatar, ConfidenceTag, EmptyState, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea, todayKey, dayKeyOf } from '../ui'
 import TaskDrawer from '../components/TaskDrawer'
 import CategorySelect from '../components/CategorySelect'
 import PickerWithAdd from '../components/PickerWithAdd'
@@ -619,7 +619,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // A completed task = status 'Done' (employee tasks reach 'Done' only once a
   // manager accepts them); these are removed from the active list and shown,
   // with their assigned + completed dates, in the Completed view.
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayStr = todayKey()
   const matchesQuick = (t: Task, key: typeof quickView) => {
     switch (key) {
       case 'completed': return t.status === 'Done'
@@ -659,7 +659,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     if (!isGroupedSort(sort.key)) return []
     const groups: Record<string, Task[]> = {}
     for (const t of sortedTasks) {
-      const day = (givenOf(t) || '').slice(0, 10) || 'No date'
+      const day = dayKeyOf(givenOf(t)) || 'No date'
       ;(groups[day] ||= []).push(t)
     }
     const keys = Object.keys(groups).sort((a, b) => (a === 'No date' ? 1 : b === 'No date' ? -1 : b.localeCompare(a)))
@@ -1134,6 +1134,7 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
     priority: draftPriority,
     assignee_id: draft?.assignee_id || (isEmployee ? (user?.id || '') : ''),
     due_date: draft?.due_date || dueDateForPriority(draftPriority),
+    source_message_id: draft?.source_message_id || undefined,
   })
   // Once the user picks a date by hand, stop auto-syncing it to the priority. A
   // date the draft read out of the message ("by Friday") counts as picked — the

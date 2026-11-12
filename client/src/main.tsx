@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { AuthProvider } from './auth'
+import ErrorBoundary, { installGlobalErrorReporting } from './components/ErrorBoundary'
 import { applyWallpaper, getWallpaperId } from './lib/wallpaper'
 import { initTheme } from './lib/theme'
 import { releaseBackgroundRecording } from './lib/backgroundRecording'
@@ -18,13 +19,16 @@ initTheme()
 // service left over from before a reload would keep the phone's microphone
 // notification up over a recording that no longer exists.
 releaseBackgroundRecording()
+installGlobalErrorReporting()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   </React.StrictMode>
 )

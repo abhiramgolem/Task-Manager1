@@ -499,11 +499,11 @@ export function initSchema() {
     FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
   );
 
-  -- A person's daily update card in one chat (routes/dailyUpdates.js): the
-  -- numbers they report every day, set up once by that person and then only
-  -- filled in. metrics is JSON [{id, label, target, unit, mode}], mode 'total'
-  -- (they enter the month's figure so far) or 'daily' (they enter today's and
-  -- the month is added up). remind_at is "HH:MM" in TASK_MAIL_TZ, remind_days
+  -- A person's daily metrics card in one chat (routes/dailyUpdates.js): the
+  -- message they post every day, with blanks, set up once and then only filled
+  -- in. body is that message (added by migration, see daily_metrics_text_v1);
+  -- metrics is the old list-of-numbers form, kept only so the column stays
+  -- NOT NULL-valid. remind_at is "HH:MM" in TASK_MAIL_TZ, remind_days
   -- the weekdays it applies to (0 = Sunday). The two dates let the reminder
   -- sweep skip, by row, whoever has posted or been reminded today.
   CREATE TABLE IF NOT EXISTS daily_update_templates (
@@ -1326,6 +1326,26 @@ export function initSchema() {
     }
   })
 
+  // Daily metrics cards became the person's own message with blanks (body),
+  // replacing the list of numbers the app added up. A card made the old way
+  // turns into one "Label (target) = ___" line per number it had.
+  ensureColumn('daily_update_templates', 'body', "TEXT NOT NULL DEFAULT ''")
+  runOnce('daily_metrics_text_v1', () => {
+    try {
+      const short = (n) => (n >= 1e7 ? `${+(n / 1e7).toFixed(2)}Cr` : n >= 1e5 ? `${+(n / 1e5).toFixed(2)}L` : n >= 1e3 ? `${+(n / 1e3).toFixed(2)}k` : String(n))
+      const rows = db.prepare("SELECT id, metrics FROM daily_update_templates WHERE body = ''").all()
+      const set = db.prepare('UPDATE daily_update_templates SET body=? WHERE id=?')
+      for (const t of rows) {
+        let ms = []
+        try { ms = JSON.parse(t.metrics || '[]') } catch {}
+        const lines = ms.map((m) => `${m.label}${m.target ? ` (${short(m.target)}${m.stretch ? '-' + short(m.stretch) : ''})` : ''} = ___`)
+        set.run(lines.length ? lines.join('\n') : 'Today = ___', t.id)
+      }
+    } catch (e) {
+      console.error('[migrate] daily_metrics_text_v1 skipped:', e.message)
+    }
+  })
+
   // Indexes for lookups that run per row of a list, or on every save. Without
   // them each lookup was a full table scan, so a list of N tasks cost N scans
   // of the whole table — GET /tasks for 5,000 tasks took 5.6 s, and with one
@@ -1350,7 +1370,26 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_chat_convo_sender ON chat_messages(conversation_id, created_at, sender_id);
     CREATE INDEX IF NOT EXISTS idx_emb_hash ON embeddings(source_type, source_id, content_hash);
     CREATE INDEX IF NOT EXISTS idx_emb_updated ON embeddings(updated_at);
+    -- "Hidden for me" rows (delete-for-me, Clear chat) are looked up by user on
+    -- every unread poll, chat-list load and delivery; the primary key leads with
+    -- message_id, so without this each lookup read the whole table — which Clear
+    -- chat grows by one row per message.
+    CREATE INDEX IF NOT EXISTS idx_hidden_user ON chat_message_hidden(user_id, message_id);
+    -- Deadline reminders (dueReminders.js) look tasks up by due date every minute.
+    CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
+    -- Which deadline reminders went out, so each is sent once (kind: day | hour).
+    CREATE TABLE IF NOT EXISTS task_due_reminders (
+      task_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      sent_at TEXT NOT NULL,
+      PRIMARY KEY (task_id, kind)
+    );
   `)
+  // The sender's own id for a message, chosen on the phone before it is sent.
+  // A send whose answer was lost (flaky network) is retried with the same id
+  // and gets the message that already exists instead of posting it twice.
+  ensureColumn('chat_messages', 'client_id', 'TEXT')
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_client ON chat_messages(sender_id, client_id) WHERE client_id IS NOT NULL')
 }
 
 // Run a migration body exactly once, tracked by a key in app_meta.

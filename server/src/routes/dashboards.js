@@ -1,10 +1,12 @@
 import { Router } from 'express'
 import { db } from '../db.js'
 import { authRequired, requireRole } from '../auth.js'
+import { localDay } from '../clock.js'
 
 const r = Router()
 r.use(authRequired)
-const today = () => new Date().toISOString().slice(0, 10)
+// The team's day (clock.js) — the UTC date lags IST until 05:30.
+const today = () => localDay()
 const OPEN = "('To Do','In Progress','Blocked','In Review','Reopened')"
 
 // A task counts once, for whoever actually does it. When a task is split, the
@@ -90,7 +92,7 @@ r.get('/manager', requireRole('manager', 'admin'), (req, res) => {
   const valid = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
   const scoped = valid(from) && valid(to)
   if (scoped && from > to) [from, to] = [to, from]
-  const inRange = (iso) => { if (!scoped) return true; if (!iso) return false; const day = String(iso).slice(0, 10); return day >= from && day <= to }
+  const inRange = (iso) => { if (!scoped) return true; if (!iso) return false; const day = localDay(iso); return !!day && day >= from && day <= to }
   const OPEN_STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Reopened']
 
   const allTasks = db.prepare(`SELECT t.*, u.name AS assignee_name,
@@ -176,7 +178,7 @@ r.get('/report', requireRole('manager', 'admin'), (req, res) => {
   const valid = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
   if (!valid(from) || !valid(to)) return res.status(400).json({ error: 'from and to dates (YYYY-MM-DD) are required' })
   if (from > to) [from, to] = [to, from]
-  const inRange = (iso) => { if (!iso) return false; const day = String(iso).slice(0, 10); return day >= from && day <= to }
+  const inRange = (iso) => { if (!iso) return false; const day = localDay(iso); return !!day && day >= from && day <= to }
 
   const tasks = db.prepare(`SELECT t.*, u.name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
     WHERE t.org_id=? AND ${LEAF} AND t.visible_to_manager=1`).all(org)

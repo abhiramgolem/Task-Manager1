@@ -21,15 +21,67 @@ export const setToken = (t: string | null) => {
   else localStorage.removeItem(TOKEN_KEY)
 }
 
-async function request(path: string, opts: RequestInit = {}) {
-  const headers: Record<string, string> = { 'content-type': 'application/json', ...(opts.headers as any) }
+// An error from the API that says what kind of failure it was, so a caller can
+// tell "the server said no" (status 4xx, keep the server's words) from "we never
+// reached it" (offline / restarting — try again), and only a 401 means signed out.
+export class ApiError extends Error {
+  status: number      // 0 = no answer at all (offline, timed out)
+  offline: boolean    // could not reach VoTask, or it answered with its restart page
+  constructor(message: string, status: number, offline = false) {
+    super(message)
+    this.status = status
+    this.offline = offline
+  }
+}
+
+// What people see instead of "Failed to fetch" or "Unexpected token '<'". The
+// second one was Render's HTML error page (shown while the server restarts after
+// a deploy) being parsed as JSON.
+export const OFFLINE_MSG = 'No connection to VoTask. Check your internet and try again.'
+export const RESTARTING_MSG = 'VoTask is restarting. Please try again in a moment.'
+const TIMEOUT_MSG = 'VoTask is taking too long to answer. Please try again.'
+
+// Reads a response body without trusting it to be JSON.
+async function readBody(res: Response) {
+  const text = await res.text().catch(() => '')
+  if (!text) return { data: null, json: true }
+  try { return { data: JSON.parse(text), json: true } } catch { return { data: null, json: false } }
+}
+
+// The error a failed response turns into. A gateway error, or any answer that
+// isn't our JSON, is the platform in front of us — the app is restarting.
+function failure(res: Response, data: any, json: boolean, fallback: string) {
+  if (!json || res.status === 502 || res.status === 503 || res.status === 504) {
+    return new ApiError(data?.error || RESTARTING_MSG, res.status, true)
+  }
+  return new ApiError(data?.error || `${fallback} (${res.status})`, res.status)
+}
+
+// Reads give up after 25 s: a request stuck on a dead connection used to spin
+// forever. Writes are left alone — some legitimately take minutes (analysing a
+// meeting, transcribing) — unless the caller passes its own `timeoutMs`.
+const READ_TIMEOUT = 25_000
+
+async function request(path: string, opts: RequestInit & { timeoutMs?: number } = {}) {
+  const { timeoutMs, ...init } = opts
+  const headers: Record<string, string> = { 'content-type': 'application/json', ...(init.headers as any) }
   const token = getToken()
   if (token) headers.authorization = `Bearer ${token}`
-  // never serve a cached response — user-specific data must not bleed across accounts
-  const res = await fetch(`${API_BASE}/api${path}`, { ...opts, headers, cache: 'no-store' })
-  const text = await res.text()
-  const data = text ? JSON.parse(text) : null
-  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`)
+  const limit = timeoutMs ?? ((init.method || 'GET') === 'GET' ? READ_TIMEOUT : 0)
+  const ctl = limit ? new AbortController() : null
+  const timer = ctl ? setTimeout(() => ctl.abort(), limit) : null
+  let res: Response
+  try {
+    // never serve a cached response — user-specific data must not bleed across accounts
+    res = await fetch(`${API_BASE}/api${path}`, { ...init, headers, cache: 'no-store', signal: ctl?.signal ?? init.signal })
+  } catch (e: any) {
+    throw new ApiError(e?.name === 'AbortError' && ctl?.signal.aborted ? TIMEOUT_MSG : OFFLINE_MSG, 0, true)
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+  const { data, json } = await readBody(res)
+  if (!res.ok) throw failure(res, data, json, 'Request failed')
+  if (!json) throw new ApiError(RESTARTING_MSG, res.status, true)
   return data
 }
 
@@ -57,22 +109,25 @@ async function uploadFile(path: string, file: File, field = 'file', onProgress?:
         let data: any = null
         try { data = JSON.parse(xhr.responseText) } catch {}
         if (xhr.status >= 200 && xhr.status < 300) resolve(data)
-        else reject(new Error(data?.error || `Upload failed (${xhr.status})`))
+        else if (!data || xhr.status >= 502) reject(new ApiError(data?.error || RESTARTING_MSG, xhr.status, true))
+        else reject(new ApiError(data?.error || `Upload failed (${xhr.status})`, xhr.status))
       }
-      xhr.onerror = () => reject(new Error('the connection was lost'))
+      xhr.onerror = () => reject(new ApiError(OFFLINE_MSG, 0, true))
       xhr.send(form)
     })
   }
-  const res = await fetch(`${API_BASE}/api${path}`, { method: 'POST', headers, body: form, cache: 'no-store' })
-  const text = await res.text()
-  const data = text ? JSON.parse(text) : null
-  if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status})`)
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}/api${path}`, { method: 'POST', headers, body: form, cache: 'no-store' })
+  } catch { throw new ApiError(OFFLINE_MSG, 0, true) }
+  const { data, json } = await readBody(res)
+  if (!res.ok) throw failure(res, data, json, 'Upload failed')
   return data
 }
 
 export const api = {
-  get: (p: string) => request(p),
-  post: (p: string, body?: any) => request(p, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
+  get: (p: string, o?: { timeoutMs?: number }) => request(p, o),
+  post: (p: string, body?: any, o?: { timeoutMs?: number }) => request(p, { method: 'POST', body: body ? JSON.stringify(body) : undefined, ...o }),
   put: (p: string, body?: any) => request(p, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }),
   patch: (p: string, body?: any) => request(p, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: (p: string) => request(p, { method: 'DELETE' }),

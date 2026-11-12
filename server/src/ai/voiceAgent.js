@@ -20,6 +20,7 @@
 // Every failure path falls back to the legacy router, which itself falls back to
 // Claude/OpenAI — the no-keys-at-all deployment still works.
 import { db } from '../db.js'
+import { localDay } from '../clock.js'
 import { routeCommand, validateCall, toolsFor, snapshot, historyBlock, STATUSES, PRIORITIES } from './voiceTools.js'
 import { resolveUser, resolveUserInfo } from './extractor.js'
 import { parseJson } from './voiceTask.js'
@@ -129,7 +130,7 @@ function searchTasks(user, args = {}) {
     ORDER BY t.updated_at DESC
   `).all(...(user.role === 'employee' ? [user.org_id, user.id] : [user.org_id]))
 
-  const t0 = new Date().toISOString().slice(0, 10)
+  const t0 = localDay()
   const who = args.assignee_name ? resolveUser(user.org_id, args.assignee_name) : null
   let list = rows
   if (args.status && STATUSES.includes(args.status)) list = list.filter((t) => t.status === args.status)
@@ -276,7 +277,7 @@ function userMessage(transcript, { user, tasks, users, history }) {
   const scope = user.role === 'employee'
     ? 'You are talking to an EMPLOYEE: the snapshot and every search cover ONLY their own tasks. Never reference other people\'s tasks.'
     : `You are talking to a ${user.role} who may act on any task or person in the organization.`
-  return `Today is ${new Date().toISOString().slice(0, 10)}. The user is ${user.name} (${user.role}). ${scope}
+  return `Today is ${localDay()}. The user is ${user.name} (${user.role}). ${scope}
 
 ${snapshot(tasks, users, user, transcript, HOT_TASKS)}${historyBlock(history)}
 

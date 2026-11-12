@@ -51,6 +51,7 @@ async function sarvam(buffer, filename, mimetype) {
   // with SARVAM_LANGUAGE (e.g. te-IN, hi-IN). "unknown" re-enables full auto-detect.
   form.append('language_code', process.env.SARVAM_LANGUAGE || 'en-IN')
   const res = await fetch('https://api.sarvam.ai/speech-to-text', {
+    signal: AbortSignal.timeout(180000), // a hung provider must not leave this waiting ~5 min
     method: 'POST',
     headers: { 'api-subscription-key': key },
     body: form,
@@ -78,6 +79,7 @@ async function whisper(buffer, filename, mimetype, provider, opts = {}) {
   // Context prompt (≤ ~224 tokens) keeps spelling/names consistent chunk-to-chunk.
   if (opts.prompt) form.append('prompt', String(opts.prompt).slice(-450))
   const res = await fetch(`${base}/audio/transcriptions`, {
+    signal: AbortSignal.timeout(180000), // a hung provider must not leave this waiting ~5 min
     method: 'POST',
     headers: { authorization: `Bearer ${key}` },
     body: form,

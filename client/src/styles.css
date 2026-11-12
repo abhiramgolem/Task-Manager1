@@ -2668,6 +2668,14 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 .avatar-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
 .online-dot { position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%; background: #22c55e; border: 2px solid var(--surface); }
 .online-text { color: #16a34a; font-weight: 600; }
+/* The day being read, floating over the thread while it scrolls (Chats.tsx
+   onLogScroll); a tap opens the date picker. Height 0 and sticky, so it sits
+   over the messages without pushing them down. */
+.day-float { position: sticky; top: 6px; z-index: 30; height: 0; display: flex; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.day-float.show { opacity: 1; pointer-events: auto; }
+.day-float-btn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 12px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); color: var(--text); font: inherit; font-size: 11.5px; font-weight: 600; box-shadow: 0 2px 8px rgba(16,24,40,.12); cursor: pointer; }
+.day-float-btn:hover { background: var(--bg); }
+.day-float .jump-pop { top: 32px; left: 50%; right: auto; transform: translateX(-50%); }
 .date-sep { display: flex; justify-content: center; margin: 6px 0; }
 .date-sep span { background: var(--bg); color: var(--muted); font-size: 11px; font-weight: 600; padding: 3px 12px; border-radius: 12px; border: 1px solid var(--border); }
 .btn.danger-solid { background: #ef4444; color: #fff; border-color: #ef4444; }
@@ -2675,6 +2683,18 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 
 /* unread "new messages" divider */
 .unread-sep { display: flex; justify-content: center; margin: 8px 0; }
+/* A message of mine the server hasn't confirmed (lib/outbox.ts): what went
+   wrong and what to do, under the bubble, as WhatsApp's red "not sent". */
+.msg-failed { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 4px 10px; margin: 2px 4px 4px; font-size: 11.5px; color: var(--danger-ink, #b91c1c); }
+.msg-failed-txt { min-width: 0; }
+.msg-failed button { border: 0; background: none; padding: 2px 4px; font: inherit; font-weight: 700; color: var(--primary); cursor: pointer; }
+.msg-fail-ic { display: inline-flex; color: #ef4444; }
+/* The live connection is down: a thin strip over the chats until it is back. */
+.chat-connecting { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 30; display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 14px; margin-top: 6px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); pointer-events: none; }
+.chat-connecting .spinner { width: 12px; height: 12px; border-width: 2px; }
+.chat-layout { position: relative; }
 .unread-sep span { background: var(--primary); color: #fff; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; padding: 3px 14px; border-radius: 12px; }
 
 /* conversation row: trailing cluster + options menu */
@@ -3746,6 +3766,28 @@ body:has(.call-stage.max) .confirm-center { z-index: 1460; }
 @media (max-width: 720px) {
   .lb-card { grid-template-columns: 30px 34px 1fr auto; row-gap: 6px; }
 }
+/* Rank-by (Points / On time) beside the period tabs; wraps under it on a phone. */
+.lb-selects { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lb-note { font-size: 12.5px; }
+/* On-time block in the detail: four stats, two by two on a phone. */
+.lb-delay-stats { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 560px) { .lb-delay-stats { grid-template-columns: repeat(2, 1fr); } }
+.lb-late-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.lb-late-list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center;
+  padding: 8px 10px; background: var(--n-50); border: 1px solid var(--border); border-radius: 8px; }
+.lb-late-title { font-weight: 600; font-size: 13px; color: var(--text); text-decoration: none; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-late-title:hover { color: var(--primary); }
+.lb-late-meta { grid-column: 1; font-size: 11.5px; }
+.lb-late-days { grid-column: 2; grid-row: 1 / span 2; font-size: 12px; font-weight: 800; color: #f97316; white-space: nowrap; }
+.lb-late-days.open { color: #ef4444; }
+
+/* ---- Crash screen (components/ErrorBoundary.tsx) ----------------------------- */
+.eb-wrap { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg, var(--surface)); }
+.eb-card { max-width: 420px; width: 100%; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); text-align: center; }
+.eb-title { font-size: 17px; font-weight: 800; color: var(--text); }
+.eb-text { margin: 8px 0 18px; color: var(--muted); font-size: 13.5px; }
+.eb-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 
 /* ---- App feedback (rate this app) ------------------------------------------- */
 .fb-modal { width: 480px; max-width: 94vw; }
@@ -4604,37 +4646,64 @@ button.reply-quote {
 .du-ic { width: 22px; height: 22px; flex-shrink: 0; display: grid; place-items: center; border-radius: 6px; background: #0d9488; color: #fff; }
 .du-title { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .du-day { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.du-row { padding: 6px 0; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
-.du-line { display: flex; align-items: baseline; gap: 10px; }
-.du-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.du-val { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.du-of { font-weight: 500; color: var(--muted); }
-.du-today { font-size: 12px; color: var(--muted); margin-top: 1px; }
-.du-bar { position: relative; height: 6px; margin-top: 6px; border-radius: 3px; background: color-mix(in srgb, currentColor 14%, transparent); }
-.du-bar span { display: block; height: 100%; border-radius: 3px; transition: width .25s; }
-.du-bar span.good { background: #16a34a; }
-.du-bar span.behind { background: #d97706; }
-.du-bar i { position: absolute; top: -3px; width: 2px; height: 12px; margin-left: -1px; border-radius: 1px; background: var(--text); opacity: .55; }
-.du-sub { font-size: 12px; margin-top: 3px; }
-.du-sub.good { color: #15803d; }
-.du-sub.behind { color: #b45309; }
-:root[data-theme="dark"] .du-sub.good { color: #4ade80; }
-:root[data-theme="dark"] .du-sub.behind { color: #fbbf24; }
 .du-note { margin-top: 6px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.du-text { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.du-tline { min-height: 1.5em; }
+.du-v { font-variant-numeric: tabular-nums; }
+.du-body-in { font-family: inherit; resize: vertical; }
+.du-tokens { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 6px 0 10px; }
+.du-count { margin-left: auto; font-size: 12.5px; color: var(--muted); }
+.du-date { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+.du-date .ta-input { width: auto; }
+.du-fill { padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.du-fill .du-tline { padding: 2px 0; }
+.du-blank { width: auto; min-width: 3ch; max-width: 16ch; padding: 3px 6px; margin: 0 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 16px; font-weight: 700; }
+.du-blank::placeholder { color: var(--muted); font-weight: 500; opacity: .6; }
+.du-blank:focus { outline: 2px solid var(--primary); outline-offset: 0; border-color: transparent; }
+.du-hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.du-blank.auto { background: color-mix(in srgb, #0d9488 10%, var(--surface)); border-style: dashed; }
+/* A card kept as a sheet (lines starting with "|"): scrolls sideways on a phone. */
+.du-table-wrap { overflow-x: auto; margin: 2px 0 4px; -webkit-overflow-scrolling: touch; }
+.du-table { border-collapse: collapse; font-size: 12.5px; line-height: 1.3; min-width: 100%; }
+.du-table td { padding: 3px 5px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); white-space: nowrap; overflow-wrap: normal; }
+.du-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.du-table tr.du-th td { font-weight: 700; font-size: 11px; text-align: left; white-space: normal; vertical-align: bottom; }
+.du-table tr.du-tot td { font-weight: 700; }
+.du-table tr.du-tot td:first-child { text-align: center; }
+.du-fill .du-table .du-blank { width: 6ch; min-width: 0; font-size: 15px; padding: 2px 4px; margin: 0; text-align: right; }
+.du-fill .du-table td { padding: 2px 4px; }
+/* Room for the whole sheet on a computer; a phone's full-width sheet scrolls it. */
+.wa-sheet.du-sheet:has(.du-table) { max-width: 600px; }
+.bubble.card-bubble:has(.du-table) { width: 520px; }
+/* Edit card for a sheet (DailyTableEditor.tsx): the table as boxes. */
+.du-body-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.du-switch { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.wa-sheet.du-sheet:has(.dte) { max-width: 680px; }
+.dte-table td { padding: 2px 3px; vertical-align: middle; }
+.dte-table thead td { vertical-align: top; background: var(--bg); }
+.dte-in { width: 100%; min-width: 0; padding: 3px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.dte-h { width: auto; font-size: 11px; font-weight: 700; }
+.dte-name { width: auto; }
+.du-tot .dte-name { font-weight: 700; }
+.dte-num { width: 6ch; text-align: right; }
+.dte-colopt { display: flex; align-items: center; gap: 2px; margin-top: 3px; }
+.dte-kind { flex: 1; padding: 2px 4px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.dte-kind.on { background: #0d9488; border-color: #0d9488; color: #fff; }
+.dte-x { width: 22px; height: 22px; padding: 0; }
+.dte-rowopt { white-space: nowrap; }
+.dte-sel { padding: 2px 2px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; font-size: 11.5px; }
+.dte-slot { display: inline-block; min-width: 6ch; padding: 2px 4px; border: 1px dashed var(--border); border-radius: 5px; color: var(--muted); font-size: 11px; font-weight: 500; text-align: center; }
+.dte-slot.auto { background: color-mix(in srgb, #0d9488 10%, var(--surface)); color: #0f766e; }
+.dte-adds-row td { border-top: 0; }
+.dte-adds { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 0 4px; font-size: 11.5px; font-weight: 500; white-space: normal; color: var(--muted); }
+.dte-chip { padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer; }
+.dte-chip.on { background: #0d9488; border-color: #0d9488; color: #fff; }
 
 /* The sheet: set up once, then fill in. */
 .du-loading { display: grid; place-items: center; padding: 30px; }
 .du-sheet-title { display: inline-flex; align-items: center; gap: 7px; }
 .du-intro { margin: 0 0 10px; font-size: 13.5px; color: var(--muted); }
-.du-def { padding: 8px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; display: grid; gap: 6px; }
-.du-def-top, .du-def-more { display: flex; gap: 6px; align-items: center; }
-.du-def-more .ta-input { flex: 1; min-width: 0; }
-.du-def-more .du-unit { flex: 0 0 84px; }
 .ta-input.bad { border-color: var(--danger-ink); }
-.du-mode { display: flex; gap: 4px; padding: 3px; border-radius: 9px; background: var(--bg); }
-.du-mode button { flex: 1; padding: 6px 6px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
-.du-mode button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
-.du-add { margin-bottom: 4px; }
 .du-remind { flex-wrap: wrap; }
 .du-time { width: auto; padding: 5px 8px; }
 .du-days { display: flex; gap: 6px; margin: 8px 0 4px 27px; }
@@ -4645,15 +4714,6 @@ button.reply-quote {
 .du-again { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; padding: 7px 10px; border-radius: 8px; margin-bottom: 8px; background: color-mix(in srgb, #d97706 12%, var(--surface)); }
 .du-again > span { flex: 1 1 180px; }
 /* A daily count's month under its box: added up, and typed over to correct. */
-.du-month { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 12.5px; color: var(--muted); }
-.du-month label { white-space: nowrap; }
-.du-field .du-month .ta-input { width: 110px; flex: 0 0 auto; padding: 5px 8px; font-size: 14px; }
-.du-correct { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.du-field { margin-bottom: 10px; }
-.du-field label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.du-field-name { font-weight: 600; font-size: 14px; }
-.du-field-hint { font-size: 12px; color: var(--muted); text-align: right; }
-.du-field .ta-input { font-size: 16px; }
 .du-note-in { resize: vertical; }
 .du-sheet .wa-sheet-foot { justify-content: space-between; }
 
@@ -5772,3 +5832,28 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 /* Media Files in place of the thread. */
 .chat.media-on .chat-log-wrap, .chat.media-on .composer, .chat.media-on .pin-bar, .chat.media-on .pin-list, .chat.media-on .in-search { display: none; }
 .chat-media-pane { flex: 1; min-height: 0; }
+
+/* ---- First-run popups on phones (App.tsx VerifyEmailBanner, VoiceAssistant) --
+   Neither belongs over an open chat: they covered the newest messages and the
+   box you type in. The voice tip also waits while the verify card is up. */
+body.chat-thread-open .verify-pop,
+body.chat-thread-open .va-coach,
+body.verify-pop-open .va-coach { display: none !important; }
+.verify-pop-later { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+.verify-pop-later button { border: 0; background: none; padding: 2px 0; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.verify-pop-later button:hover { color: var(--text); }
+
+/* ---- In-app message banner (components/InAppChatAlert.tsx) ------------------ */
+.iac-wrap { position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 1300;
+  width: min(420px, calc(100vw - 32px)); display: flex; align-items: stretch;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg, var(--shadow));
+  animation: iac-in .18s ease-out; }
+@keyframes iac-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce) { .iac-wrap { animation: none; } }
+.iac-card { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 4px 10px 12px; border: 0; background: none; text-align: left; cursor: pointer; color: var(--text); font: inherit; }
+.iac-ic { flex-shrink: 0; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
+.iac-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.iac-title { font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iac-text { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iac-x { flex-shrink: 0; border: 0; background: none; padding: 0 12px; color: var(--muted); cursor: pointer; }
+

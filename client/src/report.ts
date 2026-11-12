@@ -6,7 +6,7 @@ export interface ReportRange { from: string; to: string; label: string }
 // new window with the print dialog (the manager can Save as PDF or print).
 // Dependency-free — the report is a self-contained HTML document.
 export async function downloadManagerReport(range: ReportRange, orgName = 'Befach') {
-  const d = await api.get(`/dashboards/report?from=${range.from}&to=${range.to}`)
+  const d = await api.get(`/dashboards/report?from=${range.from}&to=${range.to}`, { timeoutMs: 120_000 })
   const c = d.counts
   const now = new Date().toLocaleString(undefined, {
     day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',
@@ -67,7 +67,7 @@ export async function downloadManagerReport(range: ReportRange, orgName = 'Befac
   <h2>Completed in period (${d.completed_tasks.length})</h2>
   ${d.completed_tasks.length === 0 ? '<p class="sub">None.</p>' :
     `<table><thead><tr><th>Task</th><th>Assignee</th><th>Completed</th></tr></thead>
-    <tbody>${rows(d.completed_tasks, (t: any) => [esc(t.title), esc(t.assignee_name || 'Unassigned'), esc((t.completed_at || '').slice(0, 10) || '—')])}</tbody></table>`}
+    <tbody>${rows(d.completed_tasks, (t: any) => [esc(t.title), esc(t.assignee_name || 'Unassigned'), esc(t.completed_at ? ymd(new Date(t.completed_at)) : '—')])}</tbody></table>`}
 
   <h2>Overdue tasks — as of now (${d.overdue_tasks.length})</h2>
   ${d.overdue_tasks.length === 0 ? '<p class="sub">Nothing overdue</p>' :

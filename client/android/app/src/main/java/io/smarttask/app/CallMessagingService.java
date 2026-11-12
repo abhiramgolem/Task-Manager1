@@ -30,6 +30,12 @@ public class CallMessagingService extends MessagingService {
             CallRinger.cancel(this, data.get("call_id"));
             return;
         }
+        // The chat was read on another device (the computer): take its
+        // notification down here too, as WhatsApp does.
+        if ("chat-read".equals(type)) {
+            ChatNotifier.clear(this, data.get("conversation_id"));
+            return;
+        }
         // A chat line, sent as data so the app can draw it WhatsApp's way
         // (ChatNotifier). With the app on screen the thread shows it live, as
         // it always has, so the tray stays quiet.

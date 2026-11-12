@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api, userAvatarUrl } from '../api'
 import { useAuth } from '../auth'
-import { Avatar, Ic, EmptyState, Bar } from '../ui'
+import { Avatar, Ic, EmptyState, Bar, todayKey } from '../ui'
 import { toast } from '../lib/toast'
 
 // Points leaderboard. Fixed points per action:
@@ -20,7 +21,8 @@ const PERIODS = [
   { k: 'all', label: 'All-time', hint: 'every point ever earned' },
 ]
 
-const currentMonth = () => new Date().toISOString().slice(0, 7)
+// The viewer's month — the UTC one is still last month until 05:30 IST on the 1st.
+const currentMonth = () => todayKey().slice(0, 7)
 // 'yyyy-mm' → "August 2026". Day 02 dodges any timezone slip off the month.
 const monthName = (m: string) => new Date(m + '-02').toLocaleString(undefined, { month: 'long', year: 'numeric' })
 // The server's yyyy-mm-dd, shown the way the rest of the app writes dates.
@@ -42,6 +44,22 @@ const PLURALISE = new Set<string>([])
 const plural = (word: string, n: number) => (n === 1 || !PLURALISE.has(word) ? word : word + 's')
 
 const medalColor = ['#d4af37', '#a8b3c4', '#c8823c'] // gold / silver / bronze
+
+// Two ways to rank the same people over the same window. Points = volume of
+// work (the tally above). On time = how late their deadlines were met, in days
+// (server/src/punctuality.js): lowest average delay first. A fast finisher who
+// is always a week late tops one and trails the other — that is the point.
+const RANK_BY = [
+  { k: 'points', label: 'Points', hint: 'Ranked by points earned' },
+  { k: 'ontime', label: 'On time', hint: 'Ranked by average days late — fewest days late first' },
+] as const
+type RankBy = typeof RANK_BY[number]['k']
+
+const daysText = (n: number) => (n === 1 ? '1 day' : `${n} days`)
+// Green when deadlines are met, amber when a little late, red past 3 days.
+const delayColor = (avg: number | null | undefined) =>
+  avg == null ? '#94a3b8' : avg === 0 ? '#10b981' : avg <= 1 ? '#f59e0b' : avg <= 3 ? '#f97316' : '#ef4444'
+const prettyDue = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 
 const Trophy = ({ size = 16, color = '#d4af37' }: { size?: number; color?: string }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -131,6 +149,11 @@ export default function Leaderboard() {
   const [error, setError] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  // Remembered per device: a manager who reviews punctuality wants to land on it.
+  const [rankBy, setRankByState] = useState<RankBy>(() => {
+    try { return localStorage.getItem('lb_rank_by') === 'ontime' ? 'ontime' : 'points' } catch { return 'points' }
+  })
+  const setRankBy = (k: RankBy) => { setRankByState(k); try { localStorage.setItem('lb_rank_by', k) } catch {} }
 
   const query = sel.k === 'auto' ? ''
     : sel.k === 'month' && sel.month ? `?period=month&month=${sel.month}`
@@ -180,15 +203,24 @@ export default function Leaderboard() {
       <div className="lb-toolbar section">
         <div className="muted" style={{ fontSize: 13 }}>
           {/* Read off the server's rules so the legend can't drift from the scoring. */}
-          {data?.rules?.length
+          {rankBy === 'ontime' ? 'Who meets deadlines best — fewest days late ranks first.'
+            : data?.rules?.length
             ? data.rules.map((r: any) => `${r.points} ${r.points === 1 ? 'pt' : 'pts'} ${r.short || r.label.toLowerCase()}`).join(' · ')
             : 'Points are awarded for assigning, completing and commenting on tasks.'}
         </div>
-        <div className="lb-winsel" role="tablist" aria-label="Time period">
-          {tabs.map((p) => (
-            <button key={p.k} role="tab" aria-selected={activeTab === p.k} title={p.hint}
-              className={'lb-win-btn' + (activeTab === p.k ? ' active' : '')} onClick={() => setSel({ k: p.k })}>{p.label}</button>
-          ))}
+        <div className="lb-selects">
+          <div className="lb-winsel" role="tablist" aria-label="Rank by">
+            {RANK_BY.map((b) => (
+              <button key={b.k} role="tab" aria-selected={rankBy === b.k} title={b.hint}
+                className={'lb-win-btn' + (rankBy === b.k ? ' active' : '')} onClick={() => setRankBy(b.k)}>{b.label}</button>
+            ))}
+          </div>
+          <div className="lb-winsel" role="tablist" aria-label="Time period">
+            {tabs.map((p) => (
+              <button key={p.k} role="tab" aria-selected={activeTab === p.k} title={p.hint}
+                className={'lb-win-btn' + (activeTab === p.k ? ' active' : '')} onClick={() => setSel({ k: p.k })}>{p.label}</button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -230,12 +262,31 @@ export default function Leaderboard() {
         <div className="lb-list section">{Array.from({ length: 6 }).map((_, i) => <span key={i} className="skeleton skel-row" style={{ height: 64 }} />)}</div>
       )}
 
-      {!error && data && data.scored_count === 0 && (
+      {!error && data && rankBy === 'ontime' && (
+        data.delay_ranked_count > 0 ? (
+          <>
+            <div className="muted lb-note section">
+              Average days late per task with a deadline: on-time work counts as 0, overdue work counts the days so far.
+              Fewest days late ranks first. Work approved after review counts from when it was submitted.
+            </div>
+            <div className="lb-list section" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
+              {[...data.ranked].sort((a: any, b: any) =>
+                (a.delay_rank ?? Infinity) - (b.delay_rank ?? Infinity) || a.name.localeCompare(b.name))
+                .map((r: any) => <DelayCard key={r.id} row={r} onOpen={() => setDetailId(r.id)} />)}
+            </div>
+          </>
+        ) : (
+          <div className="card section"><EmptyState icon={<Ic name="calendar" size={40} />} title="No deadlines in this period"
+            hint="This ranking counts tasks with a due date that were delivered, or fell overdue, in the period." /></div>
+        )
+      )}
+
+      {!error && data && rankBy === 'points' && data.scored_count === 0 && (
         <div className="card section"><EmptyState icon={<Trophy size={40} color="#94a3b8" />} title="No points yet"
           hint="Points appear as soon as someone assigns, completes or comments on a task — or moves one along." /></div>
       )}
 
-      {!error && data && data.scored_count > 0 && (
+      {!error && data && rankBy === 'points' && data.scored_count > 0 && (
         <div className="lb-list section" style={refreshing ? { opacity: 0.6, transition: 'opacity .15s' } : { transition: 'opacity .15s' }}>
           {data.ranked.map((r: any) => (
             <RankCard key={r.id} row={r} rules={data.rules} onOpen={() => setDetailId(r.id)} />
@@ -288,6 +339,79 @@ function RankCard({ row, rules, onOpen }: { row: any; rules: any[]; onOpen: () =
   )
 }
 
+function DelayCard({ row, onOpen }: { row: any; onOpen: () => void }) {
+  const d = row.delay
+  const ranked = !!row.delay_rank
+  const top3 = ranked && row.delay_rank <= 3
+  const plural = (n: number) => (n === 1 ? '' : 's')
+  return (
+    <button className={'lb-card' + (row.delay_rank === 1 ? ' champ' : '') + (ranked ? '' : ' idle')} onClick={onOpen}>
+      <span className="lb-rank" style={{ color: top3 ? medalColor[row.delay_rank - 1] : undefined }}>
+        {row.delay_rank === 1 ? <Trophy size={20} /> : ranked ? `#${row.delay_rank}` : '–'}
+      </span>
+      <Avatar name={row.name} color={row.avatar_color} size={40} src={row.avatar_file ? userAvatarUrl(row.id, row.avatar_file) : undefined} />
+      <div className="lb-who">
+        <div className="lb-name">{row.name}</div>
+        <div className="lb-sub muted">
+          {!ranked
+            ? <span>No deadlines in this period</span>
+            : <>
+              {d.on_time > 0 && <span className="lb-chip" style={{ ['--bc' as any]: '#10b981' }}>{d.on_time} on time</span>}
+              {d.late_done > 0 && <span className="lb-chip" style={{ ['--bc' as any]: '#f97316' }}>{d.late_done} late</span>}
+              {d.overdue_open > 0 && <span className="lb-chip" style={{ ['--bc' as any]: '#ef4444' }}>{d.overdue_open} overdue</span>}
+            </>}
+        </div>
+      </div>
+      <div className="lb-winscore" title={ranked ? `${d.late_days} days late in total over ${d.tasks} task${plural(d.tasks)} · ${d.on_time_rate}% on time` : undefined}>
+        <div className="lb-winscore-num" style={{ color: delayColor(ranked ? d.avg_delay : null) }}>
+          {!ranked ? '—' : d.avg_delay === 0 ? 'On time' : `${d.avg_delay}d`}
+        </div>
+        <div className="muted lb-winscore-lbl">{!ranked ? '' : d.avg_delay === 0 ? `${d.tasks} task${plural(d.tasks)}` : 'avg late'}</div>
+      </div>
+    </button>
+  )
+}
+
+// Delivery block in a person's detail: their punctuality over the same window,
+// and — for themselves and managers — the tasks behind the number, worst first.
+function DelaySection({ delay, periodLabel }: { delay: any; periodLabel: string }) {
+  if (!delay) return null
+  return (
+    <>
+      <div className="lb-section-lbl">On-time delivery — {periodLabel}</div>
+      {!delay.tasks ? (
+        <div className="muted" style={{ fontSize: 12.5 }}>No tasks with a deadline were delivered or fell overdue in this period.</div>
+      ) : (
+        <>
+          <div className="lb-modal-stats lb-delay-stats">
+            <div className="lb-stat">
+              <div className="lb-stat-num" style={{ color: delayColor(delay.avg_delay) }}>{delay.avg_delay}</div>
+              <div className="muted lb-stat-lbl">avg days late</div>
+            </div>
+            <div className="lb-stat"><div className="lb-stat-num">{delay.on_time_rate}%</div><div className="muted lb-stat-lbl">on time ({delay.on_time}/{delay.tasks})</div></div>
+            <div className="lb-stat"><div className="lb-stat-num" style={{ color: delay.late_done ? '#f97316' : undefined }}>{delay.late_done}</div><div className="muted lb-stat-lbl">delivered late</div></div>
+            <div className="lb-stat"><div className="lb-stat-num" style={{ color: delay.overdue_open ? '#ef4444' : undefined }}>{delay.overdue_open}</div><div className="muted lb-stat-lbl">overdue now</div></div>
+          </div>
+          {delay.worst > 0 && <div className="muted" style={{ fontSize: 12 }}>Longest delay {daysText(delay.worst)} · {delay.late_days} days late in total</div>}
+          {Array.isArray(delay.items) && delay.items.length > 0 && (
+            <ul className="lb-late-list">
+              {delay.items.map((t: any) => (
+                <li key={t.id}>
+                  <Link className="lb-late-title" to={`/tasks?task=${encodeURIComponent(t.id)}`}>{t.title}</Link>
+                  <span className="lb-late-meta muted">
+                    due {prettyDue(t.due_date)}{t.open ? ' · still open' : ` · delivered ${prettyDue(t.delivered_on)}`}
+                  </span>
+                  <span className={'lb-late-days' + (t.open ? ' open' : '')}>{t.open ? `${daysText(t.days_late)} overdue` : `${daysText(t.days_late)} late`}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </>
+  )
+}
+
 function DetailModal({ userId, periodQuery, periodLabel, onClose }: { userId: string; periodQuery: string; periodLabel: string; onClose: () => void }) {
   const [d, setD] = useState<any>(null)
   const [error, setError] = useState(false)
@@ -310,7 +434,7 @@ function DetailModal({ userId, periodQuery, periodLabel, onClose }: { userId: st
     <div className="modal-center" onClick={onClose}>
       <div className="modal lb-modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-head spread">
-          <h3>Points detail</h3>
+          <h3>Performance</h3>
           <button className="btn btn-ghost" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <div className="card-pad">
@@ -335,6 +459,8 @@ function DetailModal({ userId, periodQuery, periodLabel, onClose }: { userId: st
               <div className="lb-stat"><div className="lb-stat-num">{d.all_time_points}</div><div className="muted lb-stat-lbl">all-time</div></div>
               <div className="lb-stat"><div className="lb-stat-num">{d.breakdown?.completed?.count ?? 0}</div><div className="muted lb-stat-lbl">tasks completed</div></div>
             </div>
+
+            <DelaySection delay={d.delay} periodLabel={periodLabel} />
 
             {/* The window is no longer fixed, so the label reports what was
                 actually returned rather than asserting 30 days. */}

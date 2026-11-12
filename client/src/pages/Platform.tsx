@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
-import { Bar, EmptyState, Ic, STATUS_COLORS, fmtDateTime } from '../ui'
+import { Bar, EmptyState, Ic, STATUS_COLORS, fmtDateTime, dayKeyOf } from '../ui'
 import { toast } from '../lib/toast'
 import { confirmDialog } from '../lib/confirm'
 
@@ -110,7 +110,7 @@ export default function Platform() {
                   <strong>{fmtUsd(o.usage_cost)}</strong>
                   <div className="muted" style={{ fontSize: 11 }}>{fmtNum(o.usage_calls)} calls{o.usage_access ? ' · shared' : ''}</div>
                 </td>
-                <td data-label="Created">{(o.created_at || '').slice(0, 10)}</td>
+                <td data-label="Created">{dayKeyOf(o.created_at)}</td>
                 <td data-label="Last activity" className="muted">{o.last_activity ? fmtDateTime(o.last_activity) : '—'}</td>
                 <td><button className="btn btn-sm btn-danger row" style={{ gap: 6 }} onClick={() => removeOrg(o)}><Ic name="trash" size={14} /> Delete</button></td>
               </tr>
@@ -239,7 +239,7 @@ function OrgDetailModal({ state, onClose, onRetry, onChanged }: {
                           </td>
                           <td data-label="Email" className="muted">{m.email}</td>
                           <td data-label="Role">{m.role}</td>
-                          <td data-label="Joined" className="muted">{(m.created_at || '').slice(0, 10)}</td>
+                          <td data-label="Joined" className="muted">{dayKeyOf(m.created_at)}</td>
                         </tr>
                       ))}
                     </tbody>

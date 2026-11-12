@@ -51,6 +51,7 @@ async function getAccessToken() {
     { algorithm: 'RS256' },
   )
   const res = await fetch('https://oauth2.googleapis.com/token', {
+    signal: AbortSignal.timeout(15000), // a hung provider must not leave this waiting ~5 min
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
@@ -154,6 +155,7 @@ async function sendToDevices(rows, { title, body, data, tag, rich }) {
             },
           }
       const res = await fetch(url, {
+        signal: AbortSignal.timeout(15000), // a hung provider must not leave this waiting ~5 min
         method: 'POST',
         headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
         body: JSON.stringify({ message }),
@@ -205,7 +207,9 @@ export async function sendCallPush(userId, data, { ttlSec = 60, title = '', body
 
   const stringData = {}
   for (const [k, v] of Object.entries(data || {})) stringData[k] = v == null ? '' : String(v)
-  const cancel = stringData.type === 'call-cancel'
+  // Silent ones (a ring stopping, a chat read elsewhere) mean nothing to an app
+  // build that draws no notifications itself — it would show an empty one.
+  const cancel = stringData.type === 'call-cancel' || stringData.type === 'chat-read'
   const url = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`
   await Promise.all(rows.map(async ({ token: tok, call_ring: native }) => {
     // A cancel means nothing to an app that never put up a ringing screen.
@@ -220,6 +224,7 @@ export async function sendCallPush(userId, data, { ttlSec = 60, title = '', body
         }
     try {
       const res = await fetch(url, {
+        signal: AbortSignal.timeout(15000), // a hung provider must not leave this waiting ~5 min
         method: 'POST',
         headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
         body: JSON.stringify({ message }),

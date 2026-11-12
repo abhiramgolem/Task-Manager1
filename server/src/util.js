@@ -1,5 +1,6 @@
 import { customAlphabet } from 'nanoid'
 import crypto from 'node:crypto'
+import { localDay, addDays } from './clock.js'
 
 const nano = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 12)
 export const id = (prefix = '') => (prefix ? `${prefix}_` : '') + nano()
@@ -21,16 +22,13 @@ export const inDays = (days) => new Date(Date.now() + days * 86400000).toISOStri
 // task's due date when none was set. Critical = today, High = tomorrow, etc.
 const DUE_DAYS_BY_PRIORITY = { Critical: 0, High: 1, Medium: 3, Low: 5 }
 
-// Compute a default due date (YYYY-MM-DD, in the server's local timezone) from a
-// priority. Local date parts are used so "same day" is correct for IST evenings.
+// Compute a default due date (YYYY-MM-DD) from a priority, counted from the
+// team's calendar day (clock.js). It used the server's local date parts, which
+// was right on an IST laptop but not on Render, which runs in UTC: a Critical
+// task made at 01:00 IST was due "today" = yesterday, overdue the moment it existed.
 export function dueDateForPriority(priority, from = new Date()) {
   const days = DUE_DAYS_BY_PRIORITY[priority] ?? DUE_DAYS_BY_PRIORITY.Medium
-  const d = new Date(from)
-  d.setDate(d.getDate() + days)
-  const y = d.getFullYear()
-  const mo = String(d.getMonth() + 1).padStart(2, '0')
-  const da = String(d.getDate()).padStart(2, '0')
-  return `${y}-${mo}-${da}`
+  return addDays(localDay(from), days)
 }
 
 import { db } from './db.js'
@@ -84,7 +82,7 @@ const PUSH_TITLES = {
   chat_mention: 'You were mentioned',
   chat_call: 'Missed call',
   chat_reminder: 'Reminder',
-  update_reminder: 'Daily update',
+  update_reminder: 'Daily metrics',
   call_review: 'Call ready for review',
 }
 

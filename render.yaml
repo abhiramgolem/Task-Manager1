@@ -21,7 +21,10 @@ services:
       # Absolute path to server/data inside Render's checkout. The app writes the
       # DB (smarttask.db), chat_uploads/ and avatars/ here — all on this disk.
       mountPath: /opt/render/project/src/server/data
-      sizeGB: 1
+      # 10 GB: the database, every chat file (up to 1 GB each), task files and
+      # the nightly backups (backup.js) share it. 1 GB could be filled by a
+      # single video, and a full disk stops every write in the app.
+      sizeGB: 10
     envVars:
       - key: NODE_VERSION
         # Must satisfy Vite 8's engine requirement (^20.19.0 || >=22.12.0) or the

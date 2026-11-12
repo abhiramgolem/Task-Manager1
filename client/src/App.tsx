@@ -12,12 +12,13 @@ import { useEscape } from './lib/useEscape'
 import { webPushSupported, enableWebPush, needsHomeScreen } from './lib/webPush'
 import { toast } from './lib/toast'
 import { api, getToken, userAvatarUrl } from './api'
-import { Avatar, Ic } from './ui'
+import { Avatar, Ic, todayKey, localDateKey } from './ui'
 import NotificationBell from './components/NotificationBell'
 import ProfileModal, { SECTIONS, SectionId } from './components/ProfileModal'
 import FeedbackModal from './components/FeedbackModal'
 import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
+import InAppChatAlert from './components/InAppChatAlert'
 import ConfirmHost from './components/ConfirmHost'
 import CallCenter from './components/CallCenter'
 import QuickInvite from './components/QuickInvite'
@@ -418,18 +419,41 @@ function Layout({ children }: { children: React.ReactNode }) {
 // page down) that appears at most once per calendar day — once shown or dismissed,
 // it stays hidden until the next day. It takes the code right here, so confirming
 // doesn't mean hunting for the setting in Profile.
+//
+// It came back every single day with no way to stop it, a tall card covering
+// the bottom of the phone screen — the chat box included. Now "Later" puts it
+// away for three days and "Don't remind me" for good (Profile still has the
+// code entry); it never shows inside an open chat (styles.css), and while it is
+// up the voice tip waits (the `verify-pop-open` body class).
+const VERIFY_SNOOZE = 'befach_verify_snooze_until'
+const VERIFY_NEVER = 'befach_verify_never'
 function VerifyEmailBanner() {
   const { user } = useAuth()
   const [show, setShow] = useState(false)
   useEffect(() => {
     if (!user || user.email_verified) { setShow(false); return }
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayKey()
     try {
+      if (localStorage.getItem(VERIFY_NEVER) === user.id) return
+      if ((localStorage.getItem(VERIFY_SNOOZE) || '') > today) return
       if (localStorage.getItem('befach_verify_prompt') === today) return // already shown today
       localStorage.setItem('befach_verify_prompt', today)
     } catch { /* storage unavailable — still show it this load */ }
     setShow(true)
   }, [user])
+  useEffect(() => {
+    document.body.classList.toggle('verify-pop-open', show)
+    return () => document.body.classList.remove('verify-pop-open')
+  }, [show])
+  const later = () => {
+    const d = new Date(); d.setDate(d.getDate() + 3)
+    try { localStorage.setItem(VERIFY_SNOOZE, localDateKey(d)) } catch { /* storage off */ }
+    setShow(false)
+  }
+  const never = () => {
+    try { if (user) localStorage.setItem(VERIFY_NEVER, user.id) } catch { /* storage off */ }
+    setShow(false)
+  }
   if (!show || !user || user.email_verified) return null
   return (
     <div className="verify-pop" role="status">
@@ -443,6 +467,10 @@ function VerifyEmailBanner() {
       </div>
       <div className="verify-pop-actions">
         <EmailCodeEntry />
+      </div>
+      <div className="verify-pop-later">
+        <button type="button" onClick={later}>Remind me later</button>
+        <button type="button" onClick={never}>Don't remind me</button>
       </div>
     </div>
   )
@@ -635,6 +663,7 @@ export default function App() {
   return (
     <>
     <ToastHost />
+    <InAppChatAlert />
     <ConfirmHost />
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />

@@ -16,6 +16,7 @@ import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
 import { sendCallPush } from '../push.js'
 import { MB, bigFileUpload, streamingStorage, sendStoredFile } from '../fileStore.js'
+import { localDay } from '../clock.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
 // real-time delivery, replies (also privately, from a group), reactions, stars,
@@ -175,7 +176,7 @@ function snippet(row, viewerId = null) {
   if (row.deleted_for_all) return row.sender_id === viewerId ? 'You deleted this message' : 'This message was deleted'
   if (row.kind === 'system') return systemText(parseMeta(row), viewerId)
   if (row.kind === 'poll') return '📊 ' + (row.body || 'Poll')
-  if (row.kind === 'update') return '📈 ' + (row.body || 'Daily update')
+  if (row.kind === 'update') return '📈 ' + (row.body || 'Daily metrics')
   if (row.kind === 'task') return '📋 ' + (row.body || 'Task')
   if (row.kind === 'location') return '📍 ' + (row.body || 'Location')
   if (row.kind === 'contact') return '👤 ' + (row.body || 'Contact')
@@ -214,14 +215,51 @@ export function receiptCtx(convId, viewerId) {
   return { othersMinRead: oldest(others.map(readPos)), othersMinDelivered: oldest(others.map(deliveredPos)) }
 }
 
+// receiptCtx for EVERY participant of a conversation from one read of its
+// participant rows: uid -> { othersMinRead, othersMinDelivered }. Calling
+// receiptCtx per member read the whole member list once per member — N² rows
+// per message, and N³ once every reader's "read" pushed receipts in turn; in a
+// 150-person all-hands group one message held the server for seconds.
+// "Minimum of everyone but me" comes from the two smallest values: whoever holds
+// the smallest sees the second smallest, everyone else sees the smallest.
+function minExcluding(vals) {
+  let nulls = 0, a = null, ai = -1, b = null
+  vals.forEach((v, i) => {
+    if (!v) { nulls++; return }
+    if (a === null || v < a) { b = a; a = v; ai = i } else if (b === null || v < b) b = v
+  })
+  return (i) => {
+    if (vals.length <= 1) return null
+    if (nulls - (vals[i] ? 0 : 1) > 0) return null // someone else has no position yet
+    return i === ai ? b : a
+  }
+}
+export function receiptMap(convId) {
+  const rows = db.prepare('SELECT user_id, last_read_at, read_receipt_at, last_delivered_at, joined_at FROM chat_participants WHERE conversation_id=?').all(convId)
+  const read = minExcluding(rows.map(readPos)), delivered = minExcluding(rows.map(deliveredPos))
+  const out = new Map()
+  rows.forEach((r, i) => out.set(r.user_id, { othersMinRead: read(i), othersMinDelivered: delivered(i) }))
+  return out
+}
+const NO_RECEIPTS = { othersMinRead: null, othersMinDelivered: null }
+
 // Tell each participant where everyone else now is, so the ticks on their own
 // messages change colour without a reload. Each one gets their own numbers —
 // "everyone else" is a different set for every reader.
+// Debounced per conversation: when a message lands in a big group, every member
+// with it open reports "read" within the same second, and each report used to
+// trigger a full round of pushes. One round a second carries the same news.
+const receiptTimers = new Map()
 function pushReceipts(convId) {
-  for (const uid of participantsOf(convId)) {
-    const c = receiptCtx(convId, uid)
-    pushToUser(uid, { type: 'receipts', conversationId: convId, read_upto: c.othersMinRead, delivered_upto: c.othersMinDelivered })
-  }
+  if (receiptTimers.has(convId)) return
+  receiptTimers.set(convId, setTimeout(() => {
+    receiptTimers.delete(convId)
+    try {
+      for (const [uid, c] of receiptMap(convId)) {
+        pushToUser(uid, { type: 'receipts', conversationId: convId, read_upto: c.othersMinRead, delivered_upto: c.othersMinDelivered })
+      }
+    } catch (e) { console.warn('[chat] receipts push failed:', e.message) }
+  }, 800))
 }
 
 // Something from someone else newer than `since` — the only case in which a
@@ -330,6 +368,8 @@ export function shapeMessage(row, viewerId, ctx = {}) {
     reply_to: row.reply_to || null,
     reply: replyPreview,
     file: row.file_stored ? { name: row.file_name, type: row.file_type, size: row.file_size } : null,
+    // Only the sender sees it: how their phone matches its "sending" bubble to the saved message.
+    ...(row.client_id && row.sender_id === viewerId ? { client_id: row.client_id } : {}),
     reactions,
     mentions: ctx.mentions ? (ctx.mentions[row.id] || []) : (mentionsByMessage([row.id])[row.id] || []),
     starred: ctx.stars ? ctx.stars.has(row.id) : false,
@@ -421,12 +461,15 @@ function summarizeConvo(conv, viewerId) {
     ORDER BY created_at DESC LIMIT 1`).get(conv.id, viewerId)
   // Group event lines ("Ravi joined") are not something to catch up on, so
   // they never count as unread — as in WhatsApp.
+  // Capped: a busy group never opened counted its whole history on every load
+  // of the chat list. 500 is far past anything a badge or divider shows.
   const unread = db.prepare(`
-    SELECT COUNT(*) c FROM chat_messages
+    SELECT COUNT(*) c FROM (SELECT 1 FROM chat_messages
     WHERE conversation_id=? AND sender_id!=? AND deleted_for_all=0
       AND COALESCE(kind,'')<>'system'
       AND created_at > ?
-      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)`)
+      AND id NOT IN (SELECT message_id FROM chat_message_hidden WHERE user_id=?)
+    LIMIT 500)`)
     .get(conv.id, viewerId, me?.last_read_at || '', viewerId).c
   const others = parts.filter((p) => p.id !== viewerId)
   const isGroup = conv.type === 'group'
@@ -647,7 +690,7 @@ r.get('/users', (req, res) => {
 })
 
 // Who is currently online (has a live WebSocket connection).
-r.get('/presence', (req, res) => res.json({ online: getOnlineUsers() }))
+r.get('/presence', (req, res) => res.json({ online: getOnlineUsers(req.user.org_id) }))
 
 // ---------- conversations ----------
 r.get('/conversations', (req, res) => {
@@ -671,7 +714,12 @@ r.get('/conversations', (req, res) => {
 const UNREAD_CAP = 100
 r.get('/unread', (req, res) => {
   deliverPending(req.user.id)
-  const convs = db.prepare('SELECT c.id, p.last_read_at FROM chat_conversations c JOIN chat_participants p ON p.conversation_id=c.id WHERE p.user_id=? AND COALESCE(p.archived,0)=0').all(req.user.id)
+  // Muted chats are left out of the badge, as the chat list's own tabs already
+  // do: muting means "don't call me over", and a 9+ on the tab bar from a busy
+  // muted group did exactly that. A timed mute that has run out counts again.
+  const convs = db.prepare(`SELECT c.id, p.last_read_at FROM chat_conversations c JOIN chat_participants p ON p.conversation_id=c.id
+    WHERE p.user_id=? AND COALESCE(p.archived,0)=0
+      AND NOT (COALESCE(p.muted,0)=1 AND (p.muted_until IS NULL OR p.muted_until > ?))`).all(req.user.id, now())
   const count = db.prepare(`
     SELECT COUNT(*) c FROM (
       SELECT 1 FROM chat_messages
@@ -852,7 +900,22 @@ function readConversation(convId, userId) {
   const ts = now()
   const moved = markRead(convId, userId, ts)
   pushToConversation(convId, { type: 'read', conversationId: convId, userId, last_read_at: ts }, userId)
-  if (moved) pushReceipts(convId)
+  if (moved) { pushReceipts(convId); clearOnOtherDevices(convId, userId) }
+}
+
+// Read on the computer, still buzzing on the phone: the chat's notification
+// stayed in the phone's tray until it was opened there too. A silent data push
+// tells this person's phones to take it down (CallMessagingService "chat-read").
+// Debounced per person and chat — reading a busy group marks it read on every
+// new line, and one push after the burst says the same as twenty.
+const clearTimers = new Map()
+function clearOnOtherDevices(convId, userId) {
+  const key = userId + ':' + convId
+  if (clearTimers.has(key)) return
+  clearTimers.set(key, setTimeout(() => {
+    clearTimers.delete(key)
+    sendCallPush(userId, { type: 'chat-read', conversation_id: convId }, { ttlSec: 3600 }).catch(() => {})
+  }, 4000))
 }
 
 // A group event line ("Priya added Ravi"), sent straight to everyone like the
@@ -1057,6 +1120,10 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
     return { title: chatTitle + count, body: line, tag, rich: { ...rich, act: notifActionFor(conv.id, uid) } }
   }
   const groupLine = conv.type === 'group' ? `${sender.name}: ${full}` : full
+  // Who should NOT be alerted in the app (sound + banner while it is open):
+  // muted chats and do-not-disturb, exactly as for push. A mention still
+  // breaks through a mute, never through DND.
+  const quiet = new Set()
   for (const uid of others) {
     const p = db.prepare('SELECT muted, muted_until, last_read_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, uid)
     // A timed mute that has run out is not a mute any more. Checked on read
@@ -1067,6 +1134,7 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
     // Being named by hand outranks muting the room — that is the whole point of
     // typing someone's name instead of just talking. Muting still silences every
     // other message in the thread.
+    if (dndLive || (muteLive && !pinged.has(uid))) quiet.add(uid)
     if (pinged.has(uid) && !dndLive) {
       // On a phone that draws the chat itself the line sits under the sender's
       // name, so it says "Mentioned you" there; without it a mention looked
@@ -1089,8 +1157,14 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
   const ts = now()
   for (const uid of others) if (online.has(uid)) markDelivered(conv.id, uid, ts)
   // Push the shaped message to everyone, each with their own view of the ticks.
+  const receipts = receiptMap(conv.id)
+  const inAppLine = conv.type === 'group' ? `${sender.name}: ${short}` : short
   for (const uid of [sender.id, ...others]) {
-    pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, receiptCtx(conv.id, uid)) })
+    pushToUser(uid, {
+      type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, receipts.get(uid) || NO_RECEIPTS),
+      // For the in-app banner (client InAppChatAlert): whether to alert, and what to say.
+      alert: uid !== sender.id && !quiet.has(uid), title: chatTitle, preview: inAppLine,
+    })
   }
   indexChatMessage(msgRow.id) // RAG: index every delivered message (text/upload/forward)
 }
@@ -1119,11 +1193,22 @@ function resolveReply(rawId, conv, userId) {
 // Send a message: text, or one of the kinds that need no file — a shared
 // location ({kind:'location', meta:{lat,lng,label?,accuracy?}}) or a
 // teammate's contact card ({kind:'contact', meta:{user_id}}).
+// A send retried after its answer was lost: the phone sends the same client_id
+// again, and gets the message that was already saved instead of a second copy.
+// Without this, a flaky network turned one tap into two identical messages.
+const clientIdOf = (v) => (typeof v === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(v) ? v : null)
+const alreadySent = (senderId, clientId, convId) => clientId
+  ? db.prepare('SELECT * FROM chat_messages WHERE sender_id=? AND client_id=? AND conversation_id=?').get(senderId, clientId, convId)
+  : null
+
 r.post('/conversations/:id/messages', (req, res) => {
   const me = req.user
   if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Conversation not found' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
   if (!canPost(conv, me.id)) return res.status(403).json({ error: ADMINS_ONLY })
+  const clientId = clientIdOf(req.body?.client_id)
+  const dup = alreadySent(me.id, clientId, conv.id)
+  if (dup) return res.status(200).json(shapeMessage(dup, me.id, receiptCtx(conv.id, me.id)))
   const kind = req.body?.kind === 'location' || req.body?.kind === 'contact' ? req.body.kind : null
   let body = String(req.body?.body || '').trim()
   let meta = null
@@ -1144,8 +1229,8 @@ r.post('/conversations/:id/messages', (req, res) => {
   const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
   const mid = id('msg')
   const ts = now()
-  db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, reply_to, kind, meta, read, created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?)')
-    .run(mid, conv.org_id, conv.id, me.id, '', body, replyTo, kind, meta ? JSON.stringify(meta) : null, ts)
+  db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, reply_to, kind, meta, read, created_at, client_id) VALUES (?,?,?,?,?,?,?,?,?,0,?,?)')
+    .run(mid, conv.org_id, conv.id, me.id, '', body, replyTo, kind, meta ? JSON.stringify(meta) : null, ts, clientId)
   const mentioned = kind ? [] : saveMentions(conv.id, mid, req.body?.mentions, me.id, body)
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
   deliver(conv, row, me, mentioned)
@@ -1170,15 +1255,19 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file required (field "file")' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
   if (!canPost(conv, me.id)) { cleanup(); return res.status(403).json({ error: ADMINS_ONLY }) }
+  // The same file sent again after its answer was lost: keep the first one.
+  const clientId = clientIdOf(req.body?.client_id)
+  const dup = alreadySent(me.id, clientId, conv.id)
+  if (dup) { cleanup(); return res.status(200).json(shapeMessage(dup, me.id, receiptCtx(conv.id, me.id))) }
   // A form sends its text with CRLF line breaks; stored as the JSON route
   // stores a message, with LF, or a multi-line caption reads differently.
   const caption = String(req.body?.body || '').replace(/\r\n?/g, '\n').trim().slice(0, 4000)
   const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
   const mid = id('msg')
   const ts = now()
-  db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?)`)
-    .run(mid, conv.org_id, conv.id, me.id, '', caption, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, replyTo, ts)
+  db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at, client_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?)`)
+    .run(mid, conv.org_id, conv.id, me.id, '', caption, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, replyTo, ts, clientId)
   // A voice note whose sender's browser already recognised the speech arrives
   // with the text attached, so nobody has to pay for a transcription that has
   // effectively already happened. Trusted no further than any other client
@@ -2310,6 +2399,9 @@ r.post('/task-draft', async (req, res) => {
   let mentionIds = Array.isArray(req.body?.mentions) ? req.body.mentions.map(String) : []
   let sourceSender = me.id
   let convId = null
+  // A message with a picture or document: named in the draft so the task is
+  // created with that file attached, whichever form finishes it.
+  let fileMessageId = null
 
   if (req.body?.messageId) {
     const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.body.messageId)
@@ -2317,6 +2409,7 @@ r.post('/task-draft', async (req, res) => {
     text = m.body || ''
     sourceSender = m.sender_id
     convId = m.conversation_id
+    if (m.file_stored) fileMessageId = m.id
     mentionIds = db.prepare('SELECT user_id FROM chat_mentions WHERE message_id=?').all(m.id).map((x) => x.user_id)
 
     // A VOICE NOTE carries its content in the transcript, not the body. Reading
@@ -2394,7 +2487,7 @@ r.post('/task-draft', async (req, res) => {
   const addressed = [...mentioned.map((u) => u.name), ...(target ? [target.name] : [])]
   const title = titleFromText(text, addressed) || body.slice(0, 80)
 
-  const due = parseDueDate(body, new Date().toISOString().slice(0, 10))
+  const due = parseDueDate(body, localDay())
   res.json({
     title,
     description: body === title ? '' : body,
@@ -2402,6 +2495,7 @@ r.post('/task-draft', async (req, res) => {
     due_date: due?.date || '',
     assignee_id: target ? target.id : '',
     assignee_name: target ? target.name : null,
+    ...(fileMessageId ? { source_message_id: fileMessageId } : {}),
   })
 })
 
@@ -3271,7 +3365,7 @@ r.get('/workload', (req, res) => {
 // (the info panel's member list) — still one grouped query either way.
 function workloadFor(orgId, userIds = null) {
   if (userIds && !userIds.length) return {}
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDay()
   const only = userIds ? ` AND assignee_id IN (${userIds.map(() => '?').join(',')})` : ''
   const rows = db.prepare(`
     SELECT assignee_id AS user_id,
