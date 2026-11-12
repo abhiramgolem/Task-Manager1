@@ -536,8 +536,22 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     setSearchParams(next, { replace: true })
   }, [searchParams])
 
+  // Opening a task splits the screen and the list becomes a scroll box of its
+  // own (starting at the top); closing it puts the list back in the page. Either
+  // way the list jumped to the top and the task you were on was lost. So the
+  // row's place on screen is noted before the switch and given back after it.
+  const placeRef = useRef<{ id: string; top: number } | null>(null)
+  const notePlace = (id: string | null) => {
+    const row = id && document.querySelector<HTMLElement>(`[data-va="task.${id}"]`)
+    placeRef.current = row ? { id: id!, top: row.getBoundingClientRect().top } : null
+  }
+  // Only where the layout switches (split view); a phone's drawer covers the
+  // list and leaves it where it was.
+  const pickTask = (id: string) => { if (!openId && split) notePlace(id); setOpenId(id) }
+
   // Close the drawer and drop the ?task= param so it stays closed and the URL is clean.
   const closeDrawer = () => {
+    if (paneOpen) notePlace(openId)
     setOpenId(null)
     if (searchParams.get('task')) {
       const next = new URLSearchParams(searchParams)
@@ -550,7 +564,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   useEffect(() => pushBackHandler(() => {
     if (filtersOpen) { setFiltersOpen(false); return true }
     if (showNew) { setShowNew(false); return true }
-    if (openId) { setOpenId(null); return true }
+    if (openId) { if (paneOpen) notePlace(openId); setOpenId(null); return true }
     return false
   }), [showNew, openId, filtersOpen])
 
@@ -599,11 +613,32 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // and all, out from under it. A class on <body> rather than styles here,
   // because the chain that has to stop growing (.app -> .main -> .content) sits
   // above this page. It reverts when the pane closes and on unmount, so the page
-  // always gets its normal scrolling back.
-  useEffect(() => {
+  // always gets its normal scrolling back. A layout effect, so the switch is
+  // complete before the row is put back in place (below) and before any paint.
+  React.useLayoutEffect(() => {
     if (!paneOpen) return
     document.body.classList.add('is-split-view')
     return () => document.body.classList.remove('is-split-view')
+  }, [paneOpen])
+  // After the switch: the row back where it was on screen (notePlace above).
+  React.useLayoutEffect(() => {
+    const p = placeRef.current
+    placeRef.current = null
+    const row = p && document.querySelector<HTMLElement>(`[data-va="task.${p.id}"]`)
+    if (!p || !row) return
+    // The nearest box that scrolls: the list in split view, the page otherwise.
+    let el: HTMLElement | null = row.parentElement
+    while (el && !(/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight)) el = el.parentElement
+    const by = (d: number) => { if (Math.abs(d) < 1) return; if (el) el.scrollTop += d; else window.scrollBy(0, d) }
+    by(row.getBoundingClientRect().top - p.top)
+    // Where it was may be outside the box now (the split list starts below the
+    // header): then just inside the nearest edge, never hidden behind it. The
+    // table's sticky header row covers the top of the box, so that is the edge.
+    const r = row.getBoundingClientRect()
+    const box = el ? el.getBoundingClientRect() : { top: 0, bottom: window.innerHeight }
+    const head = el?.querySelector('thead')?.getBoundingClientRect().height || 0
+    if (r.top < box.top + head) by(r.top - box.top - head - 8)
+    else if (r.bottom > box.bottom) by(r.bottom - box.bottom + 8)
   }, [paneOpen])
   const setScopeAssigned = (on: boolean) => {
     const next = new URLSearchParams(searchParams)
@@ -718,7 +753,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
   // it `highlightTask` polls for four seconds and gives up, which reads to the user
   // as the agent hanging at the end of every create.
   const renderRow = (t: Task) => (
-    <tr data-va={`task.${t.id}`} key={t.id} className={'clickable ' + rowClass(t)} onClick={() => setOpenId(t.id)}>
+    <tr data-va={`task.${t.id}`} key={t.id} className={'clickable ' + rowClass(t)} onClick={() => pickTask(t.id)}>
       <td className="cell-title">
         <div style={{ fontWeight: 600 }}>{t.title}</div>
         <span className="row" style={{ gap: 6 }}><ConfidenceTag c={t.ownership_confidence} /><CategoryBadge c={t.category} /></span>
@@ -808,7 +843,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
     () => [...visibleTasks].sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || '')),
     [visibleTasks])
   const renderCompletedRow = (t: Task) => (
-    <tr data-va={`task.${t.id}`} key={t.id} className="clickable" onClick={() => setOpenId(t.id)}>
+    <tr data-va={`task.${t.id}`} key={t.id} className="clickable" onClick={() => pickTask(t.id)}>
       <td className="cell-title"><div style={{ fontWeight: 600 }}>{t.title}</div><CategoryBadge c={t.category} /></td>
       <td data-label="Priority"><PriorityBadge p={t.priority} /></td>
       {!personal && (

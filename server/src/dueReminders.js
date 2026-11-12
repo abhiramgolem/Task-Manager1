@@ -28,23 +28,43 @@ const due = (day) => db.prepare(`
     AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id)
     AND NOT EXISTS (SELECT 1 FROM task_due_reminders r WHERE r.task_id = t.id AND r.kind = ?)`)
 
+// One reminder per person, not one per task: someone with eight tasks due got
+// eight pushes at once. A single task is named (and opens it); several are
+// counted, with the first two named, and open the task list.
+const quote = (t) => `"${t.title}"`
+function summary(tasks, when) {
+  if (tasks.length === 1) return `Due ${when}: ${quote(tasks[0])}`
+  const named = tasks.slice(0, 2).map(quote).join(', ')
+  const rest = tasks.length - 2
+  return `You have ${tasks.length} tasks due ${when}: ${named}${rest > 0 ? ` and ${rest} more` : ''}`
+}
+
 export function runDueReminders(now = new Date()) {
   const z = zonedNow(now)
   const h = deadlineHour()
   const mark = db.prepare('INSERT OR IGNORE INTO task_due_reminders (task_id, kind, sent_at) VALUES (?,?,?)')
-  const send = (rows, kind, text) => {
+  const send = (rows, kind, when) => {
+    const byPerson = new Map()
     for (const t of rows) {
       mark.run(t.id, kind, now.toISOString())
-      notify(t.org_id, t.assignee_id, 'task_due_soon', text(t), t.id)
+      if (!byPerson.has(t.assignee_id)) byPerson.set(t.assignee_id, [])
+      byPerson.get(t.assignee_id).push(t)
+    }
+    for (const [userId, tasks] of byPerson) {
+      const one = tasks.length === 1
+      // The tag lets a later reminder of the same kind replace this one on the
+      // phone rather than stack under it. Same channel and sound as the rest.
+      notify(tasks[0].org_id, userId, 'task_due_soon', summary(tasks, when), one ? tasks[0].id : null, null,
+        { title: one ? 'Task due soon' : `${tasks.length} tasks due soon`, tag: `due_${kind}` })
     }
   }
   // The evening before: tasks due tomorrow.
   if (z.hour >= h) {
     const tomorrow = addDays(z.date, 1)
-    send(due(tomorrow).all(tomorrow, 'day'), 'day', (t) => `Due tomorrow: "${t.title}"`)
+    send(due(tomorrow).all(tomorrow, 'day'), 'day', 'tomorrow')
   }
   // An hour before: tasks due today, between deadline−1 and the deadline.
   if (h >= 1 && z.hour === h - 1) {
-    send(due(z.date).all(z.date, 'hour'), 'hour', (t) => `Due in about an hour: "${t.title}"`)
+    send(due(z.date).all(z.date, 'hour'), 'hour', 'in about an hour')
   }
 }
