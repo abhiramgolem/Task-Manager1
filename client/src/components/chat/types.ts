@@ -45,6 +45,8 @@ export interface Msg {
   kind?: 'system' | 'poll' | 'task' | 'location' | 'contact' | 'update' | null
   edited_at?: string | null; forwarded?: boolean; reply_to?: string | null; reply?: ReplyPreview | null; file?: ChatFile | null
   reactions: Reaction[]; mentions?: MentionRef[]; starred: boolean; seen: boolean; delivered?: boolean; deleted?: boolean; uploading?: boolean; progress?: number
+  // Local only: a message of mine the server has not saved (lib/outbox.ts).
+  failed?: boolean; failReason?: string | null; client_id?: string
   pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null; meeting?: MeetingCard | null
   system?: string | null; poll?: Poll | null; task?: TaskRef | null; location?: LocationRef | null; contact?: ContactRef | null
   update?: UpdateMeta | null

@@ -368,6 +368,8 @@ export function shapeMessage(row, viewerId, ctx = {}) {
     reply_to: row.reply_to || null,
     reply: replyPreview,
     file: row.file_stored ? { name: row.file_name, type: row.file_type, size: row.file_size } : null,
+    // Only the sender sees it: how their phone matches its "sending" bubble to the saved message.
+    ...(row.client_id && row.sender_id === viewerId ? { client_id: row.client_id } : {}),
     reactions,
     mentions: ctx.mentions ? (ctx.mentions[row.id] || []) : (mentionsByMessage([row.id])[row.id] || []),
     starred: ctx.stars ? ctx.stars.has(row.id) : false,
@@ -1161,11 +1163,22 @@ function resolveReply(rawId, conv, userId) {
 // Send a message: text, or one of the kinds that need no file — a shared
 // location ({kind:'location', meta:{lat,lng,label?,accuracy?}}) or a
 // teammate's contact card ({kind:'contact', meta:{user_id}}).
+// A send retried after its answer was lost: the phone sends the same client_id
+// again, and gets the message that was already saved instead of a second copy.
+// Without this, a flaky network turned one tap into two identical messages.
+const clientIdOf = (v) => (typeof v === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(v) ? v : null)
+const alreadySent = (senderId, clientId, convId) => clientId
+  ? db.prepare('SELECT * FROM chat_messages WHERE sender_id=? AND client_id=? AND conversation_id=?').get(senderId, clientId, convId)
+  : null
+
 r.post('/conversations/:id/messages', (req, res) => {
   const me = req.user
   if (!member(req.params.id, me.id)) return res.status(404).json({ error: 'Conversation not found' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
   if (!canPost(conv, me.id)) return res.status(403).json({ error: ADMINS_ONLY })
+  const clientId = clientIdOf(req.body?.client_id)
+  const dup = alreadySent(me.id, clientId, conv.id)
+  if (dup) return res.status(200).json(shapeMessage(dup, me.id, receiptCtx(conv.id, me.id)))
   const kind = req.body?.kind === 'location' || req.body?.kind === 'contact' ? req.body.kind : null
   let body = String(req.body?.body || '').trim()
   let meta = null
@@ -1186,8 +1199,8 @@ r.post('/conversations/:id/messages', (req, res) => {
   const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
   const mid = id('msg')
   const ts = now()
-  db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, reply_to, kind, meta, read, created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?)')
-    .run(mid, conv.org_id, conv.id, me.id, '', body, replyTo, kind, meta ? JSON.stringify(meta) : null, ts)
+  db.prepare('INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, reply_to, kind, meta, read, created_at, client_id) VALUES (?,?,?,?,?,?,?,?,?,0,?,?)')
+    .run(mid, conv.org_id, conv.id, me.id, '', body, replyTo, kind, meta ? JSON.stringify(meta) : null, ts, clientId)
   const mentioned = kind ? [] : saveMentions(conv.id, mid, req.body?.mentions, me.id, body)
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
   deliver(conv, row, me, mentioned)
@@ -1212,15 +1225,19 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file required (field "file")' })
   const conv = db.prepare('SELECT * FROM chat_conversations WHERE id=?').get(req.params.id)
   if (!canPost(conv, me.id)) { cleanup(); return res.status(403).json({ error: ADMINS_ONLY }) }
+  // The same file sent again after its answer was lost: keep the first one.
+  const clientId = clientIdOf(req.body?.client_id)
+  const dup = alreadySent(me.id, clientId, conv.id)
+  if (dup) { cleanup(); return res.status(200).json(shapeMessage(dup, me.id, receiptCtx(conv.id, me.id))) }
   // A form sends its text with CRLF line breaks; stored as the JSON route
   // stores a message, with LF, or a multi-line caption reads differently.
   const caption = String(req.body?.body || '').replace(/\r\n?/g, '\n').trim().slice(0, 4000)
   const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
   const mid = id('msg')
   const ts = now()
-  db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?)`)
-    .run(mid, conv.org_id, conv.id, me.id, '', caption, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, replyTo, ts)
+  db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at, client_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?)`)
+    .run(mid, conv.org_id, conv.id, me.id, '', caption, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, replyTo, ts, clientId)
   // A voice note whose sender's browser already recognised the speech arrives
   // with the text attached, so nobody has to pay for a transcription that has
   // effectively already happened. Trusted no further than any other client

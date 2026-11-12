@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom'
-import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl } from '../api'
+import { api, getToken, userAvatarUrl, groupAvatarUrl, API_BASE, wsUrl, ApiError, OFFLINE_MSG, RESTARTING_MSG } from '../api'
+import { loadOutbox, outboxFor, outboxItems, outboxGet, outboxPut, outboxRemove, newClientId, OUTBOX_FILE_MAX, cacheGet, cacheSet, type OutItem } from '../lib/outbox'
 import { useAuth } from '../auth'
 import { Avatar, EmptyState, Ic } from '../ui'
 import { pushBackHandler } from '../back'
@@ -398,6 +399,18 @@ export default function Chats() {
   const [convos, setConvos] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState(navChat)
   const [messages, setMessages] = useState<Msg[]>([])
+  const messagesRef = useRef<Msg[]>([])
+  messagesRef.current = messages
+  // The list could not be fetched (offline, server restarting) — said as such.
+  const [listError, setListError] = useState(false)
+  // The live connection is down: a "Connecting…" strip, as WhatsApp shows.
+  const [wsDown, setWsDown] = useState(false)
+  const [showConnecting, setShowConnecting] = useState(false)
+  useEffect(() => {
+    if (!wsDown) { setShowConnecting(false); return }
+    const t = setTimeout(() => setShowConnecting(true), 2500) // a blip is not worth a banner
+    return () => clearTimeout(t)
+  }, [wsDown])
   const [input, setInput] = useState('')
   const [search, setSearch] = useState('')       // sidebar people search
   const [inSearch, setInSearch] = useState('')   // in-conversation message search
@@ -743,19 +756,126 @@ export default function Chats() {
   }, [navChat, navInfo])
 
   const pingNav = () => window.dispatchEvent(new Event('chat-unread-changed'))
-  const loadConvos = () => api.get('/chat/conversations').then((d) => { setConvos(d.conversations); pingNav() }).catch(() => {})
+  // The list, also kept on the device (lib/outbox.ts cache) so the screen opens
+  // with the chats on it when the network is down. A failure is remembered so
+  // the screen can say "can't reach VoTask" instead of "No chats yet".
+  const loadConvos = () => api.get('/chat/conversations').then((d) => {
+    setConvos(d.conversations); setListError(false); pingNav()
+    if (user) cacheSet('convos:' + user.id, d.conversations)
+  }).catch(() => { setListError(true) })
+  // Socket events come in bursts (a busy group, a reconnect catching up); each
+  // used to refetch the whole list. One refetch per burst says the same thing.
+  const convosTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadConvosSoon = () => {
+    if (convosTimer.current) return
+    convosTimer.current = setTimeout(() => { convosTimer.current = null; loadConvos() }, 600)
+  }
 
   // An upload's "Sending…" line becomes the message the server returned —
   // unless the socket delivered that message first and it is already shown.
   const settleTmp = (prev: Msg[], tmpId: string, m: Msg) =>
     prev.some((x) => x.id === m.id) ? prev.filter((x) => x.id !== tmpId) : prev.map((x) => (x.id === tmpId ? m : x))
 
-  const mergeIncoming = (m: Msg) => setMessages((prev) => {
-    if (prev.some((x) => x.id === m.id)) return prev
-    const ti = prev.findIndex((x) => x.id.startsWith('tmp_') && x.sender_id === m.sender_id && x.body === m.body && !!x.file === !!m.file)
-    if (ti >= 0) { const c = prev.slice(); c[ti] = m; return c }
-    return [...prev, m]
+  const mergeIncoming = (m: Msg) => {
+    // The server has it: it is no longer waiting on this device.
+    if (m.client_id) outboxRemove(m.client_id)
+    setMessages((prev) => {
+      if (prev.some((x) => x.id === m.id)) return prev.filter((x) => !(m.client_id && x.id === 'tmp_' + m.client_id))
+      // My own "sending" bubble for it: matched by its client id, exactly.
+      let ti = m.client_id ? prev.findIndex((x) => x.id === 'tmp_' + m.client_id) : -1
+      if (ti < 0) ti = prev.findIndex((x) => x.id.startsWith('tmp_') && !x.client_id && x.sender_id === m.sender_id && x.body === m.body && !!x.file === !!m.file)
+      if (ti >= 0) { const c = prev.slice(); c[ti] = m; return c }
+      return [...prev, m]
+    })
+  }
+
+  // ---- the outbox: messages the server has not confirmed yet --------------
+  // Every send is written to lib/outbox.ts first and removed when the server
+  // answers. A send that fails stays on screen as "Not sent" with Retry, and is
+  // sent again by itself when the connection comes back — never put back in
+  // the box (where it used to land in whichever chat was open by then), never
+  // thrown away. Retrying reuses the message's client id, so the server returns
+  // the copy it already has instead of posting a second one.
+  const sendingRef = useRef(new Set<string>())
+  const sendChain = useRef<Promise<unknown>>(Promise.resolve())
+  const uploadAborts = useRef(new Map<string, () => void>())
+  const outBubble = (it: OutItem): Msg => ({
+    id: 'tmp_' + it.clientId, client_id: it.clientId, conversation_id: it.convId, sender_id: it.userId, body: it.body,
+    created_at: it.createdAt, reactions: [], starred: false, seen: false, reply: it.reply || null, reply_to: it.replyTo || null,
+    transcript: it.transcript || null,
+    file: it.fileName ? { name: it.fileName, type: it.fileType || '', size: it.fileSize || 0 } : null,
+    uploading: sendingRef.current.has(it.clientId) && it.kind === 'file',
+    failed: !sendingRef.current.has(it.clientId), failReason: it.error || null,
   })
+  const setBubble = (clientId: string, patch: Partial<Msg>) =>
+    setMessages((prev) => prev.map((x) => (x.id === 'tmp_' + clientId ? { ...x, ...patch } : x)))
+
+  // Send one outbox item. Resolves true when the server has it.
+  const postOut = async (it: OutItem): Promise<boolean> => {
+    if (!outboxGet(it.clientId)) return true      // already sent (a retry raced the first try)
+    if (sendingRef.current.has(it.clientId)) return false
+    sendingRef.current.add(it.clientId)
+    setBubble(it.clientId, { failed: false, failReason: null, uploading: it.kind === 'file' })
+    try {
+      let saved: Msg
+      if (it.kind === 'text') {
+        saved = await api.post(`/chat/conversations/${it.convId}/messages`,
+          { body: it.body, replyTo: it.replyTo || undefined, mentions: it.mentions || [], client_id: it.clientId }, { timeoutMs: 20_000 })
+      } else {
+        const file = it.file instanceof File ? it.file : new File([it.file as Blob], it.fileName || 'file', { type: it.fileType || 'application/octet-stream' })
+        let shown = -1
+        saved = await sendWhole(it.convId, file, {
+          caption: it.body, replyTo: it.replyTo || null, mentions: it.mentions || [], clientId: it.clientId, transcript: it.transcript || null,
+          progress: (pct) => { if (pct !== shown) { shown = pct; setBubble(it.clientId, { progress: pct }) } },
+        })
+      }
+      outboxRemove(it.clientId)
+      if (it.convId === activeIdRef.current) setMessages((prev) => settleTmp(prev, 'tmp_' + it.clientId, saved))
+      loadConvosSoon()
+      return true
+    } catch (e: any) {
+      if (e?.cancelled) { outboxRemove(it.clientId); setMessages((prev) => prev.filter((x) => x.id !== 'tmp_' + it.clientId)); return false }
+      // The server said no for good (removed from the group, file too big):
+      // not retried by itself, and the bubble says why. Anything else — no
+      // network, a restart, a timeout — waits and goes again on reconnect.
+      const permanent = e instanceof ApiError && !e.offline && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429
+      if (outboxGet(it.clientId)) outboxPut({ ...it, error: permanent ? e.message : null })
+      setBubble(it.clientId, { failed: true, uploading: false, progress: undefined, failReason: permanent ? e.message : null })
+      return false
+    } finally {
+      sendingRef.current.delete(it.clientId)
+    }
+  }
+  // In order, one after another: a chat reads in the order it was typed.
+  const queueOut = (it: OutItem) => { sendChain.current = sendChain.current.then(() => postOut(it)).catch(() => {}) }
+  // Everything still waiting on this device, oldest first (all chats, not just
+  // the open one). Called when the socket connects, the network comes back and
+  // the app returns to the foreground.
+  const flushOutbox = () => {
+    if (!user) return
+    for (const it of outboxItems(user.id).filter((i) => !i.error).sort((a, b) => a.createdAt.localeCompare(b.createdAt))) queueOut(it)
+  }
+  const flushRef = useRef(flushOutbox)
+  flushRef.current = flushOutbox
+  const retryOne = (clientId?: string) => {
+    const it = clientId ? outboxGet(clientId) : null
+    if (it) queueOut({ ...it, error: null })
+  }
+  const discardOne = async (clientId?: string) => {
+    if (!clientId) return
+    if (!(await confirmDialog({ title: 'Delete this unsent message?', message: 'It has not been sent, so nobody else has it.', confirmText: 'Delete', danger: true }))) return
+    uploadAborts.current.get(clientId)?.()
+    outboxRemove(clientId)
+    setMessages((prev) => prev.filter((x) => x.id !== 'tmp_' + clientId))
+  }
+  useEffect(() => {
+    if (!user) return
+    // What was still waiting when the app was last closed goes now.
+    loadOutbox().then(() => flushRef.current())
+    const onOnline = () => flushRef.current()
+    window.addEventListener('online', onOnline)
+    return () => window.removeEventListener('online', onOnline)
+  }, [user?.id])
 
   useEffect(() => { api.get('/chat/status').then(setMyStatus).catch(() => {}) }, [])
   const loadWorkload = () => api.get('/chat/workload').then((d) => setWorkload(d.byUser || {})).catch(() => {})
@@ -772,8 +892,26 @@ export default function Chats() {
     // The answer to a chat we have since left must not overwrite the one now open.
     if (cid !== activeIdRef.current) return
     if (linkedRef.current === cid) linkedRef.current = null
-    setMessages(d.messages)
-    setHasMore(!!d.has_more)
+    // Merged into what is on screen, not swapped for it. This runs again every
+    // time the app comes back to the foreground — which on Android includes
+    // returning from the photo picker — and swapping wiped the "Sending… 40%"
+    // bubble of the upload still under way, and the older pages already read.
+    const fresh = d.messages as Msg[]
+    const freshIds = new Set(fresh.map((x) => x.id))
+    const freshClient = new Set(fresh.map((x) => x.client_id).filter(Boolean) as string[])
+    freshClient.forEach((c) => outboxRemove(c))
+    const oldest = fresh[0]?.created_at
+    const cur = messagesRef.current.filter((x) => x.conversation_id === cid)
+    const older = oldest ? cur.filter((x) => !x.id.startsWith('tmp_') && !freshIds.has(x.id) && x.created_at < oldest) : []
+    setMessages((prev) => {
+      const local = prev.filter((x) => x.id.startsWith('tmp_') && x.conversation_id === cid && !freshClient.has(x.client_id || ''))
+      const onScreen = new Set(local.map((x) => x.id))
+      const waiting = user ? outboxFor(user.id, cid).filter((it) => !onScreen.has('tmp_' + it.clientId) && !freshClient.has(it.clientId)).map(outBubble) : []
+      return [...older, ...fresh, ...[...local, ...waiting].sort((a, b) => a.created_at.localeCompare(b.created_at))]
+    })
+    // Older pages kept on screen keep their own "load more" answer.
+    if (!older.length) setHasMore(!!d.has_more)
+    if (user) cacheSet(`thread:${user.id}:${cid}`, fresh.slice(-60))
     setThreadLastRead(d.last_read_at || null)
     if (d.conversation.type === 'direct' && d.conversation.other_user_id && d.conversation.other_last_seen) {
       setLastSeen((s) => ({ ...s, [d.conversation.other_user_id]: d.conversation.other_last_seen }))
@@ -871,6 +1009,11 @@ export default function Chats() {
 
   useEffect(() => {
     let cancel = false
+    // The list as it was last time, straight away; the real one replaces it.
+    if (user) cacheGet<Conversation[]>('convos:' + user.id).then((c) => {
+      if (cancel || !Array.isArray(c) || !c.length) return
+      setConvos((cur) => (cur.length ? cur : c)); setLoading(false)
+    })
     loadConvos().then(() => { if (!cancel) setLoading(false) })
     api.get('/chat/presence').then((d) => { if (!cancel) setOnline(new Set(d.online)) }).catch(() => {})
     return () => { cancel = true }
@@ -941,6 +1084,21 @@ export default function Chats() {
     // The thread of the chat being left does not linger behind the list.
     setMessages([])
     if (activeId) {
+      // The newest page as last seen, at once — and anything still waiting to
+      // be sent here — while the real page loads (or when there is no network).
+      const opening = activeId
+      if (user) {
+        cacheGet<Msg[]>(`thread:${user.id}:${opening}`).then((c) => {
+          if (opening !== activeIdRef.current) return
+          setMessages((cur) => {
+            if (cur.some((x) => !x.id.startsWith('tmp_'))) return cur
+            const local = cur.filter((x) => x.id.startsWith('tmp_'))
+            const shown = new Set(local.map((x) => x.id))
+            const waiting = outboxFor(user.id, opening).filter((it) => !shown.has('tmp_' + it.clientId)).map(outBubble)
+            return [...(Array.isArray(c) ? c : []), ...[...local, ...waiting].sort((a, b) => a.created_at.localeCompare(b.created_at))]
+          })
+        })
+      }
       setThreadLoading(true)
       loadThread(activeId).finally(() => setThreadLoading(false)); loadPins(activeId); setEditing(null); setInSearch(''); setInSearchOpen(false); setPinsOpen(false)
       // "Reply privately" opened this chat to answer a message from a group.
@@ -1211,12 +1369,42 @@ export default function Chats() {
     if (!user) return
     let retry: ReturnType<typeof setTimeout> | null = null
     let closed = false
+    // Reconnecting: quickly at first, then backing off (with jitter, so after a
+    // deploy the whole company doesn't knock at the same second). A fixed 3 s
+    // retry hammered a server that was still starting.
+    let attempt = 0
+    let everConnected = false
+    let pingTimer: ReturnType<typeof setInterval> | null = null
+    let pongTimer: ReturnType<typeof setTimeout> | null = null
+    const stopBeat = () => { if (pingTimer) clearInterval(pingTimer); if (pongTimer) clearTimeout(pongTimer); pingTimer = pongTimer = null }
     const connect = () => {
       const ws = new WebSocket(wsUrl(`/api/chat/ws?token=${getToken()}`))
       wsRef.current = ws
+      ws.onopen = () => {
+        attempt = 0
+        setWsDown(false)
+        // A phone that changes networks can leave a socket that looks open but
+        // carries nothing, and nothing ever told us — messages simply stopped.
+        // Ask every 25 s; no answer in 10 s means it is dead, so reconnect.
+        stopBeat()
+        pingTimer = setInterval(() => {
+          try { ws.send('{"type":"ping"}') } catch {}
+          if (pongTimer) clearTimeout(pongTimer)
+          pongTimer = setTimeout(() => { try { ws.close() } catch {} }, 10_000)
+        }, 25_000)
+      }
       ws.onmessage = (ev) => {
         let d: any
         try { d = JSON.parse(ev.data) } catch { return }
+        if (d.type === 'pong') { if (pongTimer) { clearTimeout(pongTimer); pongTimer = null } return }
+        if (d.type === 'ready') {
+          // Back after a gap: whatever arrived meanwhile was never pushed to us,
+          // so catch up — the list, and the open chat (merged, nothing lost).
+          if (everConnected) { loadConvos(); if (activeIdRef.current) loadThread(activeIdRef.current) }
+          everConnected = true
+          flushRef.current()
+          return
+        }
         const inActive = d.conversationId === activeIdRef.current
         if (d.type === 'message' && d.message) {
           if (inActive) {
@@ -1230,10 +1418,10 @@ export default function Chats() {
           }
           // A message ends that person's "typing…" in the list.
           setTypingIn((t) => { if (!t[d.conversationId]) return t; const n = { ...t }; delete n[d.conversationId]; return n })
-          loadConvos()
+          loadConvosSoon()
         } else if (d.type === 'edit') {
           if (inActive) setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, body: d.body, edited_at: d.edited_at, mentions: d.mentions || m.mentions, update: d.update || m.update } : m)))
-          loadConvos()
+          loadConvosSoon()
         } else if (d.type === 'receipts') {
           // Where everyone else has got to: my messages up to there turn grey
           // (delivered) or blue (read).
@@ -1258,7 +1446,7 @@ export default function Chats() {
             if (d.scope === 'all') setMessages((p) => p.map((m) => (m.id === d.id ? { ...m, deleted: true, body: '', file: null, reactions: [] } : m)))
             else setMessages((p) => p.filter((m) => m.id !== d.id))
           }
-          loadConvos()
+          loadConvosSoon()
         } else if (d.type === 'read') {
           // Superseded by 'receipts', which knows whether EVERYONE has read it —
           // one reader in a group used to turn the ticks blue for all.
@@ -1281,10 +1469,10 @@ export default function Chats() {
           if (d.isTyping) listTypingTimers.current[cid] = setTimeout(() => setTypingIn((t) => { const n = { ...t }; delete n[cid]; return n }), d.mode === 'recording' ? 8000 : 4500)
         } else if (d.type === 'conversation') {
           if (d.action === 'removed' && d.conversationId === activeIdRef.current) { setActiveId(''); setMessages([]) }
-          loadConvos()
+          loadConvosSoon()
         } else if (d.type === 'cleared') {
           if (d.conversationId === activeIdRef.current) setMessages([])
-          loadConvos()
+          loadConvosSoon()
         } else if (d.type === 'presence') {
           setOnline((s) => { const n = new Set(s); d.online ? n.add(d.userId) : n.delete(d.userId); return n })
           if (!d.online && d.last_seen) setLastSeen((s) => ({ ...s, [d.userId]: d.last_seen }))
@@ -1308,11 +1496,35 @@ export default function Chats() {
           toast.info(`Reminder: ${String(d.preview || '').slice(0, 60)}`)
         }
       }
-      ws.onclose = () => { if (!closed) retry = setTimeout(connect, 3000) }
+      ws.onclose = (ev) => {
+        stopBeat()
+        if (closed || wsRef.current !== ws) return
+        setWsDown(true)
+        // 4401: the token was refused; asking again every second won't change that.
+        const base = ev.code === 4401 ? 60_000 : Math.min(30_000, 1000 * 2 ** attempt)
+        attempt++
+        retry = setTimeout(connect, base / 2 + Math.random() * (base / 2))
+      }
       ws.onerror = () => { try { ws.close() } catch {} }
     }
+    // The network came back, or the app came back to the front: don't wait out
+    // the backoff — try now.
+    const kick = () => {
+      if (closed || document.hidden) return
+      const ws = wsRef.current
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
+      if (retry) clearTimeout(retry)
+      attempt = 0
+      connect()
+    }
+    window.addEventListener('online', kick)
+    document.addEventListener('visibilitychange', kick)
     connect()
-    return () => { closed = true; if (retry) clearTimeout(retry); try { wsRef.current?.close() } catch {} }
+    return () => {
+      closed = true; stopBeat(); if (retry) clearTimeout(retry)
+      window.removeEventListener('online', kick); document.removeEventListener('visibilitychange', kick)
+      try { wsRef.current?.close() } catch {}
+    }
   }, [user?.id])
 
   // Fallback refresh ONLY: the WebSocket above already pushes every change, so
@@ -1329,6 +1541,7 @@ export default function Chats() {
     const onVisible = () => {
       if (document.hidden) return
       loadConvos(); if (activeIdRef.current) loadThread(activeIdRef.current)
+      flushRef.current()
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVisible) }
@@ -1420,8 +1633,9 @@ export default function Chats() {
   // sent rather than when its turn in the upload queue comes, so the thread
   // reads in the order things were sent.
   const addPending = (conv: Conversation, file: File, caption: string) => {
-    const tmpId = 'tmp_' + Date.now() + Math.random().toString(36).slice(2, 6)
-    setMessages((m) => [...m, { id: tmpId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }])
+    const clientId = newClientId()
+    const tmpId = 'tmp_' + clientId
+    setMessages((m) => [...m, { id: tmpId, client_id: clientId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }])
     return tmpId
   }
 
@@ -1430,24 +1644,40 @@ export default function Chats() {
   // asks first whether the server has room for it: a refusal sent mid-upload
   // never reaches us (the browser reads no answer until it has sent
   // everything) and would surface as a dropped connection.
-  const sendWhole = async (conv: Conversation, file: File, caption: string, rep: Msg | null, capMentions: string[], progress: (pct: number) => void) => {
+  //
+  // A stalled upload (no progress for 45 s — the connection died without
+  // saying so) is given up, so it shows "Not sent" with Retry instead of
+  // "Sending… 40%" forever. The ✕ on the bubble cancels it.
+  const sendWhole = async (convId: string, file: File, o: { caption?: string; replyTo?: string | null; mentions?: string[]; clientId?: string; transcript?: string | null; progress: (pct: number) => void }) => {
     if (file.size > 10 * 1024 * 1024) await api.get(`/chat/upload-room?size=${file.size}`)
-    const form = new FormData(); form.append('file', file)
-    if (caption) form.append('body', caption)
-    if (rep) form.append('replyTo', rep.id)
-    if (capMentions.length) form.append('mentions', JSON.stringify(capMentions))
+    const form = new FormData()
+    // The id before the file, so it is read even if the file is cut short.
+    if (o.clientId) form.append('client_id', o.clientId)
+    if (o.caption) form.append('body', o.caption)
+    if (o.replyTo) form.append('replyTo', o.replyTo)
+    if (o.mentions?.length) form.append('mentions', JSON.stringify(o.mentions))
+    if (o.transcript) form.append('transcript', o.transcript)
+    form.append('file', file)
     return new Promise<Msg>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${API_BASE}/api/chat/conversations/${conv.id}/upload`)
+      xhr.open('POST', `${API_BASE}/api/chat/conversations/${convId}/upload`)
       const t = getToken(); if (t) xhr.setRequestHeader('authorization', `Bearer ${t}`)
-      xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress(Math.floor((e.loaded / e.total) * 100)) }
+      let last = Date.now()
+      const stall = setInterval(() => { if (Date.now() - last > 45_000) xhr.abort() }, 5000)
+      let cancelled = false
+      if (o.clientId) uploadAborts.current.set(o.clientId, () => { cancelled = true; xhr.abort() })
+      const done = () => { clearInterval(stall); if (o.clientId) uploadAborts.current.delete(o.clientId) }
+      xhr.upload.onprogress = (e) => { last = Date.now(); if (e.lengthComputable) o.progress(Math.floor((e.loaded / e.total) * 100)) }
       xhr.onload = () => {
+        done()
         let body: any = null
         try { body = JSON.parse(xhr.responseText) } catch {}
         if (xhr.status >= 200 && xhr.status < 300 && body) resolve(body)
-        else reject(new Error(body?.error || `Upload failed (${xhr.status})`))
+        else if (!body || xhr.status >= 502) reject(new ApiError(body?.error || RESTARTING_MSG, xhr.status, true))
+        else reject(new ApiError(body?.error || `Upload failed (${xhr.status})`, xhr.status))
       }
-      xhr.onerror = () => reject(new Error('the connection was lost'))
+      xhr.onerror = () => { done(); reject(new ApiError(OFFLINE_MSG, 0, true)) }
+      xhr.onabort = () => { done(); reject(Object.assign(new ApiError(cancelled ? 'Cancelled' : 'The upload stalled', 0, true), { cancelled })) }
       xhr.send(form)
     })
   }
@@ -1457,6 +1687,20 @@ export default function Chats() {
   // never moves reads as stuck. A big file goes up in chunks
   // (lib/chunkedUpload), which rides out the connection dropping.
   const uploadOne = async (conv: Conversation, tmpId: string, file: File, caption: string, rep: Msg | null, capMentions: string[]) => {
+    const clientId = tmpId.slice(4)
+    // A file small enough to keep on the device goes through the outbox: if it
+    // can't be sent now it stays in the chat as "Not sent" and goes by itself
+    // later — it no longer has to be picked again.
+    if (file.size <= OUTBOX_FILE_MAX) {
+      const reply = rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? rep.file.name : rep.body, image: !!rep.file && (rep.file.type || '').startsWith('image/'), conversation_id: rep.conversation_id } : null
+      const it: OutItem = {
+        clientId, userId: user!.id, convId: conv.id, kind: 'file', body: caption, replyTo: rep?.id || null, reply, mentions: capMentions,
+        file, fileName: file.name, fileType: file.type, fileSize: file.size, createdAt: new Date().toISOString(),
+      }
+      outboxPut(it)
+      await postOut(it)
+      return true
+    }
     let shown = -1
     const progress = (pct: number) => {
       if (pct === shown) return
@@ -1466,12 +1710,13 @@ export default function Chats() {
     try {
       const uploadId = file.size > CHUNKED_FROM ? await sendInChunks(file, 'chat', progress) : null
       const data: Msg = uploadId
-        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions })
-        : await sendWhole(conv, file, caption, rep, capMentions, progress)
+        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions, client_id: clientId })
+        : await sendWhole(conv.id, file, { caption, replyTo: rep?.id || null, mentions: capMentions, clientId, progress })
       setMessages((prev) => settleTmp(prev, tmpId, data))
       return true
     } catch (err: any) {
-      setMessages((m) => m.filter((x) => x.id !== tmpId)); toast.error(`Could not send ${file.name}: ${err.message}`)
+      setMessages((m) => m.filter((x) => x.id !== tmpId))
+      if (!err?.cancelled) toast.error(`Could not send ${file.name}: ${err.message}`)
       return false
     }
   }
@@ -1488,7 +1733,7 @@ export default function Chats() {
   // back into the tray to try again, with its caption.
   const sendStaged = () => {
     const conv = active
-    if (!conv || busy) return
+    if (!conv) return
     const items = stagedRef.current.map((s) => ({ ...s, caption: stagedCaption(s).trim() }))
     const rep = replyTo
     const mentionsOf = (caption: string) => (caption ? resolveMentions(caption, picked, conv.members, user!.id) : [])
@@ -1534,24 +1779,25 @@ export default function Chats() {
 
   const send = async () => {
     const body = input.trim()
-    if (busy || !active) return
-    if (editing) return saveEdit()
+    if (!active) return
+    if (editing) { if (!busy) saveEdit(); return }
     if (stagedRef.current.length) return sendStaged()
     if (!body) return
     // A slash command is an instruction to the app, not a message to the room.
     if (body.startsWith('/') && await runSlash(body)) { setSlashQ(null); return }
     const mentions = resolveMentions(body, picked, active.members, user!.id)
     const mentionRefs = picked.filter((p) => mentions.includes(p.id))
-    setInput(''); setBusy(true); sendTyping(false); setPicked([]); setMentionQ(null)
+    // Sending never locks the box: the next message can be typed and sent at
+    // once, and each goes in order behind the last (queueOut).
+    setInput(''); sendTyping(false); setPicked([]); setMentionQ(null)
     const rep = replyTo
-    const optimistic: Msg = { id: 'tmp_' + Date.now(), conversation_id: active.id, sender_id: user!.id, body, created_at: new Date().toISOString(), reactions: [], mentions: mentionRefs, starred: false, seen: false, reply: rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? rep.file.name : rep.body, image: !!rep.file && (rep.file.type || '').startsWith('image/'), conversation_id: rep.conversation_id } : null, reply_to: rep?.id || null }
+    const clientId = newClientId()
+    const reply = rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? rep.file.name : rep.body, image: !!rep.file && (rep.file.type || '').startsWith('image/'), conversation_id: rep.conversation_id } : null
+    const it: OutItem = { clientId, userId: user!.id, convId: active.id, kind: 'text', body, replyTo: rep?.id || null, reply, mentions, createdAt: new Date().toISOString() }
+    outboxPut(it)
+    const optimistic: Msg = { id: 'tmp_' + clientId, client_id: clientId, conversation_id: active.id, sender_id: user!.id, body, created_at: it.createdAt, reactions: [], mentions: mentionRefs, starred: false, seen: false, reply, reply_to: rep?.id || null }
     setMessages((m) => [...m, optimistic]); setReplyTo(null)
-    try {
-      const saved = await api.post(`/chat/conversations/${active.id}/messages`, { body, replyTo: rep?.id, mentions })
-      mergeIncoming(saved); loadConvos()
-    } catch (e: any) {
-      setMessages((m) => m.filter((x) => x.id !== optimistic.id)); setInput(body); toast.error('Could not send: ' + e.message)
-    } finally { setBusy(false) }
+    queueOut(it)
   }
 
   // ---- voice notes --------------------------------------------------------
@@ -1671,27 +1917,21 @@ export default function Chats() {
     },
   }
 
+  // Through the outbox like a text: a voice note that can't go now stays in
+  // the chat as "Not sent" and goes by itself later. It used to be thrown away
+  // on the first failure — a minute of talking, gone.
   const sendVoiceNote = async (blob: Blob, spoken = '') => {
     if (!active) return
-    setBusy(true)
-    const tmpId = 'tmp_' + Date.now()
+    const clientId = newClientId()
     const name = audioFilename(blob, 'voice-note')
-    setMessages((m) => [...m, { id: tmpId, conversation_id: active.id, sender_id: user!.id, body: '', created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, transcript: spoken || null, file: { name, type: blob.type, size: blob.size }, uploading: true }])
-    try {
-      const form = new FormData()
-      form.append('file', new File([blob], name, { type: blob.type || 'audio/webm' }))
-      if (spoken) form.append('transcript', spoken)
-      const headers: Record<string, string> = {}
-      const t = getToken(); if (t) headers.authorization = `Bearer ${t}`
-      const res = await fetch(`${API_BASE}/api/chat/conversations/${active.id}/upload`, { method: 'POST', headers, body: form })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data?.error || 'Upload failed')
-      setMessages((prev) => settleTmp(prev, tmpId, data))
-      loadConvos()
-    } catch (e: any) {
-      setMessages((m) => m.filter((x) => x.id !== tmpId))
-      toast.error('Could not send the voice note: ' + e.message)
-    } finally { setBusy(false) }
+    const type = blob.type || 'audio/webm'
+    const it: OutItem = {
+      clientId, userId: user!.id, convId: active.id, kind: 'file', body: '', transcript: spoken || null,
+      file: blob, fileName: name, fileType: type, fileSize: blob.size, createdAt: new Date().toISOString(),
+    }
+    outboxPut(it)
+    setMessages((m) => [...m, { id: 'tmp_' + clientId, client_id: clientId, conversation_id: active.id, sender_id: user!.id, body: '', created_at: it.createdAt, reactions: [], starred: false, seen: false, transcript: spoken || null, file: { name, type, size: blob.size }, uploading: true }])
+    queueOut(it)
   }
 
   // Read a voice note out loud into text. Cached server-side, so the second
@@ -2167,7 +2407,11 @@ export default function Chats() {
   }
   const copy = async (m: Msg) => {
     setMenuId(null)
-    const text = m.file ? `${location.origin}${fileUrl(m)}` : m.body
+    // A file's link carries the person's sign-in token in it (it is how the
+    // app shows pictures), so it is never copied: pasted into another chat it
+    // would hand their session to whoever opened it. The caption, or the
+    // file's name, is what gets copied.
+    const text = m.body || m.file?.name || ''
     // Said out loud: from the phone's action bar there is nothing else to show
     // that the tap did anything.
     try { await navigator.clipboard.writeText(text); toast.success('Copied') } catch { window.prompt('Copy:', text) }
@@ -2735,7 +2979,7 @@ export default function Chats() {
     ? `No chats match “${search.trim()}”`
     : showArchived ? 'No archived chats' : LIST_TABS.find((t) => t.id === listTab)!.empty
   // Every photo and video loaded in the thread, oldest first: what the viewer steps through.
-  const mediaMsgs = messages.filter((m) => !m.deleted && !m.uploading && !!m.file && ((m.file.type || '').startsWith('image/') || isVideo(m.file)))
+  const mediaMsgs = messages.filter((m) => !m.deleted && !m.uploading && !m.failed && !!m.file && ((m.file.type || '').startsWith('image/') || isVideo(m.file)))
   // The person a direct chat is with, and what they are holding (for the header chip).
   const peerLoad = active?.type === 'direct' && active.other_user_id ? workload[active.other_user_id] : undefined
   const reactionsMsg = reactionsOf ? messages.find((x) => x.id === reactionsOf) || null : null
@@ -2771,6 +3015,7 @@ export default function Chats() {
 
   return (
     <div className={'assistant-layout chat-layout' + (threadOpen ? ' chat-open' : '')}>
+      {showConnecting && <div className="chat-connecting" role="status"><span className="spinner" /> Connecting…</div>}
       {/* ---- sidebar: conversations ---- */}
       <aside className="chat-history">
         <div className="chat-history-head">
@@ -2843,7 +3088,7 @@ export default function Chats() {
               <span className={'archived-count' + (archivedUnread ? ' on' : '')}>{archivedUnread || archivedConvos.length}</span>
             </button>
           )}
-          {filteredConvos.length === 0 && <div className="empty" style={{ padding: 16, fontSize: 13 }}>{listEmpty}</div>}
+          {filteredConvos.length === 0 && <div className="empty" style={{ padding: 16, fontSize: 13 }}>{listError && !convos.length ? 'Can\u2019t reach VoTask right now. Your chats will appear as soon as the connection is back.' : listEmpty}</div>}
           {filteredConvos.map((c) => {
             const typing = typingIn[c.id]
             const draft = c.id !== activeId ? drafts[c.id] : ''
@@ -3180,7 +3425,7 @@ export default function Chats() {
               <div style={{ margin: 'auto' }}>
                 <EmptyState
                   icon={<Ic name="chat" size={40} />}
-                  title={convos.length ? 'Select a conversation' : 'No conversations yet'}
+                  title={convos.length ? 'Select a conversation' : listError ? 'Can\u2019t reach VoTask' : 'No conversations yet'}
                   hint={convos.length
                     ? 'Choose a chat from the list to read and reply to messages — or start a new one.'
                     : 'Start a new chat with a teammate or create a group to begin messaging.'}
@@ -3203,6 +3448,9 @@ export default function Chats() {
               if (m.kind === 'system') return <div key={m.id} data-msg={m.id} className="sys-line"><span>{m.system}</span></div>
               const mine = m.sender_id === user!.id
               const isTemp = m.id.startsWith('tmp_')
+              // Only on this device so far (sending, or not sent): no server
+              // file to show yet, so a picture or voice note shows as a file row.
+              const local = !!(m.uploading || m.failed)
               const isImage = !!m.file && (m.file.type || '').startsWith('image/')
               const isCard = !!m.kind && !m.deleted
               // A run: the same person again, straight after and within a few
@@ -3246,7 +3494,7 @@ export default function Chats() {
                   {m.starred && <span title="Starred" style={{ display: 'inline-flex' }}><Ic name="star" size={11} /></span>}
                   {m.edited_at && <span className="edited-tag">Edited</span>}
                   <span className="bubble-time">{fmtTime(m.created_at)}</span>
-                  {mine && <Ticks state={tick} />}
+                  {mine && (m.failed ? <span className="msg-fail-ic" title="Not sent"><Ic name="warning" size={12} /></span> : <Ticks state={tick} />)}
                 </>
               )
               return (
@@ -3297,7 +3545,7 @@ export default function Chats() {
                         <div className="bubble deleted row" style={{ gap: 6 }} {...bubbleTouch(m)}><Ic name="block" size={13} /> {mine ? 'You deleted this message' : 'This message was deleted'}<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
                       ) : (
                         <div
-                          className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !m.uploading ? ' pic-bubble' : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
+                          className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !local ? ' pic-bubble' : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
                           {...bubbleTouch(m)}
                         >
                           {/* In the bubble, as WhatsApp writes who said it. */}
@@ -3319,7 +3567,7 @@ export default function Chats() {
                           {m.kind === 'task' && m.task && <TaskCard task={m.task} meId={user!.id} onOpen={() => setOpenTaskId(m.task!.id)} />}
                           {m.kind === 'location' && m.location && <LocationCard loc={m.location} />}
                           {m.kind === 'contact' && <ContactCard contact={m.contact || null} meId={user!.id} onMessage={messageUser} />}
-                          {m.file && isAudio(m.file) && !m.uploading ? (
+                          {m.file && isAudio(m.file) && !local ? (
                             <div className="voice-note">
                               <VoicePlayer src={fileUrl(m)} id={m.id} mine={mine} />
                               {m.transcript && <div className="voice-text">{m.transcript}</div>}
@@ -3336,28 +3584,41 @@ export default function Chats() {
                                 )}
                               </div>
                             </div>
-                          ) : m.file && (isImage && !m.uploading
+                          ) : m.file && (isImage && !local
                             ? <div className="chat-media">
                                 <button type="button" className="chat-image-btn" onClick={(e) => { e.stopPropagation(); setViewerAt(m.id) }} aria-label={`Open photo${m.body ? `: ${m.body}` : ''}`}>
                                   <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy" />
                                 </button>
                                 {mediaDl(m)}
                               </div>
-                            : isVideo(m.file) && !m.uploading
+                            : isVideo(m.file) && !local
                               ? <div className="chat-media">
                                   <ChatVideo id={m.id} src={fileUrl(m)} size={m.file.size} sizeLabel={fmtSize(m.file.size)} name={m.body || m.file.name} onOpen={() => setViewerAt(m.id)} />
                                   {mediaDl(m)}
                                 </div>
                               : <div className="chat-file">
-                                  <span className="chat-file-icon" data-kind={fileKind(m.file?.name)}>{m.uploading ? <Ic name="clock" size={18} /> : fileKind(m.file?.name) ? fileKind(m.file?.name).toUpperCase() : <DocGlyph size={20} />}</span>
-                                  <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
-                                  {!m.uploading && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={() => download(m)}><Ic name="download" size={14} /></button>}
+                                  <span className="chat-file-icon" data-kind={fileKind(m.file?.name)}>{m.failed ? <Ic name="warning" size={18} /> : m.uploading ? <Ic name="clock" size={18} /> : fileKind(m.file?.name) ? fileKind(m.file?.name).toUpperCase() : <DocGlyph size={20} />}</span>
+                                  <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.failed ? 'Not sent' : m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
+                                  {!local && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={() => download(m)}><Ic name="download" size={14} /></button>}
                                 </div>)}
                           {!m.file && !m.kind && !isTemp && /https?:\/\//i.test(body) && <LinkPreview messageId={m.id} version={m.edited_at || ''} />}
                           {shownBody && <MessageText body={shownBody} mentions={m.mentions} meId={user!.id} fromMe={mine} highlight={inSearch} />}
                           {folded && <button type="button" className="read-more" onClick={(e) => { e.stopPropagation(); setUnfolded((s) => new Set(s).add(m.id)) }}>Read more</button>}
                           {!m.file && !isCard && <span className="bubble-foot-spacer" aria-hidden="true">{foot}</span>}
                           <span className="bubble-foot">{foot}</span>
+                        </div>
+                      )}
+                      {mine && isTemp && (m.failed || (m.uploading && m.client_id)) && (
+                        <div className="msg-failed" role={m.failed ? 'alert' : undefined}>
+                          {m.failed ? (
+                            <>
+                              <span className="msg-failed-txt">{m.failReason ? `Not sent: ${m.failReason}` : 'Not sent. It will send when you are back online.'}</span>
+                              <button type="button" onClick={(e) => { e.stopPropagation(); retryOne(m.client_id) }}>Retry</button>
+                              <button type="button" onClick={(e) => { e.stopPropagation(); void discardOne(m.client_id) }}>Delete</button>
+                            </>
+                          ) : uploadAborts.current.has(m.client_id!) ? (
+                            <button type="button" onClick={(e) => { e.stopPropagation(); uploadAborts.current.get(m.client_id!)?.() }}>Cancel</button>
+                          ) : null}
                         </div>
                       )}
                       {rxs.length > 0 && (
