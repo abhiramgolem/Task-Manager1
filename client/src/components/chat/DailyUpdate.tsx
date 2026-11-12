@@ -5,7 +5,8 @@ import { toast } from '../../lib/toast'
 import { confirmDialog } from '../../lib/confirm'
 import { Sheet } from './ChatDialogs'
 import { TrendGlyph } from './glyphs'
-import { TableEditor, parseGrid, gridText, newGrid, cellsOf, type Grid } from './DailyTableEditor'
+import { TableEditor, parseGrid, gridText, newGrid, type Grid } from './DailyTableEditor'
+import { TOKEN, SLOT_G, isAuto, slotsIn, cellsOf, isBoldRow, computeAll } from './dailyMath'
 import type { UpdateMeta, UpdateTemplate } from './types'
 import { fmtTime } from './types'
 
@@ -15,59 +16,10 @@ import { fmtTime } from './types'
 // a number goes, {month} for the month (filled in by the app) and {date} for
 // a date they pick; each day they only type the blanks.
 
-// A value slot is a typed blank (___) or a table total ({sum}, {sum:Row;Row})
-// that the form adds up and the person may type over.
-const SLOT_G = /_{3,}|\{sum(?::[^}\n]*)?\}/g
-const TOKEN = /(_{3,}|\{sum(?::[^}\n]*)?\}|\{month\}|\{date\})/
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const dateLabel = (ymd?: string | null) => (ymd ? `${Number(ymd.slice(8, 10))} ${MON[Number(ymd.slice(5, 7)) - 1]}` : '')
 const dayLabel = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
-const blanksIn = (text: string) => (text.match(SLOT_G) || []).length
-const isSum = (seg: string) => seg.startsWith('{sum')
-
-// ---- tables and totals: same rules as the server's sumsOf (dailyUpdates.js) ----
-// Lines starting with "|" are a table; its first line the header, a row whose
-// first cell is *bold* a total row. {sum} adds the rows above it up to the
-// previous total row; {sum:A;B} the rows named A and B. Same column either way.
-const rowName = (cell: string) => cell.replace(/\*/g, '').trim().toLowerCase()
-const numOf = (s?: string) => { const t = String(s ?? '').replace(/[,₹\s]/g, ''); return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null }
-const decimalsOf = (s?: string) => { const m = /\.(\d+)/.exec(String(s ?? '').replace(/[,₹\s]/g, '')); return m ? m[1].length : 0 }
-const isTotalRow = (cells: string[]) => /^\*.*\*$/.test(cells[0] || '')
-
-export function sumsOf(text: string, values: string[]): string[] {
-  const out = values.slice()
-  type Cell = { text: string; slots: number[]; sum: string | null }
-  const tables: Cell[][][] = []
-  let cur: Cell[][] | null = null
-  let slot = 0
-  for (const line of text.split('\n')) {
-    if (!line.trim().startsWith('|')) { cur = null; slot += (line.match(SLOT_G) || []).length; continue }
-    if (!cur) { cur = []; tables.push(cur) }
-    cur.push(cellsOf(line).map((t) => {
-      const toks = t.match(SLOT_G) || []
-      return { text: t, slots: toks.map(() => slot++), sum: toks.length === 1 && isSum(toks[0]) ? toks[0] : null }
-    }))
-  }
-  const val = (c: Cell) => (c.slots.length ? out[c.slots[0]] : c.text)
-  for (const rows of tables) {
-    rows.forEach((row, r) => row.forEach((c, col) => {
-      if (!c.sum || out[c.slots[0]]) return
-      let from: Cell[][] = []
-      const names = /^\{sum:(.*)\}$/.exec(c.sum)
-      if (names) {
-        const want = names[1].split(';').map(rowName).filter(Boolean)
-        from = rows.filter((x, j) => j > 0 && want.includes(rowName(x[0]?.text || '')))
-      } else {
-        for (let j = r - 1; j >= 1 && !isTotalRow(rows[j].map((x) => x.text)); j--) from.push(rows[j])
-      }
-      const parts = from.map((x) => x[col]).filter(Boolean).map(val)
-      const nums = parts.map(numOf).filter((n): n is number => n != null)
-      if (!nums.length) return
-      out[c.slots[0]] = nums.reduce((a, b) => a + b, 0).toFixed(Math.min(2, Math.max(0, ...parts.map(decimalsOf))))
-    }))
-  }
-  return out
-}
+const blanksIn = (text: string) => slotsIn(text).length
 
 // Plain text with WhatsApp-style *bold*, as the team writes headings.
 function Rich({ text }: { text: string }) {
@@ -84,7 +36,7 @@ function Lines({ text, month, date, blank }: { text: string; month: string; date
     if (seg === '{month}') return <span key={si}>{month}</span>
     if (seg === '{date}') return <span key={si}>{date}</span>
     const i = n++
-    return <React.Fragment key={si}>{blank(i, isSum(seg))}</React.Fragment>
+    return <React.Fragment key={si}>{blank(i, isAuto(seg))}</React.Fragment>
   })
   // Runs of table lines become one table each, in order with the other lines.
   const blocks: { table: boolean; lines: string[] }[] = []
@@ -102,7 +54,7 @@ function Lines({ text, month, date, blank }: { text: string; month: string; date
             <tbody>
               {b.lines.map((line, ri) => {
                 const cells = cellsOf(line)
-                const total = isTotalRow(cells)
+                const total = isBoldRow(cells)
                 return (
                   <tr key={ri} className={ri === 0 ? 'du-th' : total ? 'du-tot' : ''}>
                     {cells.map((c, ci) => (
@@ -159,31 +111,42 @@ const WEEK_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 interface Loaded {
   template: UpdateTemplate | null; last: UpdateMeta | null; last_id: string | null; posted_today: boolean
   day: string; month: string; edit: (UpdateMeta & { id: string }) | null
+  // What month totals ({run:…}) add to: the previous post's cells by "row|column".
+  run_prev?: Record<string, string | number>; run_fresh?: boolean
+  // Whose card this is: a manager may open a teammate's (own = false).
+  owner?: { id: string; name: string }; own?: boolean
 }
 
-// `editId`: open on that posted card to correct it.
-export function UpdateSheet({ convId, editId = null, onClose, onPosted }: { convId: string; editId?: string | null; onClose: () => void; onPosted: () => void }) {
+// `editId`: open on that posted card to correct it. `userId`: a teammate's
+// card, opened by a manager to see it as they do and fix it for them.
+export function UpdateSheet({ convId, editId = null, userId = null, onClose, onPosted }: {
+  convId: string; editId?: string | null; userId?: string | null; onClose: () => void; onPosted: () => void
+}) {
   const [d, setD] = useState<Loaded | null>(null)
   const [setup, setSetup] = useState(false)
   const [fixing, setFixing] = useState<string | null>(editId)
+  const userQ = userId ? `user=${encodeURIComponent(userId)}` : ''
   useEffect(() => {
-    api.get(`/chat/conversations/${convId}/update-template${fixing ? `?edit=${encodeURIComponent(fixing)}` : ''}`)
+    const q = [userQ, fixing ? `edit=${encodeURIComponent(fixing)}` : ''].filter(Boolean).join('&')
+    api.get(`/chat/conversations/${convId}/update-template${q ? `?${q}` : ''}`)
       .then((r: any) => { setD(r); setSetup(!r.template && !r.edit) })
       .catch((e: any) => { toast.error(e.message || 'Could not open your daily metrics'); onClose() })
   }, [convId, fixing])
 
   if (!d) return <Sheet label="Daily metrics" title="Daily metrics" onClose={onClose}><div className="du-loading"><span className="spinner" /></div></Sheet>
   if (setup) {
-    return <SetupForm convId={convId} tpl={d.template} onClose={d.template ? () => setSetup(false) : onClose}
+    return <SetupForm convId={convId} tpl={d.template} userQ={userQ} owner={d.own === false ? d.owner?.name || 'them' : null} onClose={d.template ? () => setSetup(false) : onClose}
       onSaved={(t) => { setD({ ...d, template: t }); setSetup(false) }} onStopped={onClose} />
   }
   return <FillForm key={d.edit?.id || 'new'} convId={convId} data={d} onSetup={() => setSetup(true)}
     onFixLast={() => { setD(null); setFixing(d.last_id) }} onClose={onClose} onPosted={onPosted} />
 }
 
-function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
-  convId: string; tpl: UpdateTemplate | null; onClose: () => void; onSaved: (t: UpdateTemplate) => void; onStopped: () => void
+// `owner`: the teammate's name when a manager is editing their card.
+function SetupForm({ convId, tpl, userQ = '', owner = null, onClose, onSaved, onStopped }: {
+  convId: string; tpl: UpdateTemplate | null; userQ?: string; owner?: string | null; onClose: () => void; onSaved: (t: UpdateTemplate) => void; onStopped: () => void
 }) {
+  const url = `/chat/conversations/${convId}/update-template${userQ ? `?${userQ}` : ''}`
   const [title, setTitle] = useState(tpl?.title || 'Daily metrics')
   const [body, setBody] = useState(tpl?.body || '')
   // A card that is one table is edited as a grid of boxes; anything else (or
@@ -207,7 +170,7 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
     if (busy || !blanks) return
     setBusy(true)
     try {
-      const res: any = await api.put(`/chat/conversations/${convId}/update-template`, {
+      const res: any = await api.put(url, {
         title: title.trim() || 'Daily metrics', body, remind_at: remind ? at : null, remind_days: days,
       })
       onSaved(res.template)
@@ -215,16 +178,16 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
   }
   const stop = async () => {
     const yes = await confirmDialog({
-      title: 'Stop daily metrics in this chat?',
-      message: "Your card and its reminder go. The updates you've already posted stay in the chat.",
+      title: owner ? `Stop ${owner}'s daily metrics in this chat?` : 'Stop daily metrics in this chat?',
+      message: owner ? 'Their card and its reminder go. The updates they have already posted stay in the chat.' : "Your card and its reminder go. The updates you've already posted stay in the chat.",
       confirmText: 'Stop', cancelText: 'Keep', danger: true,
     })
     if (!yes) return
-    try { await api.del(`/chat/conversations/${convId}/update-template`); toast.success('Daily metrics stopped here'); onStopped() }
+    try { await api.del(url); toast.success('Daily metrics stopped here'); onStopped() }
     catch (e: any) { toast.error(e.message || 'Could not stop them') }
   }
   return (
-    <Sheet label="Set up your daily metrics" title={tpl ? 'Edit your card' : 'Set up your daily metrics'} onClose={onClose} className="du-sheet"
+    <Sheet label="Set up your daily metrics" title={owner ? `Edit ${owner}'s card` : tpl ? 'Edit your card' : 'Set up your daily metrics'} onClose={onClose} className="du-sheet"
       foot={<button className="btn btn-primary" disabled={busy || !blanks} onClick={save}>{busy ? 'Saving…' : tpl ? 'Save card' : 'Save and fill in'}</button>}>
       {!tpl && <p className="du-intro">Paste the message you post every day, and put ___ where you type a number. After that you only fill in the numbers.</p>}
       <label className="ta-label" htmlFor="du-title">Card name</label>
@@ -264,7 +227,8 @@ function SetupForm({ convId, tpl, onClose, onSaved, onStopped }: {
           ))}
         </div>
       )}
-      {tpl && <button type="button" className="du-stop" onClick={stop}>Stop daily metrics in this chat</button>}
+      {owner && <p className="du-intro">You are changing {owner}'s card. They see your changes the next time they open it.</p>}
+      {tpl && <button type="button" className="du-stop" onClick={stop}>{owner ? `Stop ${owner}'s daily metrics in this chat` : 'Stop daily metrics in this chat'}</button>}
     </Sheet>
   )
 }
@@ -280,24 +244,28 @@ function FillForm({ convId, data, onSetup, onFixLast, onClose, onPosted }: {
   const month = edit ? edit.month || '' : data.month
   const n = blanksIn(text)
   const hint = !edit && last?.text === text ? last.values || [] : []
-  // Which slots are totals: those fill themselves in from the rows they add.
-  const totals = (text.match(SLOT_G) || []).map(isSum)
+  // Which slots fill themselves in: totals, and month totals ({run:…}) that
+  // add today's figure to the last post's.
+  const totals = (text.match(SLOT_G) || []).map(isAuto)
+  const prev = data.run_prev || {}
+  const fresh = !!data.run_fresh
+  const preview = data.own === false
   // `vals` is what was typed; a total left empty shows its sum. Editing a
   // posted card, a total that still equals its sum goes back to adding itself.
   const [vals, setVals] = useState<string[]>(() => {
     const v = Array.from({ length: n }, (_, i) => edit?.values?.[i] || '')
     const typed = v.map((x, i) => (totals[i] ? '' : x))
-    const auto = sumsOf(text, typed)
+    const auto = computeAll(text, typed, prev, fresh)
     return v.map((x, i) => (totals[i] && x === auto[i] ? '' : x))
   })
-  const shown = sumsOf(text, vals.map((v) => v.trim()))
+  const shown = computeAll(text, vals.map((v) => v.trim()), prev, fresh)
   const [date, setDate] = useState(edit?.date || data.day)
   const [note, setNote] = useState(edit?.note || '')
   const [busy, setBusy] = useState(false)
   const withDate = text.includes('{date}')
   const any = vals.some((v, i) => !totals[i] && v.trim()) || !!note.trim()
   const post = async () => {
-    if (busy || !any) return
+    if (busy || !any || preview) return
     setBusy(true)
     try {
       const payload = { values: shown, note: note.trim(), date: withDate ? date : null }
@@ -310,11 +278,12 @@ function FillForm({ convId, data, onSetup, onFixLast, onClose, onPosted }: {
   return (
     <Sheet label={title} title={<span className="du-sheet-title"><TrendGlyph size={17} /> {edit ? `Edit ${title}` : title}</span>} onClose={onClose} className="du-sheet"
       foot={<>
-        {!edit && tpl ? <button className="btn btn-ghost" onClick={onSetup}><Ic name="edit" size={14} /> Edit card</button> : <span />}
-        <button className="btn btn-primary" disabled={busy || !any} onClick={post}>{busy ? 'Saving…' : edit ? 'Save changes' : 'Post update'}</button>
+        {!edit && tpl ? <button className="btn btn-ghost" onClick={onSetup}><Ic name="edit" size={14} /> {preview ? 'Edit their card' : 'Edit card'}</button> : <span />}
+        {!preview && <button className="btn btn-primary" disabled={busy || !any} onClick={post}>{busy ? 'Saving…' : edit ? 'Save changes' : 'Post update'}</button>}
       </>}>
+      {preview && <div className="du-again"><span>This is how {data.owner?.name ? `${data.owner.name}'s` : 'their'} card looks to them. Only they can post it; you can fix the card itself.</span></div>}
       <div className="du-fill-day">{dayLabel(edit ? edit.day : data.day)}</div>
-      {!edit && data.posted_today && data.last_id && (
+      {!preview && !edit && data.posted_today && data.last_id && (
         <div className="du-again">
           <span>You've posted today already. Posting again adds another card.</span>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onFixLast}><Ic name="edit" size={13} /> Edit today's</button>
@@ -332,7 +301,7 @@ function FillForm({ convId, data, onSetup, onFixLast, onClose, onPosted }: {
           return (
             <input className={'du-blank' + (auto ? ' auto' : '')} inputMode={total ? 'decimal' : 'text'} enterKeyHint="next" maxLength={30}
               aria-label={total ? `Total ${i + 1}, added up for you` : `Blank ${i + 1}`}
-              title={total ? 'Added up for you. Type to change it; clear it to add up again.' : undefined}
+              title={total ? (shown[i] ? 'Added up for you. Type to change it; clear it to add up again.' : 'Type the month so far once; after that it adds up by itself.') : undefined}
               size={Math.max(3, Math.min(14, ((auto ? shown[i] : vals[i]) || hint[i] || '').length + 1))}
               placeholder={total ? '' : hint[i] && hint[i] !== '-' ? hint[i] : ''} value={(auto ? shown[i] : vals[i]) || ''}
               onChange={(e) => setVals((v) => v.map((x, j) => (j === i ? e.target.value : x)))} />
@@ -340,7 +309,7 @@ function FillForm({ convId, data, onSetup, onFixLast, onClose, onPosted }: {
         }} />
       </div>
       {hint.length > 0 && <div className="du-hint">Faint numbers are from your last update.</div>}
-      {totals.some(Boolean) && <div className="du-hint">Totals add themselves up. Type over one to change it.</div>}
+      {totals.some(Boolean) && <div className="du-hint">Shaded boxes add themselves up (month totals from your last update, and the totals). Type over one to change it.</div>}
       <label className="ta-label" htmlFor="du-note">Note (optional)</label>
       <textarea id="du-note" className="ta-input du-note-in" rows={2} maxLength={1000} placeholder="Anything else today" value={note} onChange={(e) => setNote(e.target.value)} />
     </Sheet>
@@ -352,8 +321,11 @@ interface TodayPerson { user_id: string; name: string; avatar_color?: string; av
 
 // A line under the chat's header once anyone here has a card: how many have
 // posted today, opening to the list. Hidden in chats where nobody reports.
-export function TodayUpdates({ convId, refreshKey, meId, onFill, onOpen }: {
+// `onCard`: given to managers and admins, a "Card" button by each teammate opens
+// that person's card as they see it, to check it or fix it for them.
+export function TodayUpdates({ convId, refreshKey, meId, onFill, onOpen, onCard }: {
   convId: string; refreshKey: number; meId: string; onFill: () => void; onOpen: (messageId: string) => void
+  onCard?: (userId: string) => void
 }) {
   const [people, setPeople] = useState<TodayPerson[]>([])
   const [open, setOpen] = useState(false)
@@ -387,6 +359,10 @@ export function TodayUpdates({ convId, refreshKey, meId, onFill, onOpen }: {
                   ? <span className="du-state ok"><Ic name="check" size={12} /> {p.at ? fmtTime(p.at) : 'Posted'}</span>
                   : <span className="du-state">Not yet</span>}
               </button>
+              {onCard && p.user_id !== meId && (
+                <button type="button" className="btn btn-ghost btn-sm du-card-btn" aria-label={`Open ${p.name}'s card`}
+                  onClick={() => { setOpen(false); onCard(p.user_id) }}>Card</button>
+              )}
             </li>
           ))}
         </ul>
