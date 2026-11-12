@@ -1007,11 +1007,36 @@ r.post('/:id/comments', (req, res) => {
   const snippet = body.length > 80 ? body.slice(0, 77) + '…' : body
   const recipients = new Set([t.assignee_id, t.assigned_by_id].filter(Boolean))
   recipients.delete(req.user.id)
+  // "@Ravi can you check this?" in a comment reached nobody unless Ravi already
+  // owned or assigned the task — the way Cliq users pull a colleague in. A
+  // private to-do mentions no one: its owner is the only one who can open it.
+  const mentioned = (t.visible_to_manager ?? 1) ? commentMentions(t.org_id, body, req.user.id) : []
+  for (const uid of mentioned) {
+    notify(t.org_id, uid, 'task_comment', `${req.user.name} mentioned you on "${t.title}": ${snippet}`, t.id, { commentId: cid })
+    recipients.delete(uid) // one notification each, the mention being the more specific
+  }
   for (const uid of recipients) {
     notify(t.org_id, uid, 'task_comment', `${req.user.name} commented on "${t.title}": ${snippet}`, t.id, { commentId: cid })
   }
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
+
+// The people a comment names with @: a full name, or a first name that only one
+// person in the organisation has (the chat's rule, routes/chat.js mentionsInText).
+// Not inside an email address — sales@vinay.com names nobody.
+function commentMentions(orgId, text, senderId) {
+  const body = String(text || '')
+  if (!body.includes('@')) return []
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const named = (name) => new RegExp(`(?<![\\p{L}\\p{N}.])@${esc(name.trim()).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])`, 'iu').test(body)
+  const people = db.prepare('SELECT id, name FROM users WHERE org_id=? AND id<>?').all(orgId, senderId).filter((u) => u.name)
+  const firstCount = {}
+  for (const u of people) { const f = u.name.trim().split(/\s+/)[0].toLowerCase(); firstCount[f] = (firstCount[f] || 0) + 1 }
+  return people.filter((u) => {
+    const first = u.name.trim().split(/\s+/)[0]
+    return named(u.name) || (firstCount[first.toLowerCase()] === 1 && named(first))
+  }).map((u) => u.id)
+}
 
 // UNDO a just-posted comment: delete the CALLER'S most recent comment on the task.
 // Deliberately "latest own" rather than /comments/:cid — the voice flow posts the

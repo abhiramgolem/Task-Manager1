@@ -3,6 +3,7 @@
 // restart can't double-send.
 import { db } from './db.js'
 import { runBackup } from './backup.js'
+import { runDueReminders } from './dueReminders.js'
 import { diskStatus } from './fileStore.js'
 import { sendDailyDigests } from './digest.js'
 import { runChatDue } from './routes/chat.js'
@@ -87,6 +88,9 @@ async function tick() {
   // Daily update cards whose owner's reminder time has come and who has not
   // posted today (routes/dailyUpdates.js). One indexed read when nothing is due.
   try { runUpdateReminders() } catch (e) { console.error('[scheduler] update reminders failed:', e.message) }
+  // In-app deadline reminders for every task (dueReminders.js): the evening
+  // before, and an hour before the end of the due day.
+  try { runDueReminders(now) } catch (e) { console.error('[scheduler] due reminders failed:', e.message) }
 
   // Nightly database backup (backup.js), in the quiet hours on the team's clock.
   // Not awaited inside the tick's marker logic: the marker goes first, so a

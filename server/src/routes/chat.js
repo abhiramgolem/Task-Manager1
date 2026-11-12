@@ -714,7 +714,12 @@ r.get('/conversations', (req, res) => {
 const UNREAD_CAP = 100
 r.get('/unread', (req, res) => {
   deliverPending(req.user.id)
-  const convs = db.prepare('SELECT c.id, p.last_read_at FROM chat_conversations c JOIN chat_participants p ON p.conversation_id=c.id WHERE p.user_id=? AND COALESCE(p.archived,0)=0').all(req.user.id)
+  // Muted chats are left out of the badge, as the chat list's own tabs already
+  // do: muting means "don't call me over", and a 9+ on the tab bar from a busy
+  // muted group did exactly that. A timed mute that has run out counts again.
+  const convs = db.prepare(`SELECT c.id, p.last_read_at FROM chat_conversations c JOIN chat_participants p ON p.conversation_id=c.id
+    WHERE p.user_id=? AND COALESCE(p.archived,0)=0
+      AND NOT (COALESCE(p.muted,0)=1 AND (p.muted_until IS NULL OR p.muted_until > ?))`).all(req.user.id, now())
   const count = db.prepare(`
     SELECT COUNT(*) c FROM (
       SELECT 1 FROM chat_messages
@@ -895,7 +900,22 @@ function readConversation(convId, userId) {
   const ts = now()
   const moved = markRead(convId, userId, ts)
   pushToConversation(convId, { type: 'read', conversationId: convId, userId, last_read_at: ts }, userId)
-  if (moved) pushReceipts(convId)
+  if (moved) { pushReceipts(convId); clearOnOtherDevices(convId, userId) }
+}
+
+// Read on the computer, still buzzing on the phone: the chat's notification
+// stayed in the phone's tray until it was opened there too. A silent data push
+// tells this person's phones to take it down (CallMessagingService "chat-read").
+// Debounced per person and chat — reading a busy group marks it read on every
+// new line, and one push after the burst says the same as twenty.
+const clearTimers = new Map()
+function clearOnOtherDevices(convId, userId) {
+  const key = userId + ':' + convId
+  if (clearTimers.has(key)) return
+  clearTimers.set(key, setTimeout(() => {
+    clearTimers.delete(key)
+    sendCallPush(userId, { type: 'chat-read', conversation_id: convId }, { ttlSec: 3600 }).catch(() => {})
+  }, 4000))
 }
 
 // A group event line ("Priya added Ravi"), sent straight to everyone like the
@@ -1100,6 +1120,10 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
     return { title: chatTitle + count, body: line, tag, rich: { ...rich, act: notifActionFor(conv.id, uid) } }
   }
   const groupLine = conv.type === 'group' ? `${sender.name}: ${full}` : full
+  // Who should NOT be alerted in the app (sound + banner while it is open):
+  // muted chats and do-not-disturb, exactly as for push. A mention still
+  // breaks through a mute, never through DND.
+  const quiet = new Set()
   for (const uid of others) {
     const p = db.prepare('SELECT muted, muted_until, last_read_at FROM chat_participants WHERE conversation_id=? AND user_id=?').get(conv.id, uid)
     // A timed mute that has run out is not a mute any more. Checked on read
@@ -1110,6 +1134,7 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
     // Being named by hand outranks muting the room — that is the whole point of
     // typing someone's name instead of just talking. Muting still silences every
     // other message in the thread.
+    if (dndLive || (muteLive && !pinged.has(uid))) quiet.add(uid)
     if (pinged.has(uid) && !dndLive) {
       // On a phone that draws the chat itself the line sits under the sender's
       // name, so it says "Mentioned you" there; without it a mention looked
@@ -1133,8 +1158,13 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
   for (const uid of others) if (online.has(uid)) markDelivered(conv.id, uid, ts)
   // Push the shaped message to everyone, each with their own view of the ticks.
   const receipts = receiptMap(conv.id)
+  const inAppLine = conv.type === 'group' ? `${sender.name}: ${short}` : short
   for (const uid of [sender.id, ...others]) {
-    pushToUser(uid, { type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, receipts.get(uid) || NO_RECEIPTS) })
+    pushToUser(uid, {
+      type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, receipts.get(uid) || NO_RECEIPTS),
+      // For the in-app banner (client InAppChatAlert): whether to alert, and what to say.
+      alert: uid !== sender.id && !quiet.has(uid), title: chatTitle, preview: inAppLine,
+    })
   }
   indexChatMessage(msgRow.id) // RAG: index every delivered message (text/upload/forward)
 }

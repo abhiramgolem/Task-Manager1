@@ -1375,6 +1375,15 @@ export function initSchema() {
     -- message_id, so without this each lookup read the whole table — which Clear
     -- chat grows by one row per message.
     CREATE INDEX IF NOT EXISTS idx_hidden_user ON chat_message_hidden(user_id, message_id);
+    -- Deadline reminders (dueReminders.js) look tasks up by due date every minute.
+    CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
+    -- Which deadline reminders went out, so each is sent once (kind: day | hour).
+    CREATE TABLE IF NOT EXISTS task_due_reminders (
+      task_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      sent_at TEXT NOT NULL,
+      PRIMARY KEY (task_id, kind)
+    );
   `)
   // The sender's own id for a message, chosen on the phone before it is sent.
   // A send whose answer was lost (flaky network) is retried with the same id

@@ -729,6 +729,11 @@ export default function CallCenter() {
           return
         }
 
+        // A chat message: handed to the in-app banner (InAppChatAlert), which
+        // decides whether it is worth a sound. This socket is the one that is
+        // open on every page, not just Chats.
+        if (msg.type === 'message') { window.dispatchEvent(new CustomEvent('votask-chat-message', { detail: msg })); return }
+
         if (msg.type === 'call-ring') { showRing(msg); return }
         if (msg.type === 'call-ring-stop') { dismissRing(msg.callId); return }
 

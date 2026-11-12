@@ -5787,3 +5787,28 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 /* Media Files in place of the thread. */
 .chat.media-on .chat-log-wrap, .chat.media-on .composer, .chat.media-on .pin-bar, .chat.media-on .pin-list, .chat.media-on .in-search { display: none; }
 .chat-media-pane { flex: 1; min-height: 0; }
+
+/* ---- First-run popups on phones (App.tsx VerifyEmailBanner, VoiceAssistant) --
+   Neither belongs over an open chat: they covered the newest messages and the
+   box you type in. The voice tip also waits while the verify card is up. */
+body.chat-thread-open .verify-pop,
+body.chat-thread-open .va-coach,
+body.verify-pop-open .va-coach { display: none !important; }
+.verify-pop-later { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+.verify-pop-later button { border: 0; background: none; padding: 2px 0; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.verify-pop-later button:hover { color: var(--text); }
+
+/* ---- In-app message banner (components/InAppChatAlert.tsx) ------------------ */
+.iac-wrap { position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 1300;
+  width: min(420px, calc(100vw - 32px)); display: flex; align-items: stretch;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg, var(--shadow));
+  animation: iac-in .18s ease-out; }
+@keyframes iac-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce) { .iac-wrap { animation: none; } }
+.iac-card { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 4px 10px 12px; border: 0; background: none; text-align: left; cursor: pointer; color: var(--text); font: inherit; }
+.iac-ic { flex-shrink: 0; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
+.iac-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.iac-title { font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iac-text { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iac-x { flex-shrink: 0; border: 0; background: none; padding: 0 12px; color: var(--muted); cursor: pointer; }
+

@@ -207,7 +207,9 @@ export async function sendCallPush(userId, data, { ttlSec = 60, title = '', body
 
   const stringData = {}
   for (const [k, v] of Object.entries(data || {})) stringData[k] = v == null ? '' : String(v)
-  const cancel = stringData.type === 'call-cancel'
+  // Silent ones (a ring stopping, a chat read elsewhere) mean nothing to an app
+  // build that draws no notifications itself — it would show an empty one.
+  const cancel = stringData.type === 'call-cancel' || stringData.type === 'chat-read'
   const url = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`
   await Promise.all(rows.map(async ({ token: tok, call_ring: native }) => {
     // A cancel means nothing to an app that never put up a ringing screen.

@@ -14,6 +14,7 @@ import { useDialog } from '../lib/useDialog'
 import { clipboardFiles, droppedFiles, dragHasFiles, canReadClipboardImages, readClipboardImages } from '../lib/pasteFiles'
 import { stashTaskDraft } from '../lib/taskDraft'
 import { CHUNKED_FROM, sendInChunks } from '../lib/chunkedUpload'
+import { compressImage } from '../lib/compressImage'
 import { startCall } from '../lib/call'
 import { useCallAnalyses, inProgress } from '../lib/callAnalysis'
 import EmojiPicker, { rememberEmoji } from '../components/EmojiPicker'
@@ -23,6 +24,7 @@ import { startLiveSpeech, isSupported as speechSupported, LiveSpeech } from '../
 import { useSurface } from '../voice/uiRegistry'
 import { typeInto, flashPress, pause, settle, findVaEl } from '../voice/uiController'
 import TaskDrawer from '../components/TaskDrawer'
+import { setOpenChat } from '../components/InAppChatAlert'
 import type { Member, Conversation, MentionRef, ChatFile, Msg, OrgUser, LocationRef, Poll } from '../components/chat/types'
 import { fileUrl, isAudio, isEditable, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
 import ChatVideo from '../components/chat/ChatVideo'
@@ -122,13 +124,19 @@ const DRAFTS_KEY = 'chatDrafts'
 const readDrafts = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {} } catch { return {} } }
 const writeDrafts = (d: Record<string, string>) => { try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(d)) } catch { /* private mode: just not kept */ } }
 
+// The chat list's time, as WhatsApp and Cliq write it: the clock time today,
+// "Yesterday", the weekday within the week, then the date. "3h" / "2d" made
+// people do arithmetic to know when something was said.
 function relTime(iso: string | null) {
   if (!iso) return ''
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
-  if (s < 60) return 'now'
-  if (s < 3600) return Math.floor(s / 60) + 'm'
-  if (s < 86400) return Math.floor(s / 3600) + 'h'
-  return Math.floor(s / 86400) + 'd'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((day(new Date()) - day(d)) / 86_400_000)
+  if (days <= 0) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: 'long' })
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) })
 }
 function fmtSize(n?: number) {
   if (!n) return ''
@@ -342,7 +350,12 @@ function markMatches(nodes: React.ReactNode[], q: string): React.ReactNode[] {
   })
 }
 
-function MessageText({ body, mentions, meId, fromMe, highlight }: { body: string; mentions?: MentionRef[]; meId: string; fromMe: boolean; highlight?: string }) {
+// Memoised: the thread re-renders on every keystroke in the composer (its text
+// lives in this page's state), and this regex pass over every message was most
+// of that cost — typing lagged in long chats on mid-range phones. A message's
+// text only needs redoing when the message (or the search) changes.
+const MessageText = React.memo(MessageTextInner)
+function MessageTextInner({ body, mentions, meId, fromMe, highlight }: { body: string; mentions?: MentionRef[]; meId: string; fromMe: boolean; highlight?: string }) {
   const refs = mentions || []
   // A full name, and the first name alone: the server also counts "@Vinay"
   // typed by hand for Vinay Kumar (chat.js mentionsInText).
@@ -433,6 +446,12 @@ export default function Chats() {
   const [reactFor, setReactFor] = useState<string | null>(null)
   const [reactUp, setReactUp] = useState(false)
   const [typingName, setTypingName] = useState<string | null>(null)
+  // Who is typing in the open chat (userId -> name and the timer that expires it).
+  const typersRef = useRef(new Map<string, { name: string; timer: ReturnType<typeof setTimeout> }>())
+  const showTypers = () => {
+    const names = [...typersRef.current.values()].map((t) => t.name.split(' ')[0])
+    setTypingName(!names.length ? null : names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : `${names[0]}, ${names[1]} and ${names.length - 2} more`)
+  }
   const [showNew, setShowNew] = useState(false)
   // Starts open when the entry being shown is an info entry (a reload with the
   // panel up, Back from a page opened from it).
@@ -1004,7 +1023,9 @@ export default function Chats() {
       return
     }
     if (inSearch) { setInSearch(''); setInSearchOpen(false) }
-    requestAnimationFrame(() => { if (!scrollToMessage(rep.id)) toast.info(hasMore ? 'That message is further back — scroll up to load earlier messages' : 'That message is no longer in this chat') })
+    // Older than what is loaded: page back to it (setLandOn → seekOlder), as
+    // a notification does, instead of a toast telling you to scroll for it.
+    requestAnimationFrame(() => { if (!scrollToMessage(rep.id)) setLandOn(rep.id) })
   }
 
   useEffect(() => {
@@ -1073,7 +1094,7 @@ export default function Chats() {
   useEffect(() => {
     setLoadOpen(false); setSelectedId(null); setReactionsOf(null); setHeadMenu(false); setJumpOpen(false); setAttachMenu(false)
     setPaneTab('messages')
-    setMulti(null); setUnfolded(new Set()); setAwayFromBottom(false); setNewBelow(0); setHasMore(false); setTypingName(null)
+    setMulti(null); setUnfolded(new Set()); setAwayFromBottom(false); setNewBelow(0); setHasMore(false); setTypingName(null); typersRef.current.forEach((t) => clearTimeout(t.timer)); typersRef.current.clear()
     // Files staged for one chat do not follow you into the next.
     if (stagedRef.current.length) { stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)); setStaged([]) }
     // ...but what you were typing does: each chat keeps its own unsent text.
@@ -1111,6 +1132,8 @@ export default function Chats() {
       if (!(navRef.current.chat === activeId && navRef.current.info)) setShowInfo(false)
     } else setPinned([])
   }, [activeId])
+  // The chat on screen never alerts (InAppChatAlert): you are reading it.
+  useEffect(() => { setOpenChat(activeId || null); return () => setOpenChat(null) }, [activeId])
   // Auto-scroll only when the reader is already at (or near) the bottom, or the
   // last message is their own — an incoming message must not yank someone who
   // scrolled up to read history. Opening a thread always starts at the bottom.
@@ -1128,10 +1151,17 @@ export default function Chats() {
     const mine = fresh && last.sender_id === user?.id
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
     if (forceScrollRef.current || mine || nearBottom) {
-      el.scrollTo(0, el.scrollHeight)
-      if (messages.length) forceScrollRef.current = false
+      // Opening a chat with unread messages lands on "N unread messages", as
+      // WhatsApp does — the first new line at the top, not the last at the
+      // bottom with everything before it scrolled past unread.
+      const sep = forceScrollRef.current && !mine ? el.querySelector<HTMLElement>('.unread-sep') : null
+      if (sep) el.scrollTop += sep.getBoundingClientRect().top - el.getBoundingClientRect().top - 12
+      else el.scrollTo(0, el.scrollHeight)
+      // The page shown from the device's cache first is not the real one yet:
+      // keep the opening jump armed until the thread has actually loaded.
+      if (messages.length && !threadLoading) forceScrollRef.current = false
     }
-  }, [messages, busy, typingName, inSearchOpen])
+  }, [messages, busy, typingName, inSearchOpen, threadLoading])
   // The line a link or notification asked for, landed on once it is on screen.
   // Not a requestAnimationFrame after the load: the thread is only drawn once
   // the chat list has loaded too (`active`), which a notification tapped from
@@ -1296,9 +1326,21 @@ export default function Chats() {
     if (openTaskId) { setOpenTaskId(null); return true }
     if (emojiFor) { setEmojiFor(null); return true }
     if (attachMenu) { setAttachMenu(false); return true }
-    if (recording) { finishVoiceNote(true); return true }
+    // Back while recording asked nothing and threw the recording away; a
+    // minute of talking deserves the question.
+    if (recording) {
+      void confirmDialog({ title: 'Discard this voice note?', message: 'What you have recorded so far will be lost.', confirmText: 'Discard', danger: true })
+        .then((ok) => { if (ok) finishVoiceNote(true) })
+      return true
+    }
     if (mentionQ) { setMentionQ(null); return true }
     if (reactionsOf) { setReactionsOf(null); return true }
+    // Sheets that had no Back of their own: Back closed the chat underneath
+    // them (or left Chats, losing a share being sent) instead.
+    if (remindFor || showLater || showStatus || scheduleOpen || showChannels || forkFrom || pinsOpen || sharing) {
+      setRemindFor(null); setShowLater(false); setShowStatus(false); setScheduleOpen(false); setShowChannels(false); setForkFrom(null); setPinsOpen(false); setSharing(null)
+      return true
+    }
     if (assignFor || infoFor || deleteFor || pollOpen || updateOpen || votesFor || locOpen || contactOpen || callsOpen || descOpen) {
       setAssignFor(null); setInfoFor(null); setDeleteFor(null); setPollOpen(false); setUpdateOpen(false); setUpdateEdit(null); setVotesFor(null); setLocOpen(false); setContactOpen(false); setCallsOpen(false); setDescOpen(false)
       return true
@@ -1315,10 +1357,17 @@ export default function Chats() {
     if (showInfo) { if (!infoStepRef.current?.()) setShowInfo(false); return true }
     if (showNew) { setShowNew(false); return true }
     if (inSearchOpen) { setInSearchOpen(false); setInSearch(''); return true }
+    // Files picked but not sent yet would be dropped by leaving the chat.
+    if (activeId && stagedRef.current.length) {
+      const n = stagedRef.current.length
+      void confirmDialog({ title: n === 1 ? 'Discard the file you picked?' : `Discard the ${n} files you picked?`, message: 'They have not been sent.', confirmText: 'Discard', danger: true })
+        .then((ok) => { if (ok) setActiveId('') })
+      return true
+    }
     if (activeId) { setActiveId(''); return true } // open chat → back to the list
     if (showArchived) { setShowArchived(false); return true }
     return false
-  }), [viewerAt, stagedAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, updateOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
+  }), [remindFor, showLater, showStatus, scheduleOpen, showChannels, forkFrom, pinsOpen, sharing, viewerAt, stagedAt, openTaskId, emojiFor, attachMenu, recording, mentionQ, reactionsOf, assignFor, infoFor, deleteFor, pollOpen, updateOpen, votesFor, locOpen, contactOpen, callsOpen, descOpen, menuId, reactFor, convoMenu, headMenu, jumpOpen, loadOpen, multi, selectedId, forwardMsgs, showMentions, showStarred, muteFor, showInfo, showNew, inSearchOpen, activeId, showArchived])
 
   // Escape closes the top-most of this page's own popups — a menu or picker,
   // then the selected message — one layer per press. Dialogs, the emoji picker
@@ -1409,6 +1458,9 @@ export default function Chats() {
         if (d.type === 'message' && d.message) {
           if (inActive) {
             mergeIncoming(d.message)
+            // Their message arrived: they have stopped typing it.
+            const t = typersRef.current.get(d.message.sender_id)
+            if (t) { clearTimeout(t.timer); typersRef.current.delete(d.message.sender_id); showTypers() }
             if (d.message.sender_id !== user.id && d.message.kind !== 'system') {
               // Read only if it is actually on screen: a tab in the background,
               // or a reader scrolled up into history, has not seen it yet.
@@ -1453,10 +1505,16 @@ export default function Chats() {
         } else if (d.type === 'typing') {
           if (d.userId === user.id) return
           if (inActive) {
-            setTypingName(d.isTyping ? d.name : null)
+            // Everyone typing, not just whoever spoke last: in a group the
+            // indicator used to jump from one name to the next and back.
+            const typers = typersRef.current
+            const prev = typers.get(d.userId)
+            if (prev) clearTimeout(prev.timer)
+            if (d.isTyping) {
+              typers.set(d.userId, { name: d.name || 'Someone', timer: setTimeout(() => { typers.delete(d.userId); showTypers() }, d.mode === 'recording' ? 8000 : 4000) })
+            } else typers.delete(d.userId)
+            showTypers()
             setTypingMode(d.mode === 'recording' ? 'recording' : 'typing')
-            if (typingClearRef.current) clearTimeout(typingClearRef.current)
-            if (d.isTyping) typingClearRef.current = setTimeout(() => setTypingName(null), d.mode === 'recording' ? 8000 : 4000)
           }
           // ...and in the list, where WhatsApp says "typing…" in place of the preview.
           const cid = d.conversationId
@@ -1743,7 +1801,9 @@ export default function Chats() {
       const failed: StagedFile[] = []
       for (let i = 0; i < items.length; i++) {
         const it = items[i]
-        if (await uploadOne(conv, pending[i], it.file, it.caption, i === 0 ? rep : null, mentionsOf(it.caption))) {
+        // Photos go smaller first (lib/compressImage.ts) — minutes to seconds on mobile data.
+        const file = await compressImage(it.file)
+        if (await uploadOne(conv, pending[i], file, it.caption, i === 0 ? rep : null, mentionsOf(it.caption))) {
           if (it.url) URL.revokeObjectURL(it.url)
         } else {
           failed.push(it)
@@ -1855,8 +1915,10 @@ export default function Chats() {
       setRecSecs(0)
       sendTyping(true, 'recording')
       voiceTimerRef.current = setInterval(() => setRecSecs((n) => {
-        // Hard stop at two minutes: past that it is a call, not a note.
-        if (n >= 119) { try { voiceRecRef.current?.stop() } catch {} }
+        // Stops (and sends) at 15 minutes. Two minutes cut people off mid-way
+        // through explaining a task, and sent the half they had said; a
+        // 15-minute note is a few MB and still goes through the outbox.
+        if (n >= 899) { try { voiceRecRef.current?.stop() } catch {} }
         // Keep "recording audio…" alive on the other end (it lapses after 8s).
         if (n % 5 === 4) sendTyping(true, 'recording')
         return n + 1
@@ -2605,7 +2667,7 @@ export default function Chats() {
     setViewerAt(null)
     if (inSearch || inSearchOpen) { setInSearch(''); setInSearchOpen(false) }
     // After the re-render that brings the whole thread back.
-    setTimeout(() => { if (!scrollToMessage(mid)) toast.info('That message is further back than this chat has loaded') }, 60)
+    setTimeout(() => { if (!scrollToMessage(mid)) setLandOn(mid) }, 60)
   }
   // A review in the panel changes how many of a meeting's tasks still wait.
   // The card the meeting left in the thread counted them when the thread
@@ -3267,7 +3329,7 @@ export default function Chats() {
                   </button>
                 )}
                 <div className="muted chat-peer-sub">
-                  {typingName ? <span className="typing-text">{active.type === 'group' ? `${typingName.split(' ')[0]} is ` : ''}{typingMode === 'recording' ? 'recording audio…' : 'typing…'}</span>
+                  {typingName ? <span className="typing-text">{active.type === 'group' ? `${typingName} ${/ and /.test(typingName) ? 'are' : 'is'} ` : ''}{typingMode === 'recording' ? 'recording audio…' : 'typing…'}</span>
                     : active.type === 'group' ? <span className="chp-names">{active.members.map((m) => m.name.split(' ')[0]).join(', ')}</span>
                       : otherOnline ? <span className="online-text">online</span>
                         : (active.other_user_id && lastSeen[active.other_user_id]) ? <span>{lastSeenLabel(lastSeen[active.other_user_id])}</span>
@@ -3587,7 +3649,10 @@ export default function Chats() {
                           ) : m.file && (isImage && !local
                             ? <div className="chat-media">
                                 <button type="button" className="chat-image-btn" onClick={(e) => { e.stopPropagation(); setViewerAt(m.id) }} aria-label={`Open photo${m.body ? `: ${m.body}` : ''}`}>
-                                  <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy" />
+                                  <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy"
+                                    // A picture that finishes loading grows the thread; if the
+                                    // reader was at the bottom, keep the newest line in view.
+                                    onLoad={() => { const el = logRef.current; if (el && stuckRef.current) el.scrollTop = el.scrollHeight }} />
                                 </button>
                                 {mediaDl(m)}
                               </div>
