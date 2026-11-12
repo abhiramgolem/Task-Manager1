@@ -30,6 +30,8 @@ export function notifTarget(n: NotifRef): string | null {
     if (n.commentId) q.set('comment', n.commentId)
     return `/tasks?${q}`
   }
+  // "You have 6 tasks due in about an hour": the task list.
+  if (n.type === 'task_due_soon') return '/tasks'
   return null
 }
 
