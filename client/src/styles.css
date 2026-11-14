@@ -1408,10 +1408,12 @@ tbody tr:hover { background: var(--n-50); }
    absolutely positioned off it, so it never shifts what we clamp to the viewport. */
 .va-dock { position: fixed; right: 20px; bottom: 20px; z-index: 1200; display: inline-flex; }
 /* Wide screens: the coachmark sits beside the sidebar's "Talk to AI" row, its
-   tail pointing left at it. */
-.va-dock--side { top: 70px; left: 252px; right: auto; bottom: auto; }
-.va-dock--side .va-coach { top: 0; left: 0; right: auto; bottom: auto; }
-.va-dock--side .va-coach::after { top: 24px; left: -7px; right: auto; bottom: auto; transform: rotate(135deg); }
+   tail pointing left at it. The row is at the foot of the sidebar, its middle
+   ~155px above the bottom whatever the window height (only the page list above
+   it stretches), so the tip is anchored to the bottom too. */
+.va-dock--side { top: auto; left: 252px; right: auto; bottom: 110px; }
+.va-dock--side .va-coach { top: auto; left: 0; right: auto; bottom: 0; }
+.va-dock--side .va-coach::after { top: auto; left: -7px; right: auto; bottom: 38px; transform: rotate(135deg); }
 .va-dock--dragging { z-index: 1310; }  /* stay on top of whatever it's dragged over */
 
 .va-fab-pill {
@@ -5862,3 +5864,142 @@ body.verify-pop-open .va-coach { display: none !important; }
 .iac-text { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iac-x { flex-shrink: 0; border: 0; background: none; padding: 0 12px; color: var(--muted); cursor: pointer; }
 
+
+/* ---- Attendance: Check in / Check out (Befach HRMS) --------------------------
+   The top-bar pill, its sheet (a centred card wide, a bottom sheet on phones)
+   and the tiny "In" chips beside names. Green = checked in, amber = waiting for
+   HR or an earlier check-out missing. */
+.att-pill { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 13px 0 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 650;
+  cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: background .15s, border-color .15s; }
+.att-pill:hover { background: var(--bg); }
+.att-pill:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.att-pill-ic { position: relative; display: inline-flex; color: var(--muted); }
+.att-pill-dot { position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--surface); background: var(--n-400); }
+.att-pill.in { border-color: var(--success-border); background: var(--success-bg); color: var(--success-ink); }
+.att-pill.in .att-pill-ic { color: var(--success-ink); }
+.att-pill.in .att-pill-dot { background: #22c55e; border-color: var(--success-bg); }
+.att-pill.warn { border-color: var(--warning-border); background: var(--warning-bg); color: var(--warning-ink); }
+.att-pill.warn .att-pill-ic { color: var(--warning-ink); }
+.att-pill.warn .att-pill-dot { background: var(--warning); border-color: var(--warning-bg); }
+.att-pill.done { color: var(--muted); }
+.att-pill-text { font-variant-numeric: tabular-nums; }
+.att-pill-text.narrow { display: none; }
+
+.att-in { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 0 6px 0 5px; height: 16px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; line-height: 1; vertical-align: 1px; flex-shrink: 0;
+  background: var(--success-bg); color: var(--success-ink); }
+.att-in-dot { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; }
+.att-in.pending { background: var(--warning-bg); color: var(--warning-ink); }
+.att-in.pending .att-in-dot { background: var(--warning); }
+
+/* Above the voice assistant's orb, dock, coach mark and live bar (1200-1310),
+   which would otherwise sit on the sheet's buttons and title; below
+   confirmations (1320), which the overnight check-out raises over it. */
+.att-overlay { position: fixed; inset: 0; z-index: 1315; background: rgba(16,24,40,.45); display: grid; place-items: center; padding: 20px; animation: att-fade .15s ease; }
+@keyframes att-fade { from { opacity: 0; } to { opacity: 1; } }
+.att-sheet { background: var(--surface); color: var(--text); border-radius: var(--r-xl); box-shadow: var(--e-3); width: 440px; max-width: 100%;
+  max-height: calc(100vh - 40px); overflow-y: auto; padding: 18px 20px 14px; display: flex; flex-direction: column; gap: 12px; }
+.att-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.att-title { font-size: 17px; font-weight: 700; }
+.att-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.att-x { border: 0; background: transparent; color: var(--muted); width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
+.att-x:hover { background: var(--bg); color: var(--text); }
+.att-body { display: flex; flex-direction: column; gap: 12px; }
+.att-status { display: flex; align-items: center; gap: 12px; }
+.att-status-ic { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: var(--n-100); color: var(--n-600); }
+.att-status-ic.in { background: var(--success-bg); color: var(--success-ink); }
+.att-status-ic.warn { background: var(--warning-bg); color: var(--warning-ink); }
+.att-status-main { min-width: 0; }
+.att-status-label { font-size: 16px; font-weight: 700; }
+.att-status-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.att-status-sub.warn { color: var(--warning-ink); }
+.att-clock { color: var(--success-ink); font-variant-numeric: tabular-nums; }
+.att-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.att-actions.main:empty { display: none; }
+.att-actions.main .btn { flex: 1 1 auto; }
+.att-banner { font-size: 13px; line-height: 1.45; padding: 10px 12px; border-radius: var(--r-sm); border: 1px solid var(--info-border); background: var(--info-bg); color: var(--info-ink); }
+.att-banner.warn { border-color: var(--warning-border); background: var(--warning-bg); color: var(--warning-ink); }
+.att-banner.error { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-ink); }
+.att-banner.ok { border-color: var(--success-border); background: var(--success-bg); color: var(--success-ink); }
+.att-banner a, .att-fine a { color: inherit; font-weight: 700; text-decoration: underline; }
+.att-fine { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
+.att-link { align-self: center; display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--link); text-decoration: none; padding: 4px 6px; }
+.att-link:hover { text-decoration: underline; }
+.att-blocked { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--r-md); border: 1px solid var(--warning-border); background: var(--warning-bg); color: var(--warning-ink); }
+.att-blocked-head { display: flex; gap: 9px; font-size: 13px; line-height: 1.45; }
+.att-blocked-head > svg { flex-shrink: 0; margin-top: 2px; }
+.att-blocked-head p { margin: 3px 0 0; }
+.att-exc { display: flex; flex-direction: column; gap: 6px; }
+.att-exc label { font-size: 12.5px; font-weight: 700; }
+.att-exc textarea { width: 100%; resize: vertical; min-height: 56px; }
+.att-blocked .att-fine { color: inherit; opacity: .85; }
+.att-cam { display: flex; flex-direction: column; gap: 10px; }
+.att-cam-title { font-weight: 700; font-size: 14px; }
+.att-cam-frame { position: relative; aspect-ratio: 4 / 3; overflow: hidden; border-radius: var(--r-md); background: #0f172a; }
+.att-cam-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.att-cam-video.hidden { visibility: hidden; }
+.att-cam-oval { position: absolute; top: 47%; left: 50%; width: 44%; height: 70%; transform: translate(-50%, -50%); border: 2px dashed rgba(255,255,255,.6); border-radius: 50%; pointer-events: none; }
+.att-cam-msg { position: absolute; inset: 0; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; text-align: center; color: #e2e8f0; font-size: 13px; }
+.att-cam-msg strong { color: #fff; font-size: 14px; }
+
+@media (max-width: 720px) {
+  /* Phones: the clock icon (with its status dot) alone, plus the running time
+     while checked in — the bar already holds the title, the bell and the avatar. */
+  .att-pill { height: 38px; min-width: 38px; padding: 0 10px; gap: 6px; justify-content: center; }
+  .att-pill-text.wide { display: none; }
+  .att-pill-text.narrow { display: inline; }
+  .att-overlay { place-items: end stretch; padding: 0; }
+  .att-sheet { width: 100%; border-radius: var(--r-xl) var(--r-xl) 0 0; max-height: 92vh; padding: 16px 16px calc(14px + env(safe-area-inset-bottom)); }
+  .att-actions .btn { flex: 1 1 auto; }
+}
+
+/* --- Check-in / Out card at the top of the sidebar (as in Cliq) ----------- */
+/* The same on every screen size: the card takes the sidebar's first slot, and
+   "Talk to AI" sits at the foot (.sidebar-ai-foot) — above the profile row on a
+   wide screen, above Switch accounts in the phone drawer. On a wide screen the
+   sidebar is always in view, so the card replaces the top bar's pill there; a
+   phone keeps the pill, because its drawer is closed most of the time. */
+.att-card {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; margin: 0 0 8px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text);
+  font: inherit; text-align: left; cursor: pointer; transition: background .15s, border-color .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.att-card:hover { background: var(--bg); }
+.att-card:active { background: var(--bg); }
+.att-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.att-card.in { border-color: var(--success-border); }
+.att-card.warn { border-color: var(--warning-border); }
+.att-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; line-height: 1.25; }
+.att-card-title { font-size: 14.5px; font-weight: 800; }
+.att-card-sub { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.att-card-dot { width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--n-400); flex-shrink: 0; }
+.att-card.in .att-card-sub { color: var(--success-ink); }
+.att-card.in .att-card-dot { background: #22c55e; }
+.att-card.warn .att-card-sub { color: var(--warning-ink); }
+.att-card.warn .att-card-dot { background: var(--warning); }
+.att-card-sep { align-self: stretch; width: 1px; margin: 2px 0; background: var(--border); flex-shrink: 0; }
+/* The switch follows the HRMS, not the tap: it moves only once a punch is recorded. */
+.att-switch { position: relative; width: 44px; height: 26px; flex-shrink: 0; border-radius: 999px; background: var(--n-300); transition: background .2s; }
+.att-switch-knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(16,24,40,.25); transition: transform .2s ease; }
+.att-switch.on { background: #22c55e; }
+.att-card.warn .att-switch.on { background: var(--warning); }
+.att-switch.on .att-switch-knob { transform: translateX(18px); }
+.sidebar-ai-foot { margin: 10px 0 12px; padding: 8px 12px; }
+.sidebar-ai-foot .sidebar-ai-orb { width: 42px; height: 42px; }
+@media (min-width: 721px) {
+  .att-pill { display: none; }
+}
+@media (max-width: 720px) {
+  .sidebar-ai-foot { margin: 10px 0 8px; }
+  /* With the card on top and Talk to AI at the foot, a short phone left the
+     page list a sliver between them. The whole drawer scrolls instead: on a
+     tall phone the list still fills the middle and the foot sits at the
+     bottom; on a short one nothing is squeezed, you scroll down to it. */
+  .sidebar { overflow-y: auto; overscroll-behavior: contain; }
+  .sidebar .nav { flex: 1 0 auto; overflow: visible; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .att-switch, .att-switch-knob { transition: none; }
+}

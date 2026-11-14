@@ -98,6 +98,10 @@
          feature is optional so phones without one can still install. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Check in / Check out (Befach HRMS): one location reading per punch, taken
+         only when the button is pressed. Fine for precise, coarse as a fallback. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Ringing: take the screen when locked (Android 14+ also asks the user),
          buzz, and keep the CPU up while the ring is posted. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />

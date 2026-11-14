@@ -60,6 +60,12 @@ services:
         sync: false
       - key: CLIQ_WEBHOOK_URL
         sync: false
+      # Befach HRMS check-in/check-out. Both unset = the topbar button is hidden.
+      # The secret is the same value as VOTASK_HRMS_SECRET on the HRMS (>= 32 chars).
+      - key: HRMS_BASE_URL
+        sync: false
+      - key: VOTASK_HRMS_SECRET
+        sync: false
       - key: DIGEST_HOUR
         sync: false
       - key: SMTP_HOST

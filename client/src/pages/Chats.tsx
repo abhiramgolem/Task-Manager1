@@ -40,6 +40,7 @@ import { UpdateCard, UpdateSheet, TodayUpdates } from '../components/chat/DailyU
 import PhotoViewer from '../components/PhotoViewer'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
 import ChatInfoPanel from '../components/ChatInfoPanel'
+import InChip from '../components/attendance/InChip'
 import type { InfoView, Me, MediaKind } from '../lib/chatInfo'
 import { chatInfoApi, MEDIA_TABS } from '../lib/chatInfo'
 import { MediaView } from '../components/ChatMedia'
@@ -3236,7 +3237,7 @@ export default function Chats() {
                 </button>
                 <div className="convo-meta" style={{ minWidth: 0, flex: 1 }}>
                   <div className="row spread" style={{ gap: 6 }}>
-                    <div className="convo-title row" style={{ gap: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.pinned && <span title="Pinned" style={{ display: 'inline-flex', color: 'var(--muted)' }}><Ic name="pin" size={12} /></span>}{c.name}</div>
+                    <div className="convo-title row" style={{ gap: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.pinned && <span title="Pinned" style={{ display: 'inline-flex', color: 'var(--muted)' }}><Ic name="pin" size={12} /></span>}{c.name}{c.type !== 'group' && <InChip userId={c.other_user_id} />}</div>
                     {c.last_at && <span className={'convo-time' + (hasUnread(c) && !c.muted ? ' fresh' : '')} style={{ flexShrink: 0 }}>{relTime(c.last_at)}</span>}
                   </div>
                   <div className="chat-contact-preview">
@@ -3386,7 +3387,7 @@ export default function Chats() {
                 onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleInfo() } }}
               >
                 <div className="chp-line">
-                <div className="chat-peer-name">{active.name}</div>
+                <div className="chat-peer-name">{active.name}{active.type === 'direct' && <InChip userId={active.other_user_id} />}</div>
                 {/* Wide screens, as Cliq: how many people, which opens them. */}
                 {active.type === 'group' && (
                   <button type="button" className="chp-people" title="People" aria-label={`${active.members.length} people. Show them`}
@@ -4899,7 +4900,7 @@ function NewChatModal({ user, convos, onClose, onOpen }: { user: OrgUser; convos
           {mode === 'channels' || (mode === 'group' && !canCreateGroup) ? null : list.map((u) => (
             <div key={u.id} className="modal-user" onClick={() => mode === 'pick' ? startDirect(u.id) : toggle(u.id)}>
               <Avatar name={u.name} color={u.avatar_color} size={34} src={u.avatar_file ? userAvatarUrl(u.id, u.avatar_file) : undefined} />
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 13.5 }}>{u.name}</div><div className="muted" style={{ fontSize: 11.5, textTransform: 'capitalize' }}>{u.role}</div></div>
+              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 13.5 }}>{u.name}<InChip userId={u.id} /></div><div className="muted" style={{ fontSize: 11.5, textTransform: 'capitalize' }}>{u.role}</div></div>
               {mode === 'group' && <input type="checkbox" readOnly checked={sel.has(u.id)} />}
             </div>
           ))}

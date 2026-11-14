@@ -15,6 +15,7 @@ import {
   MEDIA_TABS, canReview, chatFileUrl, chatInfoApi, fmtClock, fmtDay, lastSeenText, naturalCompare,
 } from '../lib/chatInfo'
 import { MediaView } from './ChatMedia'
+import InChip from './attendance/InChip'
 import { MeetingsView, SummariesView, SummaryView } from './ChatMeetings'
 
 type CallKind = 'audio' | 'video'
@@ -1208,7 +1209,7 @@ function MemberRow({ m, online, open, actionsId, callName, canRemove, busy, onTo
         {online && <span className="online-dot" role="img" aria-label="Online" />}
       </span>
       <span className="ci-row-main">
-        <span className="ci-row-title">{m.name}{m.is_me && <span className="ci-mem-you">You</span>}</span>
+        <span className="ci-row-title">{m.name}{m.is_me && <span className="ci-mem-you">You</span>}<InChip userId={m.id} /></span>
         <span className="ci-row-sub">{memberSub(m)}</span>
       </span>
       {(m.chat_role === 'admin' || (load && load.open > 0)) && (

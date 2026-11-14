@@ -733,6 +733,8 @@ export default function CallCenter() {
         // decides whether it is worth a sound. This socket is the one that is
         // open on every page, not just Chats.
         if (msg.type === 'message') { window.dispatchEvent(new CustomEvent('votask-chat-message', { detail: msg })); return }
+        // Someone in the org checked in or out: the In chips' board (lib/attendanceBoard).
+        if (msg.type === 'attendance') { window.dispatchEvent(new CustomEvent('votask-attendance', { detail: msg })); return }
 
         if (msg.type === 'call-ring') { showRing(msg); return }
         if (msg.type === 'call-ring-stop') { dismissRing(msg.callId); return }
