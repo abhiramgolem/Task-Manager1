@@ -283,7 +283,7 @@ export default function Assistant() {
               </div>
             )}
             <div className="chat-input">
-              <input placeholder={listening ? 'Listening… tap the mic to stop' : 'Ask about your tasks…'} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send(input)} autoFocus />
+              <input placeholder={listening ? 'Listening… tap the mic to stop' : 'Ask about your tasks…'} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) send(input) }} autoFocus />
               {canRecord && (
                 <button
                   type="button"

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api, Task, User, Attachment, taskAttachmentUrl } from '../api'
 import { useAuth } from '../auth'
-import { PriorityBadge, StatusBadge, CategoryBadge, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea } from '../ui'
+import { PriorityBadge, StatusBadge, CategoryBadge, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea, enterSends } from '../ui'
 import CategorySelect from './CategorySelect'
 import PhotoViewer from './PhotoViewer'
 import { confirmDialog } from '../lib/confirm'
@@ -793,7 +793,8 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                 // Enter posts, Shift+Enter breaks the line — the messenger
                 // convention, and the only way to write a second line now that
                 // this is a textarea rather than a single-line input.
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addComment() } }}
+                // On a phone Enter is the new line and Post sends (enterSends).
+                onKeyDown={(e) => { if (enterSends(e)) { e.preventDefault(); addComment() } }}
                 style={{ flex: 1 }}
               />
               <button data-va="task.drawer.postComment" className="btn btn-primary" onClick={addComment} disabled={busy}>Post</button>

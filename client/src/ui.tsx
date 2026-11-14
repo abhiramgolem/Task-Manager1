@@ -163,6 +163,16 @@ export function CategoryBadge({ c }: { c?: string | null }) {
 // The double assignment is required, not superstition: height must go back to
 // auto before scrollHeight is read, or the measurement is capped by the height
 // already set and the box can only ever grow.
+// Should this keystroke in a multi-line box send it? Same rule as the chat
+// composer: plain Enter sends with a keyboard and mouse; Shift+Enter is a new
+// line. On a touch screen Enter is always the new line (a phone keyboard has
+// no Shift+Enter), so the Send/Post button is how a phone sends. Enter that
+// commits an IME composition (Telugu, Hindi…) never sends.
+export function enterSends(e: React.KeyboardEvent): boolean {
+  if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return false
+  return !(typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches)
+}
+
 export function AutoTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const ref = React.useRef<HTMLTextAreaElement>(null)
   const fit = () => {

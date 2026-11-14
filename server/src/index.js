@@ -33,6 +33,7 @@ import apiKeyRoutes from './routes/apiKeys.js'
 import departmentRoutes from './routes/departments.js'
 import mcpRoutes from './routes/mcp.js'
 import uploadRoutes from './routes/uploads.js'
+import attendanceRoutes from './routes/attendance.js'
 import { startScheduler } from './scheduler.js'
 import { backfillChatTaskFiles } from './taskFromMessage.js'
 import { seedUpdateCards } from './seedUpdateCards.js'
@@ -158,6 +159,7 @@ app.use('/api/tts', ttsRoutes)
 app.use('/api/keys', apiKeyRoutes)
 app.use('/api/departments', departmentRoutes)
 app.use('/api/uploads', uploadRoutes)
+app.use('/api/attendance', attendanceRoutes) // HRMS check-in tokens + who-is-in board
 // Outside /api on purpose: MCP carries its own credential in the path and speaks
 // JSON-RPC, not REST, so none of the /api middleware applies to it.
 app.use('/mcp', mcpRoutes)

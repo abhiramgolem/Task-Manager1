@@ -14,6 +14,9 @@ import { toast } from './lib/toast'
 import { api, getToken, userAvatarUrl } from './api'
 import { Avatar, Ic, todayKey, localDateKey } from './ui'
 import NotificationBell from './components/NotificationBell'
+import CheckInButton from './components/attendance/CheckInButton'
+import CheckInCard from './components/attendance/CheckInCard'
+import { AttendanceProvider } from './components/attendance/AttendanceContext'
 import ProfileModal, { SECTIONS, SectionId } from './components/ProfileModal'
 import FeedbackModal from './components/FeedbackModal'
 import VoiceAssistant from './components/VoiceAssistant'
@@ -24,6 +27,7 @@ import CallCenter from './components/CallCenter'
 import QuickInvite from './components/QuickInvite'
 import EmailCodeEntry from './components/EmailCodeEntry'
 import Login from './pages/Login'
+import HrmsLogin, { useHrmsLoginResume } from './pages/HrmsLogin'
 import Signup from './pages/Signup'
 import AcceptInvite from './pages/AcceptInvite'
 import ForgotPassword from './pages/ForgotPassword'
@@ -189,21 +193,13 @@ function Layout({ children }: { children: React.ReactNode }) {
       {n.to === '/chats' && chatUnread > 0 && <span className="bn-badge">{chatUnread > 9 ? '9+' : chatUnread}</span>}
     </NavLink>
   )
-  return (
-    <div className="app">
-      <aside className={'sidebar' + (open ? ' open' : '')}>
-        <div className="brand">
-          <img src="/logo.png" alt="VoTask" className="brand-logo" />
-          <div>
-            <div className="brand-name">VoTask</div>
-            <div className="brand-sub">Execution Platform</div>
-          </div>
-        </div>
-        {/* The voice assistant's way in, on every screen size. First, above the
-            pages, because it is the one thing in here that isn't a place you
-            go — and it keeps the neon orb so it still reads as the thing that
-            listens. Desktop used to have a floating Ask BTM card instead. */}
-        <button className="sidebar-ai-m" onClick={openVoice} aria-label="Open voice assistant">
+  // The voice assistant's way in, on every screen size, keeping the neon orb so
+  // it still reads as the thing that listens. Desktop used to have a floating
+  // Ask BTM card instead. It sits at the foot of the sidebar (above the profile
+  // row on a wide screen, above Switch accounts on a phone), so the top belongs
+  // to Check-in / Out, as in Cliq — the same layout on every screen size.
+  const talkToAi = (
+        <button className="sidebar-ai-m sidebar-ai-foot" onClick={openVoice} aria-label="Open voice assistant">
           <span className="sidebar-ai-orb" aria-hidden="true">
             <span className="sidebar-ai-glow" />
             <span className="sidebar-ai-core">
@@ -222,6 +218,19 @@ function Layout({ children }: { children: React.ReactNode }) {
             <span className="sidebar-ai-sub">Create tasks by voice</span>
           </span>
         </button>
+  )
+  return (
+    <AttendanceProvider>
+    <div className="app">
+      <aside className={'sidebar' + (open ? ' open' : '')}>
+        <div className="brand">
+          <img src="/logo.png" alt="VoTask" className="brand-logo" />
+          <div>
+            <div className="brand-name">VoTask</div>
+            <div className="brand-sub">Execution Platform</div>
+          </div>
+        </div>
+        <CheckInCard />
         <nav className="nav" onClick={() => setOpen(false)}>
           {visibleNav.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} onClick={n.to === '/chats' ? onChatsNav : undefined} className={({ isActive }) => (isActive ? 'active' : '')}>
@@ -280,6 +289,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             </div>
           )}
         </nav>
+        {talkToAi}
         <div className="sidebar-user">
           <button className="avatar-edit-btn" title="Open profile & settings" onClick={() => setShowProfile(true)}>
             <Avatar name={user.name} color={user.avatar_color} size={36} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
@@ -349,6 +359,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             <div className="sub">{meta.s}</div>
           </div>
           <div className="row" style={{ marginLeft: 'auto', gap: 10 }}>
+            <CheckInButton />
             <NotificationBell key={user.id} />
             <button className="topbar-avatar" onClick={() => setShowProfile(true)} title="Profile & settings" aria-label="Open profile & settings">
               <Avatar name={user.name} color={user.avatar_color} size={33} src={user.avatar_file ? userAvatarUrl(user.id, user.avatar_file) : undefined} />
@@ -412,6 +423,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           Tasks while you talk. */}
       <CallCenter />
     </div>
+    </AttendanceProvider>
   )
 }
 
@@ -658,6 +670,7 @@ export default function App() {
   useAndroidBackButton()
   usePushNavigator()
   useShareTarget(!!user)
+  useHrmsLoginResume(!!user)
   // Play has a newer build for this phone: offer it (lib/appUpdate).
   useEffect(() => { startUpdateCheck() }, [])
   return (
@@ -672,6 +685,7 @@ export default function App() {
       <Route path="/forgot-password" element={user ? <Navigate to="/" replace /> : <ForgotPassword />} />
       <Route path="/reset-password" element={user ? <Navigate to="/" replace /> : <ResetPassword />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/hrms-login" element={<HrmsLogin />} />
       <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route path="/welcome" element={<WelcomeRoute />} />
       <Route path="/join" element={<JoinWorkspace />} />
