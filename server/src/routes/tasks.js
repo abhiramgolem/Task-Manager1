@@ -96,6 +96,8 @@ r.get('/upload-room', (req, res) => {
 const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
 
 const VALID_STATUS = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reopened']
+// Statuses that mean "someone is still working on it" (not waiting, not finished).
+const WORKING_STATUSES = ['To Do', 'In Progress', 'Blocked']
 
 const userBrief = (uid) => (uid ? db.prepare('SELECT id,name,avatar_color FROM users WHERE id=?').get(uid) : null)
 
@@ -830,6 +832,11 @@ r.patch('/:id', (req, res) => {
     if (b.status === 'Done') { sets.push('progress=?'); args.push(100) }
     if (finishing) { sets.push('completed_at=?'); args.push(now()); sets.push('completed_by_id=?'); args.push(req.user.id) }
     if (b.status === 'In Review') { sets.push('submitted_at=?'); args.push(now()) }
+    // Same rule as POST /:id/status: back to work ends a pending review.
+    if (t.approval_status === 'pending' && WORKING_STATUSES.includes(b.status)) {
+      sets.push('approval_status=?'); args.push('none')
+      sets.push('submitted_at=?'); args.push(null)
+    }
   }
   // Auto-fill a due date from priority when assigning or (re)prioritizing a task
   // that has none — unless the caller explicitly set due_date in this request.
@@ -885,6 +892,11 @@ r.post('/:id/status', (req, res) => {
     if (ownWork) approval = 'none'
   }
   if (status === 'Reopened') { approval = 'none'; progress = Math.min(progress, 80); completedAt = null; completedBy = null }
+  // Back to a working status while waiting for review — "Withdraw & keep working",
+  // or a manager moving it on: nobody is reviewing it any more. Without this the
+  // status changed but approval stayed 'pending', so the drawer kept showing
+  // "Submitted for review" and the withdraw button looked like it did nothing.
+  if (approval === 'pending' && WORKING_STATUSES.includes(status)) { approval = 'none'; submittedAt = null }
   db.prepare('UPDATE tasks SET status=?, approval_status=?, progress=?, submitted_at=?, completed_at=?, completed_by_id=?, visible_to_manager=?, updated_at=? WHERE id=?')
     .run(status, approval, progress, submittedAt, completedAt, completedBy, visible, now(), t.id)
   audit(req.user.org_id, req.user.id, 'task.status', 'task', t.id, status)
@@ -967,6 +979,11 @@ r.post('/:id/approve', (req, res) => {
   const isAssigner = !!t.assigned_by_id && t.assigned_by_id === req.user.id && t.assignee_id !== req.user.id
   if (!isManager && !isAssigner) {
     return res.status(403).json({ error: 'Only a manager or the person who assigned this task can approve it.' })
+  }
+  // A reviewer whose screen is out of date must not approve (or send back) work
+  // the assignee has already withdrawn to keep working on.
+  if (t.approval_status !== 'pending' && t.status !== 'In Review') {
+    return res.status(409).json({ error: `${t.status === 'Done' ? 'This task is already done.' : 'This task is no longer waiting for review — it was withdrawn to keep working.'}` })
   }
   const approved = decision === 'approved'
   db.prepare('UPDATE tasks SET approval_status=?, status=?, completed_at=?, completed_by_id=?, updated_at=? WHERE id=?')

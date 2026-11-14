@@ -958,6 +958,18 @@ export function initSchema() {
     if (n) console.log(`[migrate] named who completed ${n} finished task(s) from the audit log`)
   })
 
+  // "Withdraw & keep working" used to change only the status, leaving the review
+  // pending, so those tasks still showed "Submitted for review" with a withdraw
+  // button that did nothing. A pending review on a working status only arises
+  // that way (submitting sets In Review, a verdict clears pending), so it is
+  // safe to end it. Runs every start; a no-op once fixed.
+  {
+    const n = db.prepare(
+      "UPDATE tasks SET approval_status='none', submitted_at=NULL WHERE approval_status='pending' AND status IN ('To Do','In Progress','Blocked')"
+    ).run().changes
+    if (n) console.log(`[migrate] ended the review on ${n} task(s) that had been withdrawn to keep working`)
+  }
+
   // Task attachments: the original table only had `filename`. Enrich it to store
   // the on-disk name, mime type, size and org (mirrors the chat_messages file
   // model) so images/PDFs/videos attached to a task can be served + authorized.
