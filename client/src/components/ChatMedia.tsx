@@ -8,6 +8,8 @@ import { useDialog } from '../lib/useDialog'
 import { pushBackHandler } from '../back'
 import VoicePlayer, { mediaLength } from './VoicePlayer'
 import ZoomMedia from './ZoomMedia'
+import { openPdf } from './PdfViewer'
+import { isPdf } from '../lib/pdf'
 import {
   MediaKind, MediaCounts, MediaItem, MediaFileItem, LinkItem, Me,
   MEDIA_TABS, canReview, chatInfoApi, chatFileUrl, fileExt, fmtDay, fmtClock, periodLabel, groupRuns,
@@ -129,7 +131,12 @@ function audioKindOf(it: MediaFileItem) {
 // Viewing never downloads: ?download=1 is only ever added by a Download button.
 // In the phone app a new tab is the browser: the file is downloaded and opened
 // in the phone's own viewer instead (lib/saveFile).
-function openFile(id: string, name: string) {
+// A PDF opens in the app's own viewer (PdfViewer), as on its message.
+function openFile(id: string, name: string, onShow?: () => void) {
+  if (isPdf({ name })) {
+    openPdf({ id: 'chat:' + id, url: chatFileUrl(id), downloadUrl: chatFileUrl(id, true), saveKey: 'chat:' + id, name: name || 'Document.pdf', onShowInChat: onShow })
+    return
+  }
   if (nativeFiles()) { downloadFile({ url: chatFileUrl(id, true), name, key: 'chat:' + id }); return }
   window.open(chatFileUrl(id), '_blank', 'noopener')
 }
@@ -705,7 +712,7 @@ function FileRow({ it, meId, onShow }: { it: MediaFileItem; meId: string; onShow
   const sub = [fmtBytes(it.size), ext === 'FILE' ? '' : ext, who(it, meId), dayOf(it.created_at)].filter(Boolean).join(' · ')
   return (
     <div className="ci-media-li" data-mid={it.id}>
-      <button type="button" className="ci-row" onClick={() => openFile(it.id, name)} title={`Open ${name}`}>
+      <button type="button" className="ci-row" onClick={() => openFile(it.id, name, onShow)} title={`Open ${name}`}>
         <span className={'ci-media-ext ci-media-ext-' + (EXT_FAMILY[ext] || 'other')} aria-hidden="true">{ext}</span>
         <span className="ci-row-main">
           <span className="ci-row-title">{name}</span>

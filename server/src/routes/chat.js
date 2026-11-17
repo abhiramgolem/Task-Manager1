@@ -367,7 +367,11 @@ export function shapeMessage(row, viewerId, ctx = {}) {
     forwarded: !!row.forwarded,
     reply_to: row.reply_to || null,
     reply: replyPreview,
-    file: row.file_stored ? { name: row.file_name, type: row.file_type, size: row.file_size } : null,
+    file: row.file_stored ? {
+      name: row.file_name, type: row.file_type, size: row.file_size,
+      // A PDF's first page, sent with it (saveThumb): at /file/:id/thumb.
+      ...(row.file_thumb ? { thumb: true, pages: row.file_pages || null } : {}),
+    } : null,
     // Only the sender sees it: how their phone matches its "sending" bubble to the saved message.
     ...(row.client_id && row.sender_id === viewerId ? { client_id: row.client_id } : {}),
     reactions,
@@ -603,6 +607,50 @@ r.get('/file/:messageId', (req, res) => {
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' })
   sendStoredFile(req, res, abs, { name: m.file_name, type: m.file_type, maxAge: 3600 })
 })
+
+// A PDF's first page, as a small JPEG: what the message shows instead of
+// fetching the whole PDF to draw it. Same access as the file itself.
+r.get('/file/:messageId/thumb', (req, res) => {
+  const user = (req.headers.authorization || '').startsWith('Bearer ')
+    ? verifyToken(req.headers.authorization.slice(7))
+    : verifyToken(req.query.token)
+  if (!user) return res.status(401).json({ error: 'Authentication required' })
+  const m = db.prepare('SELECT conversation_id, file_thumb, deleted_for_all FROM chat_messages WHERE id=?').get(req.params.messageId)
+  if (!m || !m.file_thumb || m.deleted_for_all) return res.status(404).json({ error: 'No preview' })
+  if (!member(m.conversation_id, user.id)) return res.status(403).json({ error: 'Forbidden' })
+  const abs = path.join(UPLOAD_DIR, m.file_thumb)
+  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'No preview' })
+  res.type('image/jpeg')
+  res.setHeader('Cache-Control', 'private, max-age=86400')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  fs.createReadStream(abs).pipe(res)
+})
+
+// The first page of a PDF, drawn by the sender's device and sent with the
+// file as a JPEG data URL (field "thumb", with "pages"), the way a voice note
+// brings its transcript. Kept only for a PDF, only if it really is a JPEG and
+// small; anything else is dropped and the message simply has no preview.
+const THUMB_MAX = 200 * 1024
+function saveThumb(mid, file, body) {
+  try {
+    const pdf = String(file?.mimetype || '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(file?.originalname || '')
+    const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(body?.thumb || ''))
+    if (!pdf || !m) return
+    const buf = Buffer.from(m[1], 'base64')
+    if (buf.length < 100 || buf.length > THUMB_MAX || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) return
+    const pages = Math.min(100000, Math.max(0, parseInt(body?.pages, 10) || 0)) || null
+    const name = id('cf') + '_t.jpg'
+    fs.writeFileSync(path.join(UPLOAD_DIR, name), buf)
+    db.prepare('UPDATE chat_messages SET file_thumb=?, file_pages=? WHERE id=?').run(name, pages, mid)
+  } catch (err) {
+    console.warn('[chat] PDF preview not kept:', err.message)
+  }
+}
+
+// Removes a message's PDF preview from disk (the row is cleared by the caller).
+function dropThumb(m) {
+  if (m?.file_thumb) try { fs.unlinkSync(path.join(UPLOAD_DIR, m.file_thumb)) } catch {}
+}
 
 // Group photo (token via header or ?token= for <img>).
 r.get('/conversations/:id/avatar', (req, res) => {
@@ -1029,8 +1077,9 @@ r.delete('/conversations/:id', (req, res) => {
   if (m.role !== 'admin') return res.status(403).json({ error: 'Only the group admin can delete the group' })
   const members = participantsOf(conv.id)
   // Remove any stored files from disk.
-  for (const f of db.prepare('SELECT file_stored FROM chat_messages WHERE conversation_id=? AND file_stored IS NOT NULL').all(conv.id)) {
+  for (const f of db.prepare('SELECT file_stored, file_thumb FROM chat_messages WHERE conversation_id=? AND file_stored IS NOT NULL').all(conv.id)) {
     if (f.file_stored) try { fs.unlinkSync(path.join(UPLOAD_DIR, f.file_stored)) } catch {}
+    dropThumb(f)
   }
   const wipe = db.transaction(() => {
     const ids = db.prepare('SELECT id FROM chat_messages WHERE conversation_id=?').all(conv.id)
@@ -1274,6 +1323,7 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   // input: it is display text, and it is capped.
   const supplied = String(req.body?.transcript || '').trim().slice(0, 5000)
   if (supplied) db.prepare('UPDATE chat_messages SET transcript=? WHERE id=?').run(supplied, mid)
+  saveThumb(mid, req.file, req.body)
   // multipart carries no arrays, so there the caption's mentions arrive as a
   // JSON string; a file sent in chunks finishes with a JSON body and a real one.
   let capMentions = []
@@ -1337,12 +1387,19 @@ r.post('/message/:id/forward', (req, res) => {
       const from = path.join(UPLOAD_DIR, src.file_stored), to = path.join(UPLOAD_DIR, storedName)
       try { fs.linkSync(from, to) } catch { try { fs.copyFileSync(from, to) } catch { storedName = null } }
     }
+    // Its first-page preview goes with it, under its own name for the same reason.
+    let thumbName = null
+    if (storedName && src.file_thumb) {
+      thumbName = id('cf') + '_t.jpg'
+      try { fs.copyFileSync(path.join(UPLOAD_DIR, src.file_thumb), path.join(UPLOAD_DIR, thumbName)) } catch { thumbName = null }
+    }
     const mid = id('msg')
     const ts = now()
     db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, kind, meta, transcript, forwarded, read, created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,?)`)
       .run(mid, conv.org_id, cid, me.id, '', src.body, storedName ? src.file_name : null, storedName, storedName ? src.file_type : null, storedName ? src.file_size : null,
         src.kind || null, src.kind ? src.meta : null, storedName ? (src.transcript || null) : null, ts)
+    if (thumbName) db.prepare('UPDATE chat_messages SET file_thumb=?, file_pages=? WHERE id=?').run(thumbName, src.file_pages || null, mid)
     const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(mid)
     deliver(conv, row, me)
     sent.push(cid)
@@ -1360,13 +1417,14 @@ r.delete('/message/:id', (req, res) => {
   if (!m || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
   const record = m.kind === 'system' || m.call_id || m.meeting_id
   if (m.sender_id === me.id && req.query.scope !== 'me' && !record) {
-    db.prepare('UPDATE chat_messages SET deleted_for_all=1, body=?, file_name=NULL, file_stored=NULL, file_type=NULL, file_size=NULL, meta=NULL, transcript=NULL, pinned_at=NULL WHERE id=?').run('', m.id)
+    db.prepare('UPDATE chat_messages SET deleted_for_all=1, body=?, file_name=NULL, file_stored=NULL, file_type=NULL, file_size=NULL, file_thumb=NULL, file_pages=NULL, meta=NULL, transcript=NULL, pinned_at=NULL WHERE id=?').run('', m.id)
     db.prepare('DELETE FROM chat_reactions WHERE message_id=?').run(m.id)
     db.prepare('DELETE FROM chat_poll_votes WHERE message_id=?').run(m.id)
     db.prepare('DELETE FROM chat_polls WHERE message_id=?').run(m.id)
     db.prepare('DELETE FROM chat_mentions WHERE message_id=?').run(m.id)
     removeEmbedding('chat', m.id) // unsent message leaves the RAG index
     if (m.file_stored) try { fs.unlinkSync(path.join(UPLOAD_DIR, m.file_stored)) } catch {}
+    dropThumb(m)
     pushToConversation(m.conversation_id, { type: 'delete', conversationId: m.conversation_id, id: m.id, scope: 'all' })
     if (m.pinned_at) pushToConversation(m.conversation_id, { type: 'pin', conversationId: m.conversation_id, id: m.id, pinned: false })
   } else {

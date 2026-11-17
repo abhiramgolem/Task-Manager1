@@ -208,7 +208,7 @@ export default function NotificationBell() {
               >
                 <NotifIcon type={n.type} />
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ lineHeight: 1.4 }}>{n.message}</div>
+                  <div className="notif-msg">{n.message}</div>
                   <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{new Date(n.created_at).toLocaleString()}</div>
                 </div>
                 {!n.read && <span className="notif-unread-dot" title="Unread" />}
