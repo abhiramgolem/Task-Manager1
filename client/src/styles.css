@@ -2376,7 +2376,7 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 .composer-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(242,98,46,.12); }
 
 /* ---- Message formatting ------------------------------------------------------ */
-.msg-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; background: rgba(100,116,139,.16); padding: 1px 5px; border-radius: 5px; }
+.msg-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; background: rgba(100,116,139,.16); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
 .bubble.user .msg-code { background: rgba(255,255,255,.22); }
 .msg-pre {
   margin: 5px 0 2px; padding: 9px 11px; border-radius: 9px; overflow-x: auto;
@@ -2556,7 +2556,11 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 .chat-file-dl { border: none; background: rgba(0,0,0,.08); color: inherit; cursor: pointer; width: 26px; height: 26px; border-radius: 50%; font-size: 13px; flex-shrink: 0; }
 .bubble.user .chat-file-dl { background: rgba(255,255,255,.25); }
 .bubble.deleted { background: transparent; border: 1px dashed var(--border); color: var(--muted); font-style: italic; font-size: 12.5px; }
-.bubble-text { white-space: pre-wrap; }
+/* overflow-wrap: a word with no space in it (a key, a hash, a long code) breaks
+   at the bubble's edge instead of running out past it. "anywhere", not
+   "break-word": the bubble is fit-content, and only "anywhere" lets that
+   width shrink below the long word. */
+.bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* WhatsApp meta trick: an invisible inline spacer reserves the exact time+ticks
    width on the last line, while the real time+ticks sit absolutely in the corner. */
 .bubble-foot-spacer { display: inline-flex; align-items: center; gap: 4px; visibility: hidden; margin-left: 10px; font-size: 10.5px; white-space: nowrap; }
@@ -3132,8 +3136,13 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .notif-panel {
   position: absolute; right: 0; top: calc(100% + 8px);
   width: 330px; max-height: 420px; overflow-y: auto;
+  /* Never sideways: one notification with a long unbroken word (a link, a
+     task title with no spaces) made the whole list wider than the panel, and
+     on a phone it slid left and right under the finger, cutting every row. */
+  overflow-x: hidden; overscroll-behavior: contain;
   z-index: 100; box-shadow: 0 10px 30px rgba(0, 0, 0, .15);
 }
+.notif-msg { line-height: 1.4; overflow-wrap: anywhere; }
 /* On phones the bell is ~60px in from the screen edge (the profile avatar sits
    to its right), so a 330px panel anchored to it hangs off the LEFT edge —
    29px of it at 360px wide. Shift it out over that unused gutter, and let it
@@ -4271,6 +4280,9 @@ body.chats-page .content { max-width: none; }
   background: color-mix(in srgb, var(--primary) 14%, var(--surface)); color: var(--primary); font-size: 10px; font-weight: 800; letter-spacing: .03em;
 }
 .stage-ic.audio { background: color-mix(in srgb, #22c55e 16%, var(--surface)); color: #16a34a; }
+/* A PDF in the tray: its first page, as a little page, in the badge's place. */
+.stage-ic.stage-pdf { width: 64px; height: 40px; border-radius: 4px; overflow: hidden; background: #fff; box-shadow: inset 0 0 0 1px var(--border); }
+.stage-ic.stage-pdf img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
 .stage-meta { min-width: 0; display: flex; flex-direction: column; }
 .stage-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stage-size { font-size: 11.5px; color: var(--muted); }
@@ -4929,6 +4941,30 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .mv-nav.prev { left: 12px; } .mv-nav.next { right: 12px; }
 .mv-caption { flex-shrink: 0; max-height: 28vh; overflow-y: auto; padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); text-align: center; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; background: rgba(0,0,0,.35); touch-action: pan-y; overscroll-behavior: contain; }
 @media (hover: none) { .mv-nav { display: none; } }
+
+/* ---- PDF viewer (PdfViewer.tsx) -------------------------------------------
+   The photo viewer's dark screen and bar, with the pages scrolling down it.
+   The overlay's touch-action:none would stop that scroll, so it is lifted
+   here; the stage takes pinch itself (pan only, never the WebView's zoom). */
+.mv-overlay.pdfv { touch-action: auto; }
+.pdfv .mv-btn:disabled { opacity: .35; cursor: default; background: transparent; }
+/* On a touch screen pinch and double-tap zoom, as in WhatsApp's viewer; the
+   buttons would only crowd the file's name out of a phone's narrow bar. */
+@media (hover: none) and (pointer: coarse) { .pdfv .pdfv-zoom { display: none; } }
+.pdfv-stage { position: relative; flex: 1; min-height: 0; overflow: auto; touch-action: pan-x pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.pdfv-pages { margin: 4px auto calc(16px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 10px; will-change: transform; }
+.pdfv-page { position: relative; flex-shrink: 0; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
+.pdfv-page canvas { display: block; width: 100%; height: 100%; }
+.pdfv-msg { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; font-size: 14px; line-height: 1.5; }
+.pdfv-msg p { margin: 0; max-width: 340px; opacity: .85; }
+
+/* A PDF on a message: the top of its first page over the file's row, as
+   WhatsApp shows a document. A fixed width, since the bubble sizes to it. */
+.pdf-doc { width: 270px; max-width: 100%; }
+.pdf-thumb { display: block; width: 100%; aspect-ratio: 1 / .56; margin: 0 0 7px; padding: 0; border: 0; border-radius: 7px; overflow: hidden; background: #fff; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); }
+.pdf-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.pdf-thumb-wait { display: grid; place-items: center; width: 100%; height: 100%; color: #64748b; }
+.chat-file-open { cursor: pointer; }
 
 /* ---- Chat info panel (WhatsApp-style group / contact info) ----------------
    Opened from the chat header's photo, name or ⓘ, and from a list row's

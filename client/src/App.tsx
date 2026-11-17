@@ -23,6 +23,7 @@ import VoiceAssistant from './components/VoiceAssistant'
 import ToastHost from './components/ToastHost'
 import InAppChatAlert from './components/InAppChatAlert'
 import ConfirmHost from './components/ConfirmHost'
+import { PdfViewerHost } from './components/PdfViewer'
 import CallCenter from './components/CallCenter'
 import QuickInvite from './components/QuickInvite'
 import EmailCodeEntry from './components/EmailCodeEntry'
@@ -678,6 +679,7 @@ export default function App() {
     <ToastHost />
     <InAppChatAlert />
     <ConfirmHost />
+    <PdfViewerHost />
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/signup" element={user ? <Navigate to="/" replace /> : <Signup />} />

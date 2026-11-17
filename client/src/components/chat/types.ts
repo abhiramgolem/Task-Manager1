@@ -21,7 +21,8 @@ export interface Reaction { emoji: string; user_id: string }
 export interface MentionRef { id: string; name: string }
 // `from`: the group a privately-answered message came from ("Reply privately").
 export interface ReplyPreview { id: string; sender_id: string; sender_name: string; text: string; image?: boolean; from?: string | null; conversation_id?: string }
-export interface ChatFile { name: string; type?: string; size?: number }
+// thumb/pages: a PDF's first page, sent with it by the sender (at thumbUrl).
+export interface ChatFile { name: string; type?: string; size?: number; thumb?: boolean; pages?: number | null }
 // A finished call leaves a line in the thread instead of a chat bubble.
 export interface CallInfo { id: string; kind: 'audio' | 'video'; status: string; started_by: string; duration_sec: number; joined: number }
 // The audit a transcribed call leaves behind, shown where the call happened —
@@ -47,6 +48,8 @@ export interface Msg {
   reactions: Reaction[]; mentions?: MentionRef[]; starred: boolean; seen: boolean; delivered?: boolean; deleted?: boolean; uploading?: boolean; progress?: number
   // Local only: a message of mine the server has not saved (lib/outbox.ts).
   failed?: boolean; failReason?: string | null; client_id?: string
+  // A PDF still on its way: its first page, drawn here, so the bubble shows it while it sends.
+  localThumb?: string; localPages?: number
   pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null; meeting?: MeetingCard | null
   system?: string | null; poll?: Poll | null; task?: TaskRef | null; location?: LocationRef | null; contact?: ContactRef | null
   update?: UpdateMeta | null
@@ -71,6 +74,7 @@ export type Workload = Record<string, { open: number; overdue: number }>
 // The file behind a message. API_BASE matters on the Android app, where the
 // page is served from the phone itself and a bare /api path goes nowhere.
 export const fileUrl = (m: { id: string }, download = false) => `${API_BASE}/api/chat/file/${m.id}?token=${getToken()}${download ? '&download=1' : ''}`
+export const thumbUrl = (m: { id: string }) => `${API_BASE}/api/chat/file/${m.id}/thumb?token=${getToken()}`
 export const isImage = (f?: ChatFile | null) => !!f && (f.type || '').startsWith('image/')
 // The MIME decides; only a missing or generic type falls back to the name,
 // where a .webm is a recording if the app named it one (voice-note…,

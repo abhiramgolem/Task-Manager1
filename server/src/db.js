@@ -1406,6 +1406,11 @@ export function initSchema() {
   // and gets the message that already exists instead of posting it twice.
   ensureColumn('chat_messages', 'client_id', 'TEXT')
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_client ON chat_messages(sender_id, client_id) WHERE client_id IS NOT NULL')
+  // A PDF's first page, drawn on the sender's device and sent with the file,
+  // as WhatsApp does: everyone sees it at once without fetching the PDF.
+  // file_thumb is its name on disk beside the file; file_pages the page count.
+  ensureColumn('chat_messages', 'file_thumb', 'TEXT')
+  ensureColumn('chat_messages', 'file_pages', 'INTEGER')
 }
 
 // Run a migration body exactly once, tracked by a key in app_meta.

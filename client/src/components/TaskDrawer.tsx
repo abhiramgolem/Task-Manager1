@@ -5,6 +5,8 @@ import { useAuth } from '../auth'
 import { PriorityBadge, StatusBadge, CategoryBadge, Avatar, ConfidenceTag, Evidence, Ic, dueLabel, fmtDateTime, fmtBytes, PRIORITY_COLORS, AutoTextarea, enterSends } from '../ui'
 import CategorySelect from './CategorySelect'
 import PhotoViewer from './PhotoViewer'
+import { openPdf } from './PdfViewer'
+import { isPdf } from '../lib/pdf'
 import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { onDownloadLink } from '../lib/saveFile'
@@ -697,7 +699,11 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                       ) : isVid ? (
                         <video className="attach-thumb" src={taskAttachmentUrl(a.id)} controls preload="metadata" />
                       ) : (
-                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb attach-thumb-file" onClick={onDownloadLink(taskAttachmentUrl(a.id, true), a.filename, 'task:' + a.id)}>
+                        // A PDF opens in the app's own viewer (PdfViewer) rather than a tab or a download.
+                        <a href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="attach-thumb attach-thumb-file"
+                          onClick={isPdf({ name: a.filename, type: a.file_type || '' })
+                            ? (e) => { e.preventDefault(); openPdf({ id: 'task:' + a.id, url: taskAttachmentUrl(a.id), downloadUrl: taskAttachmentUrl(a.id, true), saveKey: 'task:' + a.id, name: a.filename, subtitle: fmtBytes(a.file_size) }) }
+                            : onDownloadLink(taskAttachmentUrl(a.id, true), a.filename, 'task:' + a.id)}>
                           <Ic name="doc" size={26} />
                           {/* XLSX, ZIP, DOCX… — without it every non-picture file is the same icon. */}
                           {fileExt(a.filename) && <span className="attach-ext">{fileExt(a.filename)}</span>}

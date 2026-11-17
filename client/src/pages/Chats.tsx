@@ -26,7 +26,7 @@ import { typeInto, flashPress, pause, settle, findVaEl } from '../voice/uiContro
 import TaskDrawer from '../components/TaskDrawer'
 import { setOpenChat } from '../components/InAppChatAlert'
 import type { Member, Conversation, MentionRef, ChatFile, Msg, OrgUser, LocationRef, Poll } from '../components/chat/types'
-import { fileUrl, isAudio, isEditable, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
+import { fileUrl, thumbUrl, isAudio, isEditable, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
 import ChatVideo from '../components/chat/ChatVideo'
 import {
   CopyGlyph, Ticks, PollGlyph, TrendGlyph, PinDropGlyph, ContactGlyph, CameraGlyph, GalleryGlyph, DocGlyph, TaskGlyph,
@@ -38,6 +38,8 @@ import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPi
 import MediaViewer from '../components/chat/MediaViewer'
 import { UpdateCard, UpdateSheet, TodayUpdates } from '../components/chat/DailyUpdate'
 import PhotoViewer from '../components/PhotoViewer'
+import { PdfDocPreview, openPdf } from '../components/PdfViewer'
+import { isPdf, thumbForUpload, thumbWithin, type SentThumb } from '../lib/pdf'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
 import ChatInfoPanel from '../components/ChatInfoPanel'
 import InChip from '../components/attendance/InChip'
@@ -485,6 +487,8 @@ export default function Chats() {
   // ...and once one is picked, waiting for that chat to open.
   const pendingShareRef = useRef<Shared | null>(null)
   const [staged, setStaged] = useState<StagedFile[]>([])
+  // A staged PDF's first page, by tray id, once drawn (thumbForUpload).
+  const [stagedThumbs, setStagedThumbs] = useState<Record<string, SentThumb>>({})
   const stagedRef = useRef<StagedFile[]>([])
   stagedRef.current = staged
   // Which staged file the box is captioning: the one tapped, else the first.
@@ -1655,10 +1659,16 @@ export default function Chats() {
     const room = MAX_STAGED - stagedRef.current.length
     if (ok.length > room) { toast.info(`Up to ${MAX_STAGED} files at a time`); ok = ok.slice(0, Math.max(0, room)) }
     if (!ok.length) return
-    setStaged((cur) => [...cur, ...ok.map((file) => ({
+    const adding = ok.map((file) => ({
       id: Math.random().toString(36).slice(2), file, caption: '',
       url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
-    }))])
+    }))
+    setStaged((cur) => [...cur, ...adding])
+    // A PDF's first page is drawn now, so the tray shows it and it is ready
+    // to go with the file the moment Send is pressed.
+    for (const a of adding) {
+      if (isPdf(a.file)) thumbForUpload(a.file).then((t) => { if (t) setStagedThumbs((m) => ({ ...m, [a.id]: t })) })
+    }
     setAttachMenu(false)
     // Straight back to the box, where the caption goes.
     requestAnimationFrame(() => inputRef.current?.focus())
@@ -1666,6 +1676,7 @@ export default function Chats() {
   const unstage = (id: string) => {
     const gone = stagedRef.current.find((s) => s.id === id)
     if (gone?.url) URL.revokeObjectURL(gone.url)
+    forgetStaged([id])
     const rest = stagedRef.current.filter((s) => s.id !== id)
     // The caption goes with its picture. The last one out leaves the words in
     // the box, where they are now just a message.
@@ -1718,10 +1729,17 @@ export default function Chats() {
   // A file's optimistic "Sending…" line, put in the thread the moment it is
   // sent rather than when its turn in the upload queue comes, so the thread
   // reads in the order things were sent.
+  const thumbFields = async (file: File) => {
+    const th = await thumbWithin(file)
+    return th ? { thumb: th.data, pages: th.pages } : {}
+  }
   const addPending = (conv: Conversation, file: File, caption: string) => {
     const clientId = newClientId()
     const tmpId = 'tmp_' + clientId
     setMessages((m) => [...m, { id: tmpId, client_id: clientId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }])
+    // A PDF shows its first page while it goes, as on WhatsApp (drawn when it
+    // was picked, so normally already there).
+    if (isPdf(file)) thumbForUpload(file).then((t) => { if (t) setMessages((p) => p.map((x) => (x.id === tmpId ? { ...x, localThumb: t.data, localPages: t.pages } : x))) })
     return tmpId
   }
 
@@ -1743,6 +1761,9 @@ export default function Chats() {
     if (o.replyTo) form.append('replyTo', o.replyTo)
     if (o.mentions?.length) form.append('mentions', JSON.stringify(o.mentions))
     if (o.transcript) form.append('transcript', o.transcript)
+    // A PDF's first page goes with it, so nobody else has to fetch the PDF to see it.
+    const th = await thumbWithin(file)
+    if (th) { form.append('thumb', th.data); form.append('pages', String(th.pages)) }
     form.append('file', file)
     return new Promise<Msg>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
@@ -1796,7 +1817,7 @@ export default function Chats() {
     try {
       const uploadId = file.size > CHUNKED_FROM ? await sendInChunks(file, 'chat', progress) : null
       const data: Msg = uploadId
-        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions, client_id: clientId })
+        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions, client_id: clientId, ...await thumbFields(file) })
         : await sendWhole(conv.id, file, { caption, replyTo: rep?.id || null, mentions: capMentions, clientId, progress })
       setMessages((prev) => settleTmp(prev, tmpId, data))
       return true
@@ -1824,6 +1845,7 @@ export default function Chats() {
     const rep = replyTo
     const mentionsOf = (caption: string) => (caption ? resolveMentions(caption, picked, conv.members, user!.id) : [])
     setStaged([]); setCapId(null); setInput(''); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
+    forgetStaged(items.map((it) => it.id))
     const pending = items.map((it) => addPending(conv, it.file, it.caption))
     uploadQueue.current = uploadQueue.current.then(async () => {
       const failed: StagedFile[] = []
@@ -2519,6 +2541,36 @@ export default function Chats() {
     setMenuId(null)
     saveFile({ url: fileUrl(m, true), name: m.file?.name || 'file', mime: m.file?.type, key: 'chat:' + m.id })
   }
+  const openChatPdf = (m: Msg) => openPdf({
+    id: 'chat:' + m.id, url: fileUrl(m), downloadUrl: fileUrl(m, true), saveKey: 'chat:' + m.id,
+    name: m.file?.name || 'Document.pdf', subtitle: senderName(m.sender_id),
+    onForward: isForwardable(m) ? () => setForwardMsgs([m]) : undefined,
+  })
+  // A PDF in the tray, read through before it is sent. Nothing to download: it is on this device.
+  const stagedPdfUrls = useRef(new Map<string, string>())
+  const openStagedPdf = (s: StagedFile) => {
+    let url = stagedPdfUrls.current.get(s.id)
+    if (!url) { url = URL.createObjectURL(s.file); stagedPdfUrls.current.set(s.id, url) }
+    openPdf({ id: 'staged:' + s.id, url, downloadUrl: url, name: s.file.name, subtitle: 'Not sent yet', local: true })
+  }
+  // Out of the tray (removed or sent): its page and its address go with it.
+  const forgetStaged = (ids: string[]) => {
+    for (const id of ids) {
+      const u = stagedPdfUrls.current.get(id)
+      if (u) { URL.revokeObjectURL(u); stagedPdfUrls.current.delete(id) }
+    }
+    setStagedThumbs((m) => { const n = { ...m }; for (const id of ids) delete n[id]; return n })
+  }
+  // A file's row: its type badge, name and size, and Download. A PDF's says
+  // how many pages it has once its first page is drawn, and opens on a tap.
+  const fileRow = (m: Msg, local: boolean, pages?: number, onOpen?: () => void) => (
+    <div className={'chat-file' + (onOpen ? ' chat-file-open' : '')}
+      onClick={onOpen ? (e) => { e.stopPropagation(); onOpen() } : undefined}>
+      <span className="chat-file-icon" data-kind={fileKind(m.file?.name)}>{m.failed ? <Ic name="warning" size={18} /> : m.uploading ? <Ic name="clock" size={18} /> : fileKind(m.file?.name) ? fileKind(m.file?.name).toUpperCase() : <DocGlyph size={20} />}</span>
+      <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.failed ? 'Not sent' : m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [pages ? `${pages} page${pages === 1 ? '' : 's'}` : '', fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
+      {!local && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={(e) => { if (onOpen) e.stopPropagation(); download(m) }}><Ic name="download" size={14} /></button>}
+    </div>
+  )
   // Over a photo or video in the thread. Files had their own Download, but a
   // picture's was in the ⋯ menu or behind a long-press, and a video's nowhere
   // else, so "there is no way to download it" was the report. stopPropagation
@@ -3738,11 +3790,15 @@ export default function Chats() {
                                   <ChatVideo id={m.id} src={fileUrl(m)} size={m.file.size} sizeLabel={fmtSize(m.file.size)} name={m.body || m.file.name} onOpen={() => setViewerAt(m.id)} />
                                   {mediaDl(m)}
                                 </div>
-                              : <div className="chat-file">
-                                  <span className="chat-file-icon" data-kind={fileKind(m.file?.name)}>{m.failed ? <Ic name="warning" size={18} /> : m.uploading ? <Ic name="clock" size={18} /> : fileKind(m.file?.name) ? fileKind(m.file?.name).toUpperCase() : <DocGlyph size={20} />}</span>
-                                  <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.failed ? 'Not sent' : m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
-                                  {!local && <button className="chat-file-dl" title="Download" aria-label="Download" onClick={() => download(m)}><Ic name="download" size={14} /></button>}
-                                </div>)}
+                              : isPdf(m.file) && !local
+                                // A PDF opens in the app, its first page on the message (PdfViewer).
+                                ? <PdfDocPreview fileKey={'chat:' + m.id} url={fileUrl(m)} size={m.file.size} onOpen={() => openChatPdf(m)}
+                                    thumb={m.file.thumb ? thumbUrl(m) : undefined} pages={m.file.pages}
+                                    meta={(pages) => fileRow(m, local, pages, () => openChatPdf(m))} />
+                                : local && m.localThumb
+                                  // Still sending: the page drawn here when it was picked.
+                                  ? <div className="pdf-doc"><div className="pdf-thumb"><img src={m.localThumb} alt="" draggable={false} /></div>{fileRow(m, local, m.localPages)}</div>
+                                  : fileRow(m, local))}
                           {!m.file && !m.kind && !isTemp && /https?:\/\//i.test(body) && <LinkPreview messageId={m.id} version={m.edited_at || ''} />}
                           {shownBody && <MessageText body={shownBody} mentions={m.mentions} meId={user!.id} fromMe={mine} highlight={inSearch} />}
                           {folded && <button type="button" className="read-more" onClick={(e) => { e.stopPropagation(); setUnfolded((s) => new Set(s).add(m.id)) }}>Read more</button>}
@@ -3901,17 +3957,23 @@ export default function Chats() {
                       ? (sel ? (s.url ? `View ${s.file.name}` : `Writing the caption for ${s.file.name}`) : `Write the caption for ${s.file.name}`)
                       : `View ${s.file.name}`
                     const audio = isAudio({ name: s.file.name, type: s.file.type })
+                    // A PDF shows its first page in place of the badge, and how many pages it has.
+                    const pdfTop = stagedThumbs[s.id]
                     const fileCard = (<>
-                      <span className={'stage-ic' + (audio ? ' audio' : '')}>
-                        {audio ? <Ic name="mic" size={16} /> : (/\.([a-z0-9]{1,5})$/i.exec(s.file.name)?.[1] || 'FILE').toUpperCase()}
-                      </span>
-                      <span className="stage-meta"><span className="stage-name">{s.file.name}</span><span className="stage-size">{fmtSize(s.file.size)}</span></span>
+                      {pdfTop ? <span className="stage-ic stage-pdf"><img src={pdfTop.data} alt="" /></span> : (
+                        <span className={'stage-ic' + (audio ? ' audio' : '')}>
+                          {audio ? <Ic name="mic" size={16} /> : (/\.([a-z0-9]{1,5})$/i.exec(s.file.name)?.[1] || 'FILE').toUpperCase()}
+                        </span>
+                      )}
+                      <span className="stage-meta"><span className="stage-name">{s.file.name}</span><span className="stage-size">{[pdfTop ? `${pdfTop.pages} page${pdfTop.pages === 1 ? '' : 's'}` : '', fmtSize(s.file.size)].filter(Boolean).join(' · ')}</span></span>
                     </>)
                     return (
                     <div key={s.id} className={'stage-item' + (s.url ? ' pic' : '') + (sel ? ' sel' : '')} title={said ? `${s.file.name}: ${said}` : s.file.name}>
                       {s.url ? <button type="button" className="stage-open" onClick={() => (staged.length > 1 ? pickStaged(s.id) : setStagedAt(s.id))} aria-label={label} aria-pressed={staged.length > 1 ? sel : undefined}><img src={s.url} alt="" /></button>
                         : staged.length > 1 ? (
                           <button type="button" className="stage-open stage-file" onClick={() => pickStaged(s.id)} aria-label={label} aria-pressed={sel}>{fileCard}</button>
+                        ) : pdfTop ? (
+                          <button type="button" className="stage-open stage-file" onClick={() => openStagedPdf(s)} aria-label={`View ${s.file.name}`}>{fileCard}</button>
                         ) : fileCard}
                       {staged.length > 1 && <span className="stage-num" aria-hidden="true">{i + 1}</span>}
                       {said && !sel && <span className="stage-said" aria-hidden="true" title={said}><Ic name="chat" size={10} /></span>}
