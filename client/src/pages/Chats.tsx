@@ -40,6 +40,7 @@ import { UpdateCard, UpdateSheet, TodayUpdates } from '../components/chat/DailyU
 import PhotoViewer from '../components/PhotoViewer'
 import { PdfDocPreview, openPdf } from '../components/PdfViewer'
 import { isPdf, thumbForUpload, thumbWithin, type SentThumb } from '../lib/pdf'
+import { sending, aborts, emitUpload, onUpload, startUpload, progressOf, liveBubbles, inFlight, sendingIn, type UploadEvent } from '../lib/liveUploads'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
 import ChatInfoPanel from '../components/ChatInfoPanel'
 import InChip from '../components/attendance/InChip'
@@ -829,25 +830,42 @@ export default function Chats() {
   // the box (where it used to land in whichever chat was open by then), never
   // thrown away. Retrying reuses the message's client id, so the server returns
   // the copy it already has instead of posting a second one.
-  const sendingRef = useRef(new Set<string>())
+  // App-wide (lib/liveUploads), so a chat opened again while a file is still
+  // going up knows it is, instead of showing it "Not sent" and sending it twice.
+  const sendingRef = useRef(sending)
   const sendChain = useRef<Promise<unknown>>(Promise.resolve())
-  const uploadAborts = useRef(new Map<string, () => void>())
+  const uploadAborts = useRef(aborts)
   const outBubble = (it: OutItem): Msg => ({
     id: 'tmp_' + it.clientId, client_id: it.clientId, conversation_id: it.convId, sender_id: it.userId, body: it.body,
     created_at: it.createdAt, reactions: [], starred: false, seen: false, reply: it.reply || null, reply_to: it.replyTo || null,
     transcript: it.transcript || null,
     file: it.fileName ? { name: it.fileName, type: it.fileType || '', size: it.fileSize || 0 } : null,
-    uploading: sendingRef.current.has(it.clientId) && it.kind === 'file',
+    uploading: sendingRef.current.has(it.clientId) && it.kind === 'file', progress: progressOf(it.clientId),
     failed: !sendingRef.current.has(it.clientId), failReason: it.error || null,
   })
   const setBubble = (clientId: string, patch: Partial<Msg>) =>
     setMessages((prev) => prev.map((x) => (x.id === 'tmp_' + clientId ? { ...x, ...patch } : x)))
+  // An upload's progress and end, from wherever it was started (lib/liveUploads).
+  const onUploadEvent = (e: UploadEvent) => {
+    const tmpId = 'tmp_' + e.clientId
+    if (e.type === 'progress') setBubble(e.clientId, { progress: e.pct, uploading: true, failed: false })
+    else if (e.type === 'failed') setBubble(e.clientId, { failed: true, uploading: false, progress: undefined, failReason: e.reason })
+    else if (e.type === 'gone') setMessages((prev) => prev.filter((x) => x.id !== tmpId))
+    else {
+      if (e.convId === activeIdRef.current) setMessages((prev) => settleTmp(prev, tmpId, e.msg))
+      loadConvosSoon()
+    }
+  }
+  const uploadEventRef = useRef(onUploadEvent)
+  uploadEventRef.current = onUploadEvent
+  useEffect(() => onUpload((e) => uploadEventRef.current(e)), [])
 
   // Send one outbox item. Resolves true when the server has it.
   const postOut = async (it: OutItem): Promise<boolean> => {
     if (!outboxGet(it.clientId)) return true      // already sent (a retry raced the first try)
     if (sendingRef.current.has(it.clientId)) return false
     sendingRef.current.add(it.clientId)
+    if (it.kind === 'file') startUpload(it.clientId, it.convId, { name: it.fileName || '', size: it.fileSize || 0 })
     setBubble(it.clientId, { failed: false, failReason: null, uploading: it.kind === 'file' })
     try {
       let saved: Msg
@@ -859,21 +877,21 @@ export default function Chats() {
         let shown = -1
         saved = await sendWhole(it.convId, file, {
           caption: it.body, replyTo: it.replyTo || null, mentions: it.mentions || [], clientId: it.clientId, transcript: it.transcript || null,
-          progress: (pct) => { if (pct !== shown) { shown = pct; setBubble(it.clientId, { progress: pct }) } },
+          progress: (pct) => { if (pct !== shown) { shown = pct; emitUpload({ clientId: it.clientId, convId: it.convId, type: 'progress', pct }) } },
         })
       }
       outboxRemove(it.clientId)
-      if (it.convId === activeIdRef.current) setMessages((prev) => settleTmp(prev, 'tmp_' + it.clientId, saved))
-      loadConvosSoon()
+      // To whichever Chats is open now (onUploadEvent), not only the one that started it.
+      emitUpload({ clientId: it.clientId, convId: it.convId, type: 'saved', msg: saved })
       return true
     } catch (e: any) {
-      if (e?.cancelled) { outboxRemove(it.clientId); setMessages((prev) => prev.filter((x) => x.id !== 'tmp_' + it.clientId)); return false }
+      if (e?.cancelled) { outboxRemove(it.clientId); emitUpload({ clientId: it.clientId, convId: it.convId, type: 'gone' }); return false }
       // The server said no for good (removed from the group, file too big):
       // not retried by itself, and the bubble says why. Anything else — no
       // network, a restart, a timeout — waits and goes again on reconnect.
       const permanent = e instanceof ApiError && !e.offline && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429
       if (outboxGet(it.clientId)) outboxPut({ ...it, error: permanent ? e.message : null })
-      setBubble(it.clientId, { failed: true, uploading: false, progress: undefined, failReason: permanent ? e.message : null })
+      emitUpload({ clientId: it.clientId, convId: it.convId, type: 'failed', reason: permanent ? e.message : null })
       return false
     } finally {
       sendingRef.current.delete(it.clientId)
@@ -940,7 +958,10 @@ export default function Chats() {
       const local = prev.filter((x) => x.id.startsWith('tmp_') && x.conversation_id === cid && !freshClient.has(x.client_id || ''))
       const onScreen = new Set(local.map((x) => x.id))
       const waiting = user ? outboxFor(user.id, cid).filter((it) => !onScreen.has('tmp_' + it.clientId) && !freshClient.has(it.clientId)).map(outBubble) : []
-      return [...older, ...fresh, ...[...local, ...waiting].sort((a, b) => a.created_at.localeCompare(b.created_at))]
+      waiting.forEach((x) => onScreen.add(x.id))
+      // Files still going up (or queued behind one) since before this chat was opened again.
+      const going = liveBubbles(cid).filter((x) => !onScreen.has(x.id) && !freshClient.has(x.client_id || ''))
+      return [...older, ...fresh, ...[...local, ...waiting, ...going].sort((a, b) => a.created_at.localeCompare(b.created_at))]
     })
     // Older pages kept on screen keep their own "load more" answer.
     if (!older.length) setHasMore(!!d.has_more)
@@ -1130,7 +1151,9 @@ export default function Chats() {
             const local = cur.filter((x) => x.id.startsWith('tmp_'))
             const shown = new Set(local.map((x) => x.id))
             const waiting = outboxFor(user.id, opening).filter((it) => !shown.has('tmp_' + it.clientId)).map(outBubble)
-            return [...(Array.isArray(c) ? c : []), ...[...local, ...waiting].sort((a, b) => a.created_at.localeCompare(b.created_at))]
+            waiting.forEach((x) => shown.add(x.id))
+            const going = liveBubbles(opening).filter((x) => !shown.has(x.id))
+            return [...(Array.isArray(c) ? c : []), ...[...local, ...waiting, ...going].sort((a, b) => a.created_at.localeCompare(b.created_at))]
           })
         })
       }
@@ -1650,7 +1673,28 @@ export default function Chats() {
 
   // ---- files: pasted, dropped or picked ----------------------------------
   // Into the tray above the box, never straight to the room (see `staged`).
+  // The same file already on its way to this chat (left mid-upload and picked
+  // again): asked first, so it does not arrive twice without anyone meaning it.
   const stageFiles = (files: File[]) => {
+    const cid = activeIdRef.current
+    if (!files.length || !cid) return
+    const dup = files.filter((f) => inFlight(cid, f))
+    if (!dup.length) { stageNow(files); return }
+    const one = dup.length === 1
+    const pct = one ? inFlight(cid, dup[0])?.pct : undefined
+    void confirmDialog({
+      title: one ? 'Already sending' : 'Already sending these files',
+      message: one
+        ? `"${dup[0].name}" is still being sent to this chat${pct != null ? ` (${pct}%)` : ''}. It will show here when it finishes. Send it again anyway?`
+        : `${dup.length} of these files are still being sent to this chat. They will show here when they finish. Send them again anyway?`,
+      confirmText: 'Send again', cancelText: "Don't send",
+    }).then((again) => {
+      if (activeIdRef.current !== cid) return
+      const rest = again ? files : files.filter((f) => !dup.includes(f))
+      if (rest.length) stageNow(rest)
+    })
+  }
+  const stageNow = (files: File[]) => {
     if (!files.length || !activeIdRef.current) return
     if (editing) { toast.info('Finish editing the message first'); return }
     const tooBig = files.filter((f) => f.size > MAX_FILE)
@@ -1736,7 +1780,11 @@ export default function Chats() {
   const addPending = (conv: Conversation, file: File, caption: string) => {
     const clientId = newClientId()
     const tmpId = 'tmp_' + clientId
-    setMessages((m) => [...m, { id: tmpId, client_id: clientId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }])
+    const bubble: Msg = { id: tmpId, client_id: clientId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }
+    setMessages((m) => [...m, bubble])
+    // Known app-wide from now until it is sent, so leaving the chat and coming
+    // back still shows it — waiting its turn or going up.
+    startUpload(clientId, conv.id, file, bubble)
     // A PDF shows its first page while it goes, as on WhatsApp (drawn when it
     // was picked, so normally already there).
     if (isPdf(file)) thumbForUpload(file).then((t) => { if (t) setMessages((p) => p.map((x) => (x.id === tmpId ? { ...x, localThumb: t.data, localPages: t.pages } : x))) })
@@ -1812,19 +1860,22 @@ export default function Chats() {
     const progress = (pct: number) => {
       if (pct === shown) return
       shown = pct
-      setMessages((prev) => prev.map((x) => (x.id === tmpId ? { ...x, progress: pct } : x)))
+      emitUpload({ clientId, convId: conv.id, type: 'progress', pct })
     }
+    sendingRef.current.add(clientId)
     try {
       const uploadId = file.size > CHUNKED_FROM ? await sendInChunks(file, 'chat', progress) : null
       const data: Msg = uploadId
         ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions, client_id: clientId, ...await thumbFields(file) })
         : await sendWhole(conv.id, file, { caption, replyTo: rep?.id || null, mentions: capMentions, clientId, progress })
-      setMessages((prev) => settleTmp(prev, tmpId, data))
+      emitUpload({ clientId, convId: conv.id, type: 'saved', msg: data })
       return true
     } catch (err: any) {
-      setMessages((m) => m.filter((x) => x.id !== tmpId))
+      emitUpload({ clientId, convId: conv.id, type: 'gone' })
       if (!err?.cancelled) toast.error(`Could not send ${file.name}: ${err.message}`)
       return false
+    } finally {
+      sendingRef.current.delete(clientId)
     }
   }
 
@@ -3273,6 +3324,7 @@ export default function Chats() {
           {filteredConvos.map((c) => {
             const typing = typingIn[c.id]
             const draft = c.id !== activeId ? drafts[c.id] : ''
+            const going = sendingIn(c.id)
             // Ticks belong to something I sent — not to a call line or a call's summary.
             const lastTicks = c.last_from_me && c.last_kind !== 'system' && c.last_kind !== 'call' && c.last_kind !== 'meeting' && c.last_message && !/deleted this message$/.test(c.last_message)
               ? <Ticks state={c.last_seen ? 'read' : c.last_delivered ? 'delivered' : 'sent'} /> : null
@@ -3295,6 +3347,9 @@ export default function Chats() {
                   <div className="chat-contact-preview">
                     {typing ? (
                       <span className="typing-text">{c.type === 'group' ? `${typing.name.split(' ')[0]} is ` : ''}{typing.mode === 'recording' ? 'recording audio…' : 'typing…'}</span>
+                    ) : going ? (
+                      // A file still going up here: said in the list too, so nobody sends it again.
+                      <span className="sending-tag"><Ic name="clock" size={12} /> Sending {going.name}…{going.pct != null ? ` ${going.pct}%` : ''}</span>
                     ) : draft ? (
                       <><span className="draft-tag">Draft:</span> {draft}</>
                     ) : c.last_message ? (

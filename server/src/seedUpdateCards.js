@@ -74,6 +74,17 @@ const CARDS = [
     'Reviews received so far: ___',
     'Sample orders received so far: ___',
   ] },
+  // Lead quality, scored out of 5 each day (asked for 17 Nov 2026).
+  { key: 'saba', who: [['saba']], body: [
+    'Saba',
+    'DATE: {date}',
+    'LEAD QUALITY: ___/5',
+  ] },
+  { key: 'naveed', who: [['naveed'], ['navid'], ['naved']], body: [
+    'Naveed',
+    'DATE: {date}',
+    'LEAD QUALITY: ___/5',
+  ] },
   // Her sales sheet: she types each channel's sales for yesterday; CUMM SALES
   // adds them up through the month ({run:YESTERDAY}) and the total rows add
   // up the channels ({sum}). Any of them can be typed over.

@@ -1996,6 +1996,7 @@ tbody tr:hover { background: var(--n-50); }
 .chat-contact-search { width: 100%; padding: 8px 11px; border: 1px solid var(--border); border-radius: 9px; font-size: 13px; }
 .chat-contact { align-items: center; gap: 10px; }
 .chat-contact-preview { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.sending-tag { display: inline-flex; align-items: center; gap: 4px; color: var(--primary); font-weight: 600; }
 .chat-unread-badge { flex-shrink: 0; background: var(--primary); color: #fff; border-radius: 10px; font-size: 10px; font-weight: 700; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 5px; }
 .chat-peer-head { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
 /* The name column takes the slack and truncates; the action icons never shrink.
