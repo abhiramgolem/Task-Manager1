@@ -24,7 +24,16 @@ let current = null
 // it never counts, and the next run's prune clears it away.
 process.on('exit', () => { try { current?.kill('SIGKILL') } catch {} })
 
+// The worker shares the instance's memory with the server (~100 MB at its
+// peak). If the server itself is already this big, starting it could push the
+// instance over its limit and get everything restarted — so it waits instead.
+const SERVER_RSS_LIMIT_MB = Number(process.env.OFFSITE_MAX_SERVER_RSS_MB || 330)
+
 export function runOffsite(args, { timeoutMs = 45 * 60_000 } = {}) {
+  const rssMb = Math.round(process.memoryUsage().rss / 1048576)
+  if (rssMb > SERVER_RSS_LIMIT_MB) {
+    return Promise.resolve({ error: `not started: the server is using ${rssMb} MB, too much to run the upload alongside it safely` })
+  }
   return new Promise((resolve) => {
     let out = '', err = ''
     let child

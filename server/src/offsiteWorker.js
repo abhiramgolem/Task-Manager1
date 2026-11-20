@@ -3,7 +3,7 @@
 //
 // Why a separate process: the server lives in 512 MB and already peaks near 80%
 // of it. Compressing and uploading an ~850 MB database inside the server would
-// add the S3 client, zlib buffers and a 32 MB part buffer on top of that, at the
+// add the S3 client, zlib buffers and a part buffer on top of that, at the
 // one moment the app can least afford it. Out here a failure or a memory spike
 // takes down this worker, not the chat.
 //
@@ -13,7 +13,7 @@
 //
 // Format: Supabase refuses any single object over 50 MB while the project's
 // spend cap is on, and the database is far bigger. So a backup is gzipped and
-// cut into ≤ 32 MB parts:
+// cut into ≤ 16 MB parts:
 //   <prefix>/<name>/part-0001.gz … part-NNNN.gz   (concatenate, then gunzip)
 //   <prefix>/<name>/manifest.json                 (written LAST)
 // A backup without a manifest is incomplete and never counted as a copy. The
@@ -35,7 +35,10 @@ import {
   S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand,
 } from '@aws-sdk/client-s3'
 
-const PART_BYTES = 32 * 1024 * 1024
+// 16 MB parts in ONE reused buffer: this process shares the instance's 512 MB
+// with the server, so its peak is kept small (measured ~129 MB with 32 MB parts
+// and a copy per part).
+const PART_BYTES = 16 * 1024 * 1024
 const env = process.env
 const BUCKET = env.BACKUP_S3_BUCKET
 const PREFIX = (env.BACKUP_S3_PREFIX || 'db').replace(/^\/+|\/+$/g, '')
@@ -100,16 +103,18 @@ async function upload(file, name) {
   const whole = crypto.createHash('sha256')
   let originalBytes = 0
   const parts = []
-  let chunks = [], held = 0
+  const buf = Buffer.allocUnsafe(PART_BYTES)
+  let held = 0
 
   const flush = async () => {
     if (!held) return
-    const body = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, held)
-    chunks = []; held = 0
+    const body = buf.subarray(0, held)
     const n = String(parts.length + 1).padStart(4, '0')
     const key = keyFor(name, `part-${n}.gz`)
-    await put(s3, key, body)
-    parts.push({ key, bytes: body.length, sha256: sha256(body) })
+    const hash = sha256(body)
+    await put(s3, key, body) // finished sending before the buffer is reused
+    parts.push({ key, bytes: held, sha256: hash })
+    held = 0
   }
 
   await pipeline(
@@ -123,7 +128,7 @@ async function upload(file, name) {
           let off = 0
           while (off < chunk.length) {
             const take = Math.min(PART_BYTES - held, chunk.length - off)
-            chunks.push(chunk.subarray(off, off + take)); held += take; off += take
+            chunk.copy(buf, held, off, off + take); held += take; off += take
             if (held >= PART_BYTES) await flush()
           }
           done()
@@ -138,7 +143,10 @@ async function upload(file, name) {
     original_bytes: originalBytes, original_sha256: whole.digest('hex'), part_bytes: PART_BYTES, parts,
   }
   await put(s3, keyFor(name, 'manifest.json'), Buffer.from(JSON.stringify(manifest, null, 2)), 'application/json')
-  return { name, parts: parts.length, original_bytes: originalBytes, stored_bytes: parts.reduce((s, p) => s + p.bytes, 0), seconds: Math.round((Date.now() - started) / 1000) }
+  return {
+    name, parts: parts.length, original_bytes: originalBytes, stored_bytes: parts.reduce((s, p) => s + p.bytes, 0),
+    seconds: Math.round((Date.now() - started) / 1000), peak_mb: Math.round(process.resourceUsage().maxRSS / 1024),
+  }
 }
 
 async function restore(name, out) {
