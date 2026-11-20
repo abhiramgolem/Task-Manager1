@@ -4,6 +4,9 @@ import { authRequired, requirePlatformAdmin } from '../auth.js'
 import { audit } from '../util.js'
 import { usageForOrg } from '../ai/usage.js'
 import { sendUpdatePush, pushEnabled } from '../push.js'
+import { runBackup, lastBackupRun, backupRunning } from '../backup.js'
+import { offsiteEnabled } from '../offsite.js'
+import { diskStatus } from '../fileStore.js'
 
 // CROSS-ORG platform admin routes. The ONLY place that reads/writes across orgs —
 // gated to a flagged super-admin. Normal org isolation is untouched everywhere else.
@@ -129,6 +132,25 @@ r.post('/app-update', async (req, res) => {
   const out = await sendUpdatePush(build, { title, body })
   audit(req.user.org_id, req.user.id, 'platform.app_update_push', 'app', String(build), `${out.sent} of ${out.devices} phones`)
   res.json(out)
+})
+
+// Database backups (backup.js). GET: the last run and what is kept where.
+// POST: run one now instead of waiting for the night — it returns at once and
+// works in the background; poll GET for the result.
+r.get('/backup', (req, res) => {
+  const d = diskStatus()
+  res.json({
+    running: backupRunning(),
+    offsite: offsiteEnabled(),
+    last: lastBackupRun(),
+    disk: d ? { free_mb: Math.round(d.free / 1048576), total_mb: Math.round(d.total / 1048576) } : null,
+  })
+})
+r.post('/backup', (req, res) => {
+  if (backupRunning()) return res.status(409).json({ error: 'A backup is already running' })
+  audit(req.user.org_id, req.user.id, 'platform.backup_now', 'backup', '', '')
+  runBackup().catch(() => {})
+  res.status(202).json({ started: true })
 })
 
 export default r

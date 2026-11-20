@@ -87,3 +87,21 @@ services:
       # oversee ALL organizations. Synced on login; leave blank for none.
       - key: PLATFORM_ADMIN_EMAILS
         sync: false
+      # Who is emailed when the server is in trouble (disk low, backup failed,
+      # crash/out-of-memory restart, memory high) — opsAlerts.js. Comma-separated;
+      # if blank, PLATFORM_ADMIN_EMAILS get them.
+      - key: ALERT_EMAILS
+        sync: false
+      # Off-site database backups (backup.js / offsite.js): a PRIVATE bucket in any
+      # S3-compatible store. Today: Supabase Storage, project VoTask (Singapore),
+      # bucket votask-backups, key "render-smarttask-backups" (Storage → S3).
+      - key: BACKUP_S3_ENDPOINT
+        sync: false
+      - key: BACKUP_S3_REGION
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false
+      - key: BACKUP_S3_ACCESS_KEY_ID
+        sync: false
+      - key: BACKUP_S3_SECRET_ACCESS_KEY
+        sync: false

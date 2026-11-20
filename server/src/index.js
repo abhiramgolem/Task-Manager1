@@ -35,6 +35,7 @@ import mcpRoutes from './routes/mcp.js'
 import uploadRoutes from './routes/uploads.js'
 import attendanceRoutes from './routes/attendance.js'
 import { startScheduler } from './scheduler.js'
+import { markStarted, markStopped } from './opsAlerts.js'
 import { backfillChatTaskFiles } from './taskFromMessage.js'
 import { seedUpdateCards } from './seedUpdateCards.js'
 import { attachLiveTranscribe, attachAssistantLive, attachCallLive } from './ws/liveTranscribe.js'
@@ -217,6 +218,8 @@ const server = app.listen(PORT, () => {
   console.log(`  Users in DB: ${db.prepare('SELECT COUNT(*) c FROM users').get().c}`)
   // The 132cr team's daily update cards, until each one is made (seedUpdateCards.js).
   try { seedUpdateCards() } catch (e) { console.warn('  [update-cards] failed:', e.message) }
+  // Mails the operators if the last run died instead of stopping cleanly.
+  markStarted()
   startScheduler()
   console.log('')
 })
@@ -294,6 +297,7 @@ let stopping = false
 const shutdown = (signal) => {
   if (stopping) return
   stopping = true
+  markStopped() // a clean stop: the next boot must not report a crash
   console.log(`[shutdown] ${signal} — closing`)
   const done = () => { try { db.close() } catch {} ; process.exit(0) }
   setTimeout(done, 10_000).unref()
