@@ -59,7 +59,7 @@ async function ship(name, problems) {
   const r = await runOffsite(['upload', fileOf(name), name])
   if (r.error) { problems.push(`off-site upload of ${name} failed: ${r.error}`); return false }
   markShipped(name)
-  console.log(`[backup] ${name} shipped off-site — ${r.parts} parts, ${Math.round(r.stored_bytes / MB)} MB stored, ${r.seconds}s`)
+  console.log(`[backup] ${name} shipped off-site — ${r.parts} parts, ${Math.round(r.stored_bytes / MB)} MB stored, ${r.seconds}s, worker peak ${r.peak_mb} MB`)
   return true
 }
 
