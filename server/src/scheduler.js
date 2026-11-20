@@ -15,7 +15,11 @@ import {
   toOwnersEnabled, testRecipient,
 } from './taskMail.js'
 
+import { opsAlert } from './opsAlerts.js'
+
 const SEND_HOUR = Number(process.env.DIGEST_HOUR || 8) // local server time, 0-23
+const INSTANCE_MB = Number(process.env.INSTANCE_MEMORY_MB || 512)
+const MEMORY_WARN_MB = Math.round(INSTANCE_MB * 0.85)
 
 function getMeta(key) {
   const row = db.prepare('SELECT value FROM app_meta WHERE key=?').get(key)
@@ -100,11 +104,26 @@ async function tick() {
     await runBackup()
   }
 
-  // Say so in the log, once an hour, while the disk is running low — before it
-  // fills and every write in the app starts failing.
+  // Tell the operators while the disk is running low — before it fills and
+  // every write in the app starts failing. Checked hourly, mailed twice a day
+  // at most (opsAlerts.js).
   if (z.minute === 0) {
     const d = diskStatus()
-    if (d && d.pct < 0.2) console.warn(`[disk] LOW: ${Math.round(d.free / 1048576)} MB free of ${Math.round(d.total / 1048576)} MB (${Math.round(d.pct * 100)}%) — raise the Render disk size`)
+    if (d && d.pct < 0.2) {
+      opsAlert('disk', `Disk is ${Math.round((1 - d.pct) * 100)}% full`,
+        `Only ${Math.round(d.free / 1048576)} MB free of ${Math.round(d.total / 1048576)} MB on the data disk. ` +
+        'When it fills, no message can be sent and no task saved. Free space or raise the Render disk size.',
+        { everyMs: 12 * 3600_000 })
+    }
+  }
+
+  // Memory: the instance has 512 MB and is restarted (everyone disconnected)
+  // if the server goes over. Warn while there is still room to act.
+  const rssMb = Math.round(process.memoryUsage().rss / 1048576)
+  if (rssMb > MEMORY_WARN_MB) {
+    opsAlert('memory', `Server memory high: ${rssMb} MB`,
+      `The server is using ${rssMb} MB of the instance's ${INSTANCE_MB} MB. Past the limit Render restarts it and everyone is ` +
+      'disconnected for about a minute. If this repeats, move smarttask-api to a larger Render instance.')
   }
 }
 

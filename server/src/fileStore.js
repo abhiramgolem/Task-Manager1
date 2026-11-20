@@ -52,8 +52,10 @@ const freeBytes = (dir) => {
 // or null where the platform can't say. Cached for 30 s — it is asked on every
 // upload request (index.js) and statfs, though cheap, need not run per request.
 let diskCache = { at: 0, v: null }
-export function diskStatus(dir = DATA_DIR) {
-  if (Date.now() - diskCache.at < 30_000) return diskCache.v
+// `fresh` skips the cache — for a caller that has just deleted files and needs
+// to see the space they gave back.
+export function diskStatus(dir = DATA_DIR, fresh = false) {
+  if (!fresh && Date.now() - diskCache.at < 30_000) return diskCache.v
   let v = null
   try {
     const s = fs.statfsSync(dir)
