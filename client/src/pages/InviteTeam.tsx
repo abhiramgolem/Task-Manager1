@@ -17,7 +17,7 @@ export default function InviteTeam() {
   const onDone = () => navigate('/', { replace: true })
   const [email, setEmail] = useState('')
   const [role, setRole] = useState('employee')
-  const [sent, setSent] = useState<{ email: string; link: string }[]>([])
+  const [sent, setSent] = useState<{ email: string; link: string; emailed: boolean }[]>([])
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -29,7 +29,7 @@ export default function InviteTeam() {
     setBusy(true)
     try {
       const r = await api.post('/invites', { email: addr, role })
-      setSent((s) => [{ email: addr, link: r.link }, ...s])
+      setSent((s) => [{ email: addr, link: r.link, emailed: !!r.emailed }, ...s])
       setEmail('')
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -64,8 +64,9 @@ export default function InviteTeam() {
                 <div className="inv-sent-row" key={s.email}>
                   <span className="inv-tick">✓</span>
                   <span className="inv-mail">{s.email}</span>
-                  {/* The link IS the invite — nothing is emailed — so copying it is
-                      the actual completion of this row, not a fallback. */}
+                  {/* The invite is emailed; when that fails the copied link is the
+                      only way it reaches them, so say which happened. */}
+                  <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>{s.emailed ? 'Emailed' : 'Not emailed'}</span>
                   <button type="button" className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(s.link)}>Copy link</button>
                 </div>
               ))}

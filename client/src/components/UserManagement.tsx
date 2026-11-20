@@ -140,13 +140,14 @@ export default function UserManagement() {
   )
 }
 
-// Invite a teammate by email. Shows the resulting accept-link so the manager can
-// copy/share it directly — essential when SMTP isn't configured (preview mode).
+// Invite a teammate by email. The server mails them the join link; the link is
+// also shown here so the manager can copy it — the only way in when the mail
+// couldn't be sent (no SMTP configured, or a send error).
 export function InviteForm({ depts, onDeptAdded, isAdmin, onClose, onDone }: { depts: any[]; onDeptAdded?: (d: Dept) => void; isAdmin: boolean; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState<any>({ email: '', role: 'employee', department_id: '' })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [result, setResult] = useState<{ link: string } | null>(null)
+  const [result, setResult] = useState<{ link: string; email: string; emailed: boolean } | null>(null)
   const [copied, setCopied] = useState(false)
   const roleOptions = isAdmin ? ['employee', 'manager', 'admin'] : ['employee', 'manager']
 
@@ -157,7 +158,7 @@ export function InviteForm({ depts, onDeptAdded, isAdmin, onClose, onDone }: { d
     setBusy(true)
     try {
       const r = await api.post('/invites', { email, role: f.role, department_id: f.department_id || null })
-      setResult({ link: r.link })
+      setResult({ link: r.link, email, emailed: !!r.emailed })
       onDone()
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -174,7 +175,9 @@ export function InviteForm({ depts, onDeptAdded, isAdmin, onClose, onDone }: { d
           {result ? (
             <>
               <div className="inv-ready">
-                Invitation ready. Send them this link — it sets their password and puts them straight in.
+                {result.emailed
+                  ? <>Invitation emailed to <b>{result.email}</b>. They open the link in it to set their password and join. You can also send them the link below.</>
+                  : <>The email couldn't be sent to <b>{result.email}</b>. Send them this link yourself — it sets their password and puts them straight in.</>}
               </div>
               <div className="row" style={{ gap: 8 }}>
                 <input readOnly value={result.link} style={{ flex: 1 }} onFocus={(e) => e.currentTarget.select()} />

@@ -3,15 +3,39 @@ import { db } from '../db.js'
 import { authRequired, requireRole, signToken, hashPassword } from '../auth.js'
 import { publicUser } from './auth.js'
 import { id, now, genToken, appUrl, inDays, audit, emailDomainAllowed, orgAllowedDomains, isCommonPassword } from '../util.js'
+import { sendMail } from '../mailer.js'
 
 const r = Router()
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const INVITE_TTL_DAYS = 7
+// A manager can invite any address at all, so cap how many invite mails one
+// person sends an hour — otherwise the form is a way to send our mail to
+// strangers. Past the cap the invite is still created; only the mail is skipped.
+const INVITE_MAIL_HOURLY_CAP = 30
 
-// Invites are LINK-ONLY. No mail is attempted: SMTP is not configured, and a
-// send that silently no-ops taught the UI to apologise for a failure that was
-// really just missing config. The link is the deliverable — the manager copies it
-// and sends it however they already talk to the person.
+// The invite is emailed to the address it was made for, naming the team (org)
+// and department it is from. The link is ALSO returned every time, so the
+// manager can still copy it when SMTP isn't configured, the mail fails, or the
+// person says it never arrived.
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const withArticle = (role) => (/^[aeiou]/i.test(role) ? `an ${role}` : `a ${role}`)
+
+function inviteMail({ inviter, org, dept, role, email, link }) {
+  const where = dept ? `${org} (${dept} department)` : org
+  const intro = `${inviter} invited you to join ${where} on VoTask as ${withArticle(role)}.`
+  const foot = `This invitation is for ${email} and expires in ${INVITE_TTL_DAYS} days. If you weren't expecting it, you can ignore this email.`
+  return {
+    subject: `${inviter} invited you to join ${org} on VoTask`,
+    text: `${intro}\n\nOpen this link to set your password and join:\n${link}\n\n${foot}\n\n— VoTask`,
+    html: `<div style="font-family:system-ui,sans-serif;max-width:480px;margin:auto">
+      <h2 style="color:#c2410c">Join ${esc(org)} on VoTask</h2>
+      <p>${esc(intro)}</p>
+      <p><a href="${esc(link)}" style="display:inline-block;background:#c2410c;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:600">Join ${esc(org)}</a></p>
+      <p style="color:#666;font-size:13px">Or paste this link into your browser:<br>${esc(link)}</p>
+      <p style="color:#999;font-size:12px">${esc(foot)}</p></div>`,
+  }
+}
 
 // A pending, non-expired invite for this token — or null.
 function validInvite(token) {
@@ -43,9 +67,11 @@ r.post('/', authRequired, requireRole('manager', 'admin'), async (req, res) => {
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) {
     return res.status(409).json({ error: 'Someone with this email already has an account.' })
   }
+  let deptName = null
   if (departmentId) {
-    const d = db.prepare('SELECT id FROM departments WHERE id = ? AND org_id = ?').get(departmentId, req.user.org_id)
+    const d = db.prepare('SELECT id, name FROM departments WHERE id = ? AND org_id = ?').get(departmentId, req.user.org_id)
     if (!d) return res.status(400).json({ error: 'Invalid department.' })
+    deptName = d.name
   }
 
   // Re-inviting the same email supersedes any earlier pending invite.
@@ -61,7 +87,21 @@ r.post('/', authRequired, requireRole('manager', 'admin'), async (req, res) => {
 
   const link = `${appUrl()}/accept-invite?token=${token}`
 
-  res.status(201).json({ id: invId, email, role, department_id: departmentId, status: 'pending', link })
+  // `emailed` is true only when the mail really left over SMTP — preview mode
+  // (no SMTP configured), a send error, or the hourly cap all leave it false, and
+  // the UI then tells the manager to send the link themselves.
+  let emailed = false
+  const hourAgo = new Date(Date.now() - 3600000).toISOString()
+  const madeThisHour = db.prepare('SELECT COUNT(*) n FROM invites WHERE invited_by = ? AND created_at > ?').get(req.user.id, hourAgo).n
+  if (madeThisHour <= INVITE_MAIL_HOURLY_CAP) {
+    const org = db.prepare('SELECT name FROM organizations WHERE id = ?').get(req.user.org_id)?.name || 'their team'
+    try {
+      const sent = await sendMail({ to: email, ...inviteMail({ inviter: req.user.name, org, dept: deptName, role, email, link }) })
+      emailed = sent.sent
+    } catch (err) { console.warn('[invites] email failed:', err.message) }
+  }
+
+  res.status(201).json({ id: invId, email, role, department_id: departmentId, status: 'pending', link, emailed })
 })
 
 // LIST pending invites for the org.
