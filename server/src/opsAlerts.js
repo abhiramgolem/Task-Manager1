@@ -52,17 +52,30 @@ export async function opsAlert(kind, subject, details, { everyMs = 6 * HOUR } = 
 // died, and the operators hear about it.
 const RUNNING = path.join(path.dirname(DB_FILE), '.server-running')
 
+// A deploy can't be told apart by the marker alone: Render stops the service
+// through `npm start`, which does not pass SIGTERM on to node, so the clean
+// stop never runs and every deploy left the marker behind — two false crash
+// alerts on 2026-11-20/21. So the marker carries the build: a different
+// commit at the next boot is a deploy; the same commit is the same version
+// starting again — a crash, an out-of-memory kill, a hang, or a manual
+// restart. (A marker in the old plain-timestamp form counts as a deploy.)
 export function markStarted() {
-  let crashed = null
-  try { crashed = fs.readFileSync(RUNNING, 'utf8') } catch {}
-  try { fs.writeFileSync(RUNNING, new Date().toISOString()) } catch {}
-  if (crashed !== null) {
-    opsAlert('unclean-restart', 'VoTask restarted after an unexpected stop',
-      `The server stopped without shutting down cleanly (crash, out of memory, or a hang that Render restarted). ` +
-      `The previous run started at ${crashed.trim() || 'an unknown time'}. It is running again now. ` +
-      `Check Render → smarttask-api → Logs around that time for "[fatal]" or an out-of-memory message.`,
-      { everyMs: HOUR })
+  let prev = null
+  try { prev = fs.readFileSync(RUNNING, 'utf8') } catch {}
+  const commit = (process.env.RENDER_GIT_COMMIT || '').slice(0, 12)
+  try { fs.writeFileSync(RUNNING, JSON.stringify({ started_at: new Date().toISOString(), commit })) } catch {}
+  if (prev === null) return
+  let p
+  try { p = JSON.parse(prev) } catch { p = { started_at: prev.trim() } }
+  if (typeof p?.commit !== 'string' || p.commit !== commit) {
+    console.log(`[startup] new version ${commit || '(local)'} replaced ${p?.commit || 'the previous build'}`)
+    return
   }
+  opsAlert('unclean-restart', 'VoTask restarted after an unexpected stop',
+    `The server stopped without shutting down cleanly — a crash, running out of memory, a hang that Render restarted, ` +
+    `or a manual restart of the same version. The previous run started at ${p.started_at || 'an unknown time'}. ` +
+    `It is running again now. Check Render → smarttask-api → Logs around that time for "[fatal]" or an out-of-memory message.`,
+    { everyMs: HOUR })
 }
 
 export function markStopped() {
