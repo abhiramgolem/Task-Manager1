@@ -17,6 +17,7 @@ import { db } from './db.js'
 import { now } from './util.js'
 import { storedFileHeaders } from './fileStore.js'
 import { archiveS3Config, archiveConfigured, partKey } from './archiveConfig.js'
+import { opsAlert } from './opsAlerts.js'
 
 export { archiveConfigured }
 
@@ -140,6 +141,11 @@ export async function sendArchived(req, res, row, { name, type, maxAge }) {
   } catch (e) {
     if (ac.signal.aborted) return
     console.error('[archive] could not serve', row.key, '-', e.message)
+    // Someone just failed to open an old file: the operators should know
+    // before more people do. Recent files are on the disk and unaffected.
+    opsAlert('archive-serve', 'Old chat files are failing to open',
+      `A file moved to storage (${row.key}) could not be fetched: ${e.message}. Files under a week old are on the ` +
+      'server and still open normally. Check Supabase (project VoTask, bucket votask-files) and its status page.')
     if (!res.headersSent) {
       for (const h of FILE_HEADERS) res.removeHeader(h)
       res.setHeader('Cache-Control', 'no-store')
