@@ -303,7 +303,10 @@ const disposition = (kind, name) => {
   return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`
 }
 
-export function sendStoredFile(req, res, abs, { name, type, maxAge }) {
+// The headers every stored file goes out with, wherever its bytes come from —
+// the disk here, or object storage (archive.js). `stored` is the name it is
+// kept under, for its extension.
+export function storedFileHeaders(req, res, stored, { name, type, maxAge }) {
   const filename = name || 'file'
   // The declared type wins (send never overrides a Content-Type that is
   // already set), except the generic octet-stream: then send names the type
@@ -314,9 +317,13 @@ export function sendStoredFile(req, res, abs, { name, type, maxAge }) {
   res.setHeader('Cache-Control', `private, max-age=${maxAge}`)
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('Referrer-Policy', 'no-referrer')
-  if (ACTIVE_TYPE.test(type || '') || ACTIVE_EXT.test(abs) || ACTIVE_EXT.test(filename)) {
+  if (ACTIVE_TYPE.test(type || '') || ACTIVE_EXT.test(stored) || ACTIVE_EXT.test(filename)) {
     res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
   }
+}
+
+export function sendStoredFile(req, res, abs, { name, type, maxAge }) {
+  storedFileHeaders(req, res, abs, { name, type, maxAge })
   // Dotfiles allowed because the path is ours, not the requester's; the cache
   // header is the one set above, not send's public default.
   res.sendFile(abs, { cacheControl: false, dotfiles: 'allow' }, (err) => {

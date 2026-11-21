@@ -105,3 +105,9 @@ services:
         sync: false
       - key: BACKUP_S3_SECRET_ACCESS_KEY
         sync: false
+      # Chat files older than ARCHIVE_AFTER_DAYS (default 7) move each night from
+      # the disk to this PRIVATE bucket (archiveFiles.js) and are streamed back
+      # when opened (archive.js). Same Supabase project and S3 key as the backups;
+      # leave unset to keep every file on the disk.
+      - key: FILES_S3_BUCKET
+        sync: false

@@ -16,6 +16,7 @@ import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
 import { sendCallPush } from '../push.js'
 import { MB, bigFileUpload, streamingStorage, sendStoredFile } from '../fileStore.js'
+import { archivedEntry, sendArchived, aliasArchived, forgetArchived, readArchived } from '../archive.js'
 import { localDay } from '../clock.js'
 
 // Internal team chat (WhatsApp-style): 1:1 + group conversations, file attachments,
@@ -46,13 +47,26 @@ const smallUpload = multer({ storage: streamingStorage(UPLOAD_DIR, 'cf'), limits
 // upload. Now that a chat file can be 1 GB, an audio file that size has to be
 // turned away here rather than read onto a 512 MB instance.
 const TRANSCRIBE_MAX = 25 * MB
-function readForTranscription(abs) {
-  if (fs.statSync(abs).size > TRANSCRIBE_MAX) {
+function tooLongToTranscribe(size) {
+  if (size > TRANSCRIBE_MAX) {
     const err = new Error('This recording is over 25 MB, too long to turn into text.')
     err.code = 'TOO_LARGE'
     throw err
   }
+}
+function readForTranscription(abs) {
+  tooLongToTranscribe(fs.statSync(abs).size)
   return fs.readFileSync(abs)
+}
+// A message's audio, from the disk or — once a week old — from the archive
+// (archive.js). null when it is in neither.
+async function audioBytes(m) {
+  const abs = path.join(UPLOAD_DIR, m.file_stored)
+  if (fs.existsSync(abs)) return readForTranscription(abs)
+  const a = archivedEntry('chat_uploads/' + m.file_stored)
+  if (!a) return null
+  tooLongToTranscribe(a.bytes)
+  return readArchived(a, TRANSCRIBE_MAX)
 }
 
 const r = Router()
@@ -604,7 +618,12 @@ r.get('/file/:messageId', (req, res) => {
   if (!m || !m.file_stored || m.deleted_for_all) return res.status(404).json({ error: 'File not found' })
   if (!member(m.conversation_id, user.id)) return res.status(403).json({ error: 'Forbidden' })
   const abs = path.join(UPLOAD_DIR, m.file_stored)
-  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' })
+  if (!fs.existsSync(abs)) {
+    // Over a week old: moved to the archive bucket, served from there.
+    const a = archivedEntry('chat_uploads/' + m.file_stored)
+    if (a) return sendArchived(req, res, a, { name: m.file_name, type: m.file_type, maxAge: 3600 })
+    return res.status(404).json({ error: 'File missing' })
+  }
   sendStoredFile(req, res, abs, { name: m.file_name, type: m.file_type, maxAge: 3600 })
 })
 
@@ -1079,6 +1098,7 @@ r.delete('/conversations/:id', (req, res) => {
   // Remove any stored files from disk.
   for (const f of db.prepare('SELECT file_stored, file_thumb FROM chat_messages WHERE conversation_id=? AND file_stored IS NOT NULL').all(conv.id)) {
     if (f.file_stored) try { fs.unlinkSync(path.join(UPLOAD_DIR, f.file_stored)) } catch {}
+    if (f.file_stored) forgetArchived('chat_uploads/' + f.file_stored)
     dropThumb(f)
   }
   const wipe = db.transaction(() => {
@@ -1385,7 +1405,10 @@ r.post('/message/:id/forward', (req, res) => {
       // Unlinking one name leaves the other's bytes where they are.
       storedName = id('cf') + path.extname(src.file_stored)
       const from = path.join(UPLOAD_DIR, src.file_stored), to = path.join(UPLOAD_DIR, storedName)
-      try { fs.linkSync(from, to) } catch { try { fs.copyFileSync(from, to) } catch { storedName = null } }
+      // An archived file isn't on the disk: the new name shares its stored parts.
+      if (fs.existsSync(from) || !aliasArchived('chat_uploads/' + src.file_stored, 'chat_uploads/' + storedName)) {
+        try { fs.linkSync(from, to) } catch { try { fs.copyFileSync(from, to) } catch { storedName = null } }
+      }
     }
     // Its first-page preview goes with it, under its own name for the same reason.
     let thumbName = null
@@ -1424,6 +1447,7 @@ r.delete('/message/:id', (req, res) => {
     db.prepare('DELETE FROM chat_mentions WHERE message_id=?').run(m.id)
     removeEmbedding('chat', m.id) // unsent message leaves the RAG index
     if (m.file_stored) try { fs.unlinkSync(path.join(UPLOAD_DIR, m.file_stored)) } catch {}
+    if (m.file_stored) forgetArchived('chat_uploads/' + m.file_stored)
     dropThumb(m)
     pushToConversation(m.conversation_id, { type: 'delete', conversationId: m.conversation_id, id: m.id, scope: 'all' })
     if (m.pinned_at) pushToConversation(m.conversation_id, { type: 'pin', conversationId: m.conversation_id, id: m.id, pinned: false })
@@ -2482,7 +2506,8 @@ r.post('/task-draft', async (req, res) => {
     // on the message, so this happens at most once per note.
     if (!text.trim() && isVoice) {
       try {
-        const buf = readForTranscription(path.join(UPLOAD_DIR, m.file_stored))
+        const buf = await audioBytes(m)
+        if (!buf) throw new Error('the audio is no longer on the server')
         const out = await transcribeAudio(buf, m.file_name || 'voice.webm', m.file_type || 'audio/webm')
         const clean = String(out.text || '').trim()
         if (clean) {
@@ -3305,10 +3330,9 @@ r.post('/message/:id/transcribe', async (req, res) => {
   if (m.transcript) return res.json({ text: m.transcript, cached: true })
   // The row can outlive its file (a restore from a DB-only backup, a disk that
   // was not carried across). Say which it is, rather than surfacing a raw ENOENT.
-  const notePath = path.join(UPLOAD_DIR, m.file_stored)
-  if (!fs.existsSync(notePath)) return res.status(410).json({ error: 'The audio for this voice note is no longer on the server, so it cannot be transcribed.', code: 'FILE_MISSING' })
   try {
-    const buf = readForTranscription(notePath)
+    const buf = await audioBytes(m)
+    if (!buf) return res.status(410).json({ error: 'The audio for this voice note is no longer on the server, so it cannot be transcribed.', code: 'FILE_MISSING' })
     const { text } = await transcribeAudio(buf, m.file_name || 'voice.webm', m.file_type || 'audio/webm')
     const clean = String(text || '').trim()
     if (!clean) return res.status(422).json({ error: 'Nothing could be made out in that recording' })
@@ -3346,9 +3370,8 @@ r.post('/message/:id/to-meeting', requireRole('manager', 'admin'), async (req, r
     // A call recording is long, so prefer Whisper when a key is present —
     // Sarvam's instant endpoint rejects audio over 30 seconds (same reasoning
     // as the meetings upload route).
-    const recPath = path.join(UPLOAD_DIR, m.file_stored)
-    if (!fs.existsSync(recPath)) return res.status(410).json({ error: 'The recording is no longer on the server, so it cannot be summarised.', code: 'FILE_MISSING' })
-    const buf = readForTranscription(recPath)
+    const buf = await audioBytes(m)
+    if (!buf) return res.status(410).json({ error: 'The recording is no longer on the server, so it cannot be summarised.', code: 'FILE_MISSING' })
     const provider = process.env.OPENAI_API_KEY ? 'openai' : undefined
     const { text } = await transcribeAudio(buf, m.file_name || 'call.webm', m.file_type || 'audio/webm', { provider })
     const transcript = String(text || '').trim()

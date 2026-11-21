@@ -3,6 +3,7 @@
 // restart can't double-send.
 import { db } from './db.js'
 import { runBackup } from './backup.js'
+import { runArchive } from './archiveFiles.js'
 import { runDueReminders } from './dueReminders.js'
 import { diskStatus } from './fileStore.js'
 import { sendDailyDigests } from './digest.js'
@@ -102,6 +103,13 @@ async function tick() {
   if (z.hour >= 2 && z.hour < 6 && getMeta('db_backup_last') !== z.date) {
     setMeta('db_backup_last', z.date)
     await runBackup()
+  }
+
+  // Then, in the same quiet hours, chat files over a week old move to the
+  // archive bucket (archiveFiles.js). Nothing new is started after 06:00.
+  if (z.hour >= 2 && z.hour < 6 && getMeta('files_archive_last') !== z.date) {
+    setMeta('files_archive_last', z.date)
+    await runArchive({ deadline: Date.now() + ((6 - z.hour) * 60 - z.minute) * 60_000 })
   }
 
   // Tell the operators while the disk is running low — before it fills and

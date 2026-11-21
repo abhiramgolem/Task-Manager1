@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db } from './db.js'
 import { id, now, audit } from './util.js'
+import { aliasArchived } from './archive.js'
 
 // A task made from a chat message takes the message's file with it.
 //
@@ -41,7 +42,11 @@ export function attachMessageFile(task, messageId, user) {
     const stored = id('att') + path.extname(m.file_stored).slice(0, 12)
     const from = path.join(CHAT_DIR, m.file_stored), to = path.join(TASK_DIR, stored)
     fs.mkdirSync(TASK_DIR, { recursive: true })
-    try { fs.linkSync(from, to) } catch { fs.copyFileSync(from, to) }
+    // A chat file over a week old lives in the archive bucket, not on the disk:
+    // the attachment then shares its stored parts (archive.js).
+    if (fs.existsSync(from) || !aliasArchived('chat_uploads/' + m.file_stored, 'task_uploads/' + stored)) {
+      try { fs.linkSync(from, to) } catch { fs.copyFileSync(from, to) }
+    }
 
     const aid = id('att')
     db.prepare(`INSERT INTO attachments (id, task_id, org_id, filename, stored_name, file_type, file_size, uploaded_by, created_at)
