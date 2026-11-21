@@ -13,6 +13,7 @@ import { interpretVoiceSearch } from '../ai/voiceSearch.js'
 import { resolveCategory, normalizeCategory } from '../categories.js'
 import { recordUsage } from '../ai/usage.js'
 import { MB, bigFileUpload, sendStoredFile } from '../fileStore.js'
+import { archivedEntry, sendArchived, forgetArchived } from '../archive.js'
 import { attachMessageFile } from '../taskFromMessage.js'
 import { localDay } from '../clock.js'
 
@@ -44,6 +45,7 @@ export function purgeDeletedTask(row) {
   try {
     for (const a of JSON.parse(row.payload).attachments || []) {
       if (a.stored_name) try { fs.unlinkSync(path.join(ATTACH_DIR, a.stored_name)) } catch {}
+      if (a.stored_name) forgetArchived('task_uploads/' + a.stored_name)
     }
   } catch { /* a malformed payload must not block the purge */ }
   db.prepare('DELETE FROM deleted_tasks WHERE id=?').run(row.id)
@@ -74,7 +76,12 @@ r.get('/attachments/:attId/file', (req, res) => {
   const taskOrg = a.org_id || db.prepare('SELECT org_id FROM tasks WHERE id=?').get(a.task_id)?.org_id
   if (taskOrg && taskOrg !== user.org_id) return res.status(403).json({ error: 'Out of organization' })
   const abs = path.join(ATTACH_DIR, a.stored_name)
-  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' })
+  if (!fs.existsSync(abs)) {
+    // Attached from a chat file that had already moved to the archive bucket.
+    const ar = archivedEntry('task_uploads/' + a.stored_name)
+    if (ar) return sendArchived(req, res, ar, { name: a.filename, type: a.file_type, maxAge: 300 })
+    return res.status(404).json({ error: 'File missing' })
+  }
   sendStoredFile(req, res, abs, { name: a.filename, type: a.file_type, maxAge: 300 })
 })
 
@@ -1132,6 +1139,7 @@ r.delete('/attachments/:attId', (req, res) => {
   const isManager = req.user.role === 'manager' || req.user.role === 'admin'
   if (!isManager && a.uploaded_by !== req.user.id) return res.status(403).json({ error: 'Only the uploader or a manager can remove this.' })
   if (a.stored_name) try { fs.unlinkSync(path.join(ATTACH_DIR, a.stored_name)) } catch {}
+  if (a.stored_name) forgetArchived('task_uploads/' + a.stored_name)
   db.prepare('DELETE FROM attachments WHERE id=?').run(a.id)
   res.json({ ok: true })
 })

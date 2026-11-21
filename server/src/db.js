@@ -1411,6 +1411,24 @@ export function initSchema() {
   // file_thumb is its name on disk beside the file; file_pages the page count.
   ensureColumn('chat_messages', 'file_thumb', 'TEXT')
   ensureColumn('chat_messages', 'file_pages', 'INTEGER')
+  // Files moved off the Render disk into object storage (archive.js). `key` is
+  // the file's place on disk ("chat_uploads/<name>"), `remote` the folder of
+  // parts in the bucket — shared when one stored file is forwarded or attached
+  // to a task, so the bytes are kept once. `deleted_at` marks a file whose
+  // message or attachment is gone; the nightly job removes its parts.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS archived_files (
+      key TEXT PRIMARY KEY,
+      remote TEXT NOT NULL,
+      bytes INTEGER NOT NULL,
+      parts INTEGER NOT NULL,
+      part_bytes INTEGER NOT NULL,
+      sha256 TEXT,
+      archived_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_archived_remote ON archived_files(remote);
+  `)
 }
 
 // Run a migration body exactly once, tracked by a key in app_meta.

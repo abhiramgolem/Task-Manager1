@@ -7,6 +7,8 @@ import { sendUpdatePush, pushEnabled } from '../push.js'
 import { runBackup, lastBackupRun, backupRunning } from '../backup.js'
 import { offsiteEnabled } from '../offsite.js'
 import { diskStatus } from '../fileStore.js'
+import { runArchive, lastArchiveRun, archiveRunning } from '../archiveFiles.js'
+import { archiveConfigured } from '../archiveConfig.js'
 
 // CROSS-ORG platform admin routes. The ONLY place that reads/writes across orgs —
 // gated to a flagged super-admin. Normal org isolation is untouched everywhere else.
@@ -151,6 +153,27 @@ r.post('/backup', (req, res) => {
   audit(req.user.org_id, req.user.id, 'platform.backup_now', 'backup', '', '')
   runBackup().catch(() => {})
   res.status(202).json({ started: true })
+})
+
+// Chat files moved to the archive bucket (archiveFiles.js). GET: the last run
+// and totals. POST: run one now (it stops starting new files after `minutes`,
+// default 30) instead of waiting for the night.
+r.get('/archive', (req, res) => {
+  const t = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(bytes),0) b FROM archived_files WHERE deleted_at IS NULL AND key = remote`).get()
+  const d = diskStatus()
+  res.json({
+    configured: archiveConfigured(), running: archiveRunning(), last: lastArchiveRun(),
+    archived: { files: t.n, mb: Math.round(t.b / 1048576) },
+    disk: d ? { free_mb: Math.round(d.free / 1048576), total_mb: Math.round(d.total / 1048576) } : null,
+  })
+})
+r.post('/archive', (req, res) => {
+  if (!archiveConfigured()) return res.status(400).json({ error: 'FILES_S3_BUCKET is not set on the server' })
+  if (archiveRunning()) return res.status(409).json({ error: 'Already running' })
+  const minutes = Math.min(240, Math.max(1, Number(req.body?.minutes) || 30))
+  audit(req.user.org_id, req.user.id, 'platform.archive_now', 'archive', '', `${minutes} min`)
+  runArchive({ deadline: Date.now() + minutes * 60_000 }).catch(() => {})
+  res.status(202).json({ started: true, minutes })
 })
 
 export default r
