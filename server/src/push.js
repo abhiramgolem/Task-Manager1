@@ -95,16 +95,23 @@ export function removeDeviceToken(token) {
 // RICH_CHAT_FROM on gets it as data and draws the chat's notification itself,
 // WhatsApp's way, every message listed under a pull-down (ChatNotifier.java).
 // Older builds get the ordinary notification.
-export async function sendPushToUser(userId, { title, body, data, tag, rich }) {
+//
+// `mention`: someone @mentioned this person. A build from MENTION_SOUND_FROM
+// on plays its own mention sound for it, as Cliq does, from the
+// 'votask_mention' channel. A rich chat line needs nothing here: the phone
+// picks that channel itself from the chat_mention type (ChatNotifier.java).
+export async function sendPushToUser(userId, { title, body, data, tag, rich, mention }) {
   if (!userId) return
   // The same notification to the browsers this person turned it on in.
   sendWebPush(userId, { title, body, tag, data }).catch(() => {})
   const rows = db.prepare('SELECT token, chime, app_build FROM device_tokens WHERE user_id=?').all(userId)
-  await sendToDevices(rows, { title, body, data, tag, rich })
+  await sendToDevices(rows, { title, body, data, tag, rich, mention })
 }
 
 // The first versionCode with ChatNotifier.
 const RICH_CHAT_FROM = 29
+// The first versionCode with the mention sound and its channel (push.ts).
+const MENTION_SOUND_FROM = 44
 
 // "A new version is on the Play Store", to every phone whose app is older than
 // belowBuild (its versionCode). Builds before 4.5 do not report their version
@@ -118,7 +125,7 @@ export async function sendUpdatePush(belowBuild, { title, body }) {
 
 // One notification to each of these devices (rows of token, chime, and
 // app_build where known). Returns how many FCM accepted.
-async function sendToDevices(rows, { title, body, data, tag, rich }) {
+async function sendToDevices(rows, { title, body, data, tag, rich, mention }) {
   const sa = getServiceAccount()
   if (!sa || !rows.length) return 0
 
@@ -149,9 +156,11 @@ async function sendToDevices(rows, { title, body, data, tag, rich }) {
             data: stringData,
             android: {
               priority: 'high',
-              notification: chime
-                ? { sound: 'votask_chime', channel_id: 'votask_chime', ...(tag ? { tag } : {}) }
-                : { sound: 'default', channel_id: 'smarttask_v2', ...(tag ? { tag } : {}) },
+              notification: mention && build >= MENTION_SOUND_FROM
+                ? { sound: 'votask_mention', channel_id: 'votask_mention', ...(tag ? { tag } : {}) }
+                : chime
+                  ? { sound: 'votask_chime', channel_id: 'votask_chime', ...(tag ? { tag } : {}) }
+                  : { sound: 'default', channel_id: 'smarttask_v2', ...(tag ? { tag } : {}) },
             },
           }
       const res = await fetch(url, {

@@ -1036,7 +1036,8 @@ r.post('/:id/comments', (req, res) => {
   // private to-do mentions no one: its owner is the only one who can open it.
   const mentioned = (t.visible_to_manager ?? 1) ? commentMentions(t.org_id, body, req.user.id) : []
   for (const uid of mentioned) {
-    notify(t.org_id, uid, 'task_comment', `${req.user.name} mentioned you on "${t.title}": ${snippet}`, t.id, { commentId: cid })
+    // `mention`: the phone plays the mention sound for it (push.js).
+    notify(t.org_id, uid, 'task_comment', `${req.user.name} mentioned you on "${t.title}": ${snippet}`, t.id, { commentId: cid }, { mention: true })
     recipients.delete(uid) // one notification each, the mention being the more specific
   }
   for (const uid of recipients) {

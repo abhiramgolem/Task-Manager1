@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { Ic } from '../ui'
 import { notifTarget, replacesEntry } from '../lib/notifTarget'
+import { playNotifSound } from '../lib/notifSound'
 
 interface Notif {
   id: string; type: string; message: string; task_id?: string | null
@@ -28,6 +29,12 @@ const NOTIF_ICON: Record<string, { name: Parameters<typeof Ic>[0]['name']; tone:
   chat_mention: { name: 'at', tone: 'primary' },
   call_review: { name: 'ai', tone: 'primary' },
 }
+// Someone @mentioned you: in a chat, or in a task comment, which shares the
+// task_comment type with ordinary comments and differs only in its wording
+// (routes/tasks.js) — "X mentioned you on "Task"" vs "X commented on "Task"".
+const isMention = (n: Notif) =>
+  n.type === 'chat_mention' || (n.type === 'task_comment' && /^[^"]* mentioned you on "/.test(n.message))
+
 function NotifIcon({ type }: { type: string }) {
   const cfg = NOTIF_ICON[type]
   if (!cfg) return <span className="notif-ic" data-tone="info"><Ic name="doc" size={15} /></span>
@@ -85,44 +92,33 @@ export default function NotificationBell() {
   const [soundOn, setSoundOn] = useState(() => localStorage.getItem('notifSound') !== 'off')
   const ref = useRef<HTMLDivElement>(null)
   const prevUnread = useRef<number | null>(null) // null until first load, so we don't shake on mount
-  // Shared, lazily-created audio context. Browsers block audio until a user
-  // gesture, so it's resumed on play — the first click anywhere unlocks it.
-  const audioCtx = useRef<AudioContext | null>(null)
+  // The ids the last load returned, so the next one can tell what is new.
+  const seenIds = useRef<Set<string> | null>(null)
   // Mirror soundOn into a ref so the polling interval (created once on mount)
   // always reads the current preference instead of a stale closure value.
   const soundOnRef = useRef(soundOn)
   useEffect(() => { soundOnRef.current = soundOn }, [soundOn])
 
-  // VoTask's own chime, the same file the phone's notifications play
-  // (android res/raw/votask_chime.wav), decoded once and replayed.
-  const chimeBuf = useRef<Promise<AudioBuffer> | null>(null)
-  const playChime = () => {
-    try {
-      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
-      if (!Ctx) return
-      const ctx: AudioContext = audioCtx.current || (audioCtx.current = new Ctx())
-      if (ctx.state === 'suspended') ctx.resume()
-      const buf = chimeBuf.current || (chimeBuf.current = fetch(`${import.meta.env.BASE_URL}sounds/votask_chime.wav`)
-        .then((r) => r.arrayBuffer()).then((b) => ctx.decodeAudioData(b)))
-      buf.then((b) => {
-        const src = ctx.createBufferSource()
-        const gain = ctx.createGain()
-        src.buffer = b
-        gain.gain.value = 0.5
-        src.connect(gain); gain.connect(ctx.destination)
-        src.start()
-      }).catch(() => { chimeBuf.current = null })
-    } catch { /* autoplay blocked or unsupported — fail silently */ }
-  }
+  // VoTask's own chime, the same file the phone's notifications play.
+  const playChime = () => playNotifSound('votask_chime')
 
   const load = () => api.get('/notifications').then((d) => {
     setItems(d.items)
     setUnread(d.unread)
-    // A new notification just arrived → vibrate the bell and play the chime.
+    const seen = seenIds.current
+    const fresh: Notif[] = seen ? d.items.filter((n: Notif) => !n.read && !seen.has(n.id)) : []
+    seenIds.current = new Set(d.items.map((n: Notif) => n.id))
+    // A new notification just arrived → vibrate the bell and play the chime,
+    // or the mention sound if someone @mentioned you. A chat mention has
+    // usually just played it already through the in-app banner
+    // (InAppChatAlert); it is not played a second time on the next poll.
     if (prevUnread.current !== null && d.unread > prevUnread.current) {
       setVibrating(true)
       setTimeout(() => setVibrating(false), 800)
-      if (soundOnRef.current) playChime()
+      if (soundOnRef.current) {
+        if (fresh.some(isMention)) playNotifSound('votask_mention', { unlessPlayedWithinMs: 20000 })
+        else playChime()
+      }
     }
     prevUnread.current = d.unread
   }).catch(() => {})
