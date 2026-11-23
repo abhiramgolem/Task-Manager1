@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { Ic } from '../ui'
+import { playNotifSound } from '../lib/notifSound'
 
 // A new message while the app is open, in a chat you are not looking at.
 //
@@ -57,8 +58,11 @@ export default function InAppChatAlert() {
       setAlert({ cid: d.conversationId, mid: d.message.id, title: d.title || 'New message', text: d.preview || '' })
       if (timer.current) clearTimeout(timer.current)
       timer.current = setTimeout(() => setAlert(null), 4500)
-      // A burst (several lines in a row) chimes once, not once per line.
-      if (Date.now() - lastChime.current > 3000) { lastChime.current = Date.now(); chime() }
+      // Being @mentioned has its own sound, as in Cliq — the same file the
+      // phone's mention notification plays — and is never lost in a burst.
+      // Otherwise a burst (several lines in a row) chimes once, not once per line.
+      if (d.mention) { lastChime.current = Date.now(); playNotifSound('votask_mention') }
+      else if (Date.now() - lastChime.current > 3000) { lastChime.current = Date.now(); chime() }
     }
     window.addEventListener('votask-chat-message', on)
     return () => window.removeEventListener('votask-chat-message', on)

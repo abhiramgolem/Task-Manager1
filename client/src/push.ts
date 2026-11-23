@@ -19,6 +19,8 @@ let lastRegisteredAt = 0
 let resumeListener: { remove: () => Promise<void> } | null = null
 // How often an app that keeps running re-registers its token on coming back.
 const REREGISTER_MS = 6 * 3600_000
+// The first versionCode with the mention sound (res/raw/votask_mention.wav).
+const MENTION_SOUND_BUILD = 44
 
 // The native side of keeping pushes coming while the app is closed
 // (PushSetupPlugin.java). Builds before 4.8 do not have it.
@@ -95,6 +97,31 @@ export async function registerPush() {
       } catch {}
     }
 
+    // This build's versionCode, so an "update available" push skips phones
+    // already on the new one (the server's sendUpdatePush).
+    let appBuild: number | undefined
+    try { const { App } = await import('@capacitor/app'); appBuild = parseInt((await App.getInfo()).build, 10) || undefined } catch {}
+
+    // Being @mentioned has its own sound (res/raw/votask_mention.wav), as in
+    // Cliq. Only a build that ships the file may create the channel: Android
+    // freezes a channel's sound at creation, and one made without the file
+    // would stay silent for good. The server sends a mention to this channel
+    // by the same versionCode (push.js MENTION_SOUND_FROM); ChatNotifier.java
+    // creates it as well, for a push that arrives before the app is opened.
+    if ((appBuild || 0) >= MENTION_SOUND_BUILD) {
+      try {
+        await PushNotifications.createChannel({
+          id: 'votask_mention',
+          name: 'Mentions',
+          description: 'When someone @mentions you in a chat or a task comment',
+          importance: 5,
+          visibility: 1,
+          sound: 'votask_mention',
+          vibration: true,
+        })
+      } catch {}
+    }
+
     let perm = await PushNotifications.checkPermissions()
     if (perm.receive === 'prompt' || perm.receive === 'prompt-with-rationale') {
       perm = await PushNotifications.requestPermissions()
@@ -107,10 +134,6 @@ export async function registerPush() {
     // send calls to it as silent data pushes (see sendCallPush). An older build
     // registers without it and keeps getting an ordinary notification.
     const callRing = nativeCallsAvailable()
-    // This build's versionCode, so an "update available" push skips phones
-    // already on the new one (the server's sendUpdatePush).
-    let appBuild: number | undefined
-    try { const { App } = await import('@capacitor/app'); appBuild = parseInt((await App.getInfo()).build, 10) || undefined } catch {}
     if (callRing) configureNativeCalls(API_BASE || location.origin)
     const sendToken = async (value: string) => {
       lastRegisteredAt = Date.now()

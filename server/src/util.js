@@ -172,6 +172,7 @@ export function notify(orgId, userId, type, message, taskId = null, link = null,
     body: push?.body || message,
     tag: push?.tag,
     rich: push?.rich,
+    mention: !!push?.mention,
     data: { type, taskId, conversationId, messageId, commentId },
   }).catch(() => {})
 }

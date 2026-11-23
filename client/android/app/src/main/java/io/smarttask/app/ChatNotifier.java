@@ -33,6 +33,11 @@ final class ChatNotifier {
     // The channel push.ts creates, with VoTask's chime. Created here too: a push
     // can arrive before the app has ever been opened to create it.
     static final String CHANNEL_ID = "votask_chime";
+    // Being @mentioned has its own sound (res/raw/votask_mention.wav), as in
+    // Cliq, so it can be told from the room's chatter without looking. Android
+    // takes a notification's sound from its channel, so it is its own channel;
+    // push.ts creates it too, for the server's non-chat mention pushes.
+    static final String MENTION_CHANNEL_ID = "votask_mention";
     private static final int NOTIFICATION_ID = 1;
     // Lines kept per chat: WhatsApp shows about this many before "+N more".
     private static final int KEEP = 8;
@@ -109,7 +114,11 @@ final class ChatNotifier {
         PendingIntent tap = PendingIntent.getActivity(ctx, cid.hashCode(), open,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, CHANNEL_ID)
+        // A mention rings with the mention sound. The chat keeps one
+        // notification either way: re-posted under the same tag, it replaces
+        // the one from the other channel.
+        boolean mention = !local && "chat_mention".equals(d.get("type"));
+        NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, mention ? MENTION_CHANNEL_ID : CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_chat)
             .setColor(0xFFEA580C)
             .setStyle(style)
@@ -216,10 +225,16 @@ final class ChatNotifier {
     }
 
     private static void ensureChannel(Context ctx, NotificationManager nm) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || nm.getNotificationChannel(CHANNEL_ID) != null) return;
-        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "VoTask notifications", NotificationManager.IMPORTANCE_HIGH);
-        ch.setDescription("Task updates, mentions and new messages");
-        ch.setSound(Uri.parse(ContentResolver.SCHEME_ANDROID_RESOURCE + "://" + ctx.getPackageName() + "/raw/votask_chime"),
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        ensureChannel(ctx, nm, CHANNEL_ID, "VoTask notifications", "Task updates, mentions and new messages", "votask_chime");
+        ensureChannel(ctx, nm, MENTION_CHANNEL_ID, "Mentions", "When someone @mentions you in a chat or a task comment", "votask_mention");
+    }
+
+    private static void ensureChannel(Context ctx, NotificationManager nm, String id, String name, String description, String sound) {
+        if (nm.getNotificationChannel(id) != null) return;
+        NotificationChannel ch = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
+        ch.setDescription(description);
+        ch.setSound(Uri.parse(ContentResolver.SCHEME_ANDROID_RESOURCE + "://" + ctx.getPackageName() + "/raw/" + sound),
             new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)

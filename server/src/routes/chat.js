@@ -1210,6 +1210,8 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
       // like every other message in the group.
       const push = pushFor(uid, p?.last_read_at, `${sender.name} mentioned you: ${full}`)
       push.rich = { ...push.rich, text: clipForPush(`Mentioned you: ${preview}`) }
+      // The mention sound, as Cliq has (push.js `mention`).
+      push.mention = true
       notify(conv.org_id, uid, 'chat_mention', `${sender.name} mentioned you${conv.type === 'group' ? ` in ${conv.name || 'Group'}` : ''}: ${short}`, null, at, push)
       continue
     }
@@ -1232,7 +1234,9 @@ export function deliver(conv, msgRow, sender, mentioned = []) {
     pushToUser(uid, {
       type: 'message', conversationId: conv.id, message: shapeMessage(msgRow, uid, receipts.get(uid) || NO_RECEIPTS),
       // For the in-app banner (client InAppChatAlert): whether to alert, and what to say.
+      // `mention`: this person was @mentioned, so it plays the mention sound.
       alert: uid !== sender.id && !quiet.has(uid), title: chatTitle, preview: inAppLine,
+      mention: uid !== sender.id && pinged.has(uid),
     })
   }
   indexChatMessage(msgRow.id) // RAG: index every delivered message (text/upload/forward)

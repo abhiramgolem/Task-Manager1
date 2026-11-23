@@ -17,19 +17,10 @@ public class MainActivity extends BridgeActivity {
 
     static boolean isInForeground() { return foreground; }
 
-    // Started, not resumed: what Android counts as "on screen" when it decides
-    // whether a microphone service may start. A permission dialog over the app
-    // pauses it while leaving it visible, and that is exactly when the recorder
-    // asks (MeetingRecorderPlugin.start, right after the mic is granted).
-    private static volatile boolean visible;
-
-    static boolean isVisible() { return visible; }
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         // Must be registered before the bridge is built in super.onCreate.
         registerPlugin(CallRingPlugin.class);
-        registerPlugin(MeetingRecorderPlugin.class);
         registerPlugin(ShareTargetPlugin.class);
         registerPlugin(AppUpdatePlugin.class);
         registerPlugin(FileDownloadPlugin.class);
@@ -49,18 +40,6 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         handleCall(intent, false);
         handleShare(intent);
-    }
-
-    @Override
-    public void onStart() {
-        super.onStart();
-        visible = true;
-    }
-
-    @Override
-    public void onStop() {
-        visible = false;
-        super.onStop();
     }
 
     @Override
