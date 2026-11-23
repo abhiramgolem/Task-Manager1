@@ -14,7 +14,6 @@ import { useCallAnalyses, inProgress as analysing, callLabel } from '../lib/call
 import { MeetingDraft, loadMeetingDraft, saveMeetingDraft, clearMeetingDraft, draftLineCount, draftDuration, draftAgo } from '../lib/meetingDraft'
 import ParticipantPicker from '../components/ParticipantPicker'
 import { startPcmStream, PcmStream } from '../lib/pcmStream'
-import { keepRecordingInBackground, updateBackgroundRecording, releaseBackgroundRecording } from '../lib/backgroundRecording'
 
 // Preset meeting titles for the dropdown; "Other" lets the user type a custom one.
 const MEETING_TITLES = ['Tech Meeting', 'Marketing Meeting', 'Sales Meeting', 'HR Meeting', 'Tech and Marketing Meeting']
@@ -587,20 +586,15 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   const engineRef = useRef(0)
   // Consecutive attempts to reopen a microphone that went away mid-meeting.
   const micRetryRef = useRef(0)
-  // How this recording survives the screen going off. 'service': Android's
-  // microphone service holds it, so the screen may sleep. 'screen': no service
-  // (it refused, or this is an older build), so the screen is kept on instead.
-  const holdRef = useRef<null | 'service' | 'screen'>(null)
   // Why the meeting is paused — a pause is now rare enough to deserve a reason.
   const [pauseWhy, setPauseWhy] = useState('')
+  // Why the recording ended on its own (the screen was switched off), shown
+  // when they come back so a "Ready" recorder is not a mystery.
+  const [stoppedWhy, setStoppedWhy] = useState('')
   const speakerRef = useRef(speaker)
   useEffect(() => { speakerRef.current = speaker }, [speaker])
   const transcriptRef = useRef('')
   useEffect(() => { transcriptRef.current = transcript }, [transcript])
-  const titleRef = useRef(title)
-  useEffect(() => { titleRef.current = title }, [title])
-  const secondsRef = useRef(seconds)
-  useEffect(() => { secondsRef.current = seconds }, [seconds])
 
   // Write the meeting to disk as it is captured. Every spoken phrase lands here
   // within a second of being recognised, so the worst a refresh, a crash or a
@@ -731,11 +725,13 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   useEffect(() => () => {
     recordingRef.current = false
     teardownEngines()
-    releaseHold()
+    keepScreenAwake(false)
   }, [])
 
-  // The fallback for when the screen-off recording below is unavailable: keep
-  // the screen on (native only), since a backgrounded WebView gets no audio.
+  // While a meeting is open the screen stays on (native only), so it never
+  // sleeps by itself in the middle of one. Recording with the screen off (a
+  // microphone foreground service, Nov 2026) was taken out on request: the
+  // screen going off is now the person's own choice, and it ends the recording.
   const keepScreenAwake = (on: boolean) => {
     if (!Capacitor.isNativePlatform()) return
     import('@capacitor-community/keep-awake')
@@ -743,51 +739,21 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
       .catch(() => {})
   }
 
-  // A meeting runs for hours and the phone goes face-down on the table; keeping
-  // the screen lit for all of it drained the battery, and letting it sleep used
-  // to pause the meeting. So the app asks Android to keep the recording going
-  // with the screen off (lib/backgroundRecording.ts), and only if it says no
-  // does it fall back to holding the screen on.
-  //
-  // Asked each time a microphone opens, not when Start is pressed: the first
-  // time someone records, mic permission is only granted by that getUserMedia,
-  // and Android will not start a microphone service before it is.
-  const holdBackground = async () => {
-    if (!Capacitor.isNativePlatform()) return
-    const state = { title: titleRef.current, paused: pausedRef.current, seconds: secondsRef.current }
-    if (holdRef.current === 'service') { updateBackgroundRecording(state); return }
-    if (await keepRecordingInBackground(state)) {
-      // Stopped while Android was being asked.
-      if (!recordingRef.current && !pausedRef.current) { releaseBackgroundRecording(); return }
-      holdRef.current = 'service'
-      keepScreenAwake(false)
-    } else if (!holdRef.current) {
-      holdRef.current = 'screen'
-      keepScreenAwake(true)
-    }
-  }
-  const releaseHold = () => {
-    if (holdRef.current === 'service') releaseBackgroundRecording()
-    holdRef.current = null
-    keepScreenAwake(false)
-  }
-
-  // The notification names the meeting and says when it is paused.
-  useEffect(() => {
-    if (holdRef.current === 'service') updateBackgroundRecording({ title, paused, seconds: secondsRef.current })
-  }, [title, paused])
-
-  // Backgrounded mid-capture (screen off, home button, an incoming call). With
-  // the service holding the mic that is nothing at all — the meeting carries on.
-  // Without it Android hands the app silence, so the honest thing is still to
-  // pause rather than show a REC light over a transcript that has stopped.
+  // The app left the screen mid-meeting: the power button, the phone switching
+  // off, the home button or an incoming call. With the screen held on, none of
+  // that happens by accident, so it ends the recording — and Android hands a
+  // backgrounded app silence anyway. Nothing is lost: the transcript stays here
+  // and is pushed to the server as recording stops (the sync effect re-runs),
+  // and Start recording carries on the same meeting. Capacitor reports this on
+  // onStop, so a permission dialog over the app (onPause only) does not end it.
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
     let handle: { remove: () => void } | undefined
     import('@capacitor/app').then(({ App }) => {
       App.addListener('appStateChange', ({ isActive }) => {
-        if (isActive || !recordingRef.current || holdRef.current === 'service') return
-        pauseRecording('VoTask could not keep the microphone while the app was in the background.')
+        if (isActive || (!recordingRef.current && !pausedRef.current)) return
+        stop()
+        setStoppedWhy('the screen was turned off, or VoTask left the screen.')
       }).then((h) => { handle = h })
     }).catch(() => {})
     return () => { handle?.remove() }
@@ -807,7 +773,6 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   }
   const micOpened = () => {
     micRetryRef.current = 0
-    holdBackground()
   }
   const reopenMic = () => {
     teardownEngines()
@@ -1061,8 +1026,9 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     // was interrupted is a continuation of the same one, and restarting its timer
     // would say the previous 40 minutes never happened.
     if (!transcript.trim()) setSeconds(0)
-    setPaused(false); pausedRef.current = false; setPauseWhy('')
+    setPaused(false); pausedRef.current = false; setPauseWhy(''); setStoppedWhy('')
     micRetryRef.current = 0
+    keepScreenAwake(true)
     beginCapture()
   }
 
@@ -1102,7 +1068,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
     setInterim('')
     setLiveNote('')
     teardownEngines()
-    releaseHold()
+    keepScreenAwake(false)
   }
 
   const mmss = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
@@ -1115,7 +1081,7 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
   // a convenience but the only sensible control.
   //
   // Each capability calls the modal's own handler, which means the agent inherits
-  // every hard-won behaviour already in them: the screen-off hold, the fresh-engine
+  // every hard-won behaviour already in them: keepScreenAwake, the fresh-engine
   // restart on resume (an interrupted mic/websocket is usually dead), and the
   // teardown that releases the microphone.
   //
@@ -1250,6 +1216,11 @@ function LiveMeetingModal({ defaultSpeaker, onClose, onDone }: { defaultSpeaker:
           {recording && paused && (
             <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
 <b>Meeting paused</b> — {pauseWhy ? pauseWhy + ' ' : ''}Nothing is recorded until you tap <b>Resume meeting</b>.
+            </div>
+          )}
+          {!recording && stoppedWhy && (
+            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '8px 12px', borderRadius: 8, fontSize: 13 }}>
+              <b>Recording stopped</b> — {stoppedWhy} Everything said so far is kept: tap <b>Start recording</b> to carry on, or analyze it.
             </div>
           )}
           <div className="row" style={{ gap: 10 }}>

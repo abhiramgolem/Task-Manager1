@@ -239,15 +239,11 @@ the `CallRing` plugin (`lib/nativeCall.ts`). A build registers its push token wi
 `call_ring: true`; older builds get an ordinary notification instead, since they would drop
 a data-only push.
 
-A live meeting keeps recording with the screen off through `MeetingRecordingService`, a
-`microphone`-type foreground service (the "Recording meeting" notification) that the web
-recorder starts through the `MeetingRecorder` plugin (`lib/backgroundRecording.ts`) once its
-mic is open — Android won't start one before the mic permission exists. The service alone
-is not enough: Chromium stops a WebView whose window is hidden about a minute after
-screen-off, so while recording the plugin re-dispatches `View.VISIBLE` to the WebView on
-`onStop`. If the service can't start, the recorder falls back to keeping the screen on and
-pausing when backgrounded. `FOREGROUND_SERVICE_MICROPHONE` needs a foreground-service
-declaration in Play Console.
+A live meeting keeps the screen on (`@capacitor-community/keep-awake`) and **stops** when
+the app leaves the screen — power button, phone off, home, incoming call (`appStateChange`,
+fired on `onStop`). That is deliberate: screen-off recording through a microphone foreground
+service shipped in Nov 2026 and was removed on request. Android hands a backgrounded app
+silence, so don't try to keep capturing there without bringing such a service back.
 
 ## Conventions
 
