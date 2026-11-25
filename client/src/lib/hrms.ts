@@ -40,6 +40,10 @@ export interface TodayAttendance {
   location: TodayLocation | null
   selfieRequired: boolean
   hasProfilePhoto: boolean
+  // Today is a weekly off or a company holiday (HRMS A120): the HRMS refuses a
+  // check-in and work that day is claimed as comp-off. `name` is the holiday's
+  // name, null for a weekly off. Older HRMS builds don't send it: treat as null.
+  offDay?: { kind: 'WEEKLY_OFF' | 'HOLIDAY'; name: string | null } | null
 }
 
 export interface PunchBlocked {

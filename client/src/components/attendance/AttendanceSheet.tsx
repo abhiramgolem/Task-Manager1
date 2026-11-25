@@ -63,12 +63,21 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
   const stale = t?.state === 'STALE_OPEN'
   const checkoutPending = t?.state === 'CHECKOUT_PENDING'
   const needsProfilePhoto = !!t && t.selfieRequired && !t.hasProfilePhoto
-  // No new check-in while an off-site punch of today waits for HR; one check-in per day.
-  const canCheckIn = !!t && t.firstCheckInAvailable && (stale || (!checkedIn && !checkoutPending && !t.waitingForHr))
+  // No new check-in while an off-site punch of today waits for HR; one check-in per day;
+  // none on a weekly off or holiday, which the HRMS refuses (A120). Check-out stays:
+  // an overnight session from a working day can still end after midnight.
+  const offDay = t?.offDay || null
+  const canCheckIn = !!t && !offDay && t.firstCheckInAvailable && (stale || (!checkedIn && !checkoutPending && !t.waitingForHr))
   const canCheckOut = !!t && (checkedIn || (stale && t.canCheckOut))
   const doneForToday = !!t && t.checkedOutToday && !t.missingCheckOutToday && !t.firstCheckInAvailable && !t.waitingForHr && !checkedIn && !checkoutPending && !stale
   const missingToday = !!t && t.missingCheckOutToday && !t.firstCheckInAvailable && !t.waitingForHr && !checkedIn && !checkoutPending
   const staleEarlierDay = !!t && stale && t.openSessionDate !== t.today
+  // Work on an off day is claimed as comp-off in HRMS, signed in through VoTask
+  // like "Open attendance in HRMS" below, landing on the comp-off form.
+  const compOffUrl = `${hrmsUrl}/api/votask/login/start?next=%2Fleave%2Fcomp-off`
+  // The day became an off day after the sheet loaded (HR changed the work week,
+  // or the sheet sat open past midnight): the HRMS's refusal says so.
+  const compOffError = /ask for comp-off/i.test(error)
 
   const send = async (kind: PunchKind, selfie: Blob | null) => {
     if (!t) return
@@ -200,6 +209,12 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
               {locating ? 'Checking your location… If asked, allow location access for VoTask.' : ''}
             </p>
 
+            {offDay && !checkedIn && (
+              <div className="att-banner info" data-testid="attendance-off-day">
+                Today is {offDay.kind === 'HOLIDAY' ? `a holiday${offDay.name ? ` (${offDay.name})` : ''}` : 'a weekly off'}, so check-in is closed. Worked today?{' '}
+                <a href={compOffUrl} target="_blank" rel="noopener noreferrer">Ask for comp-off</a>
+              </div>
+            )}
             {checkoutPending && <div className="att-banner info">Your off-site check-out is waiting for HR approval. It counts once HR approves it.</div>}
             {t.waitingForHr && !checkedIn && !checkoutPending && (
               <div className="att-banner info">Your off-site check-in for today is waiting for HR approval. You can check in again today only if HR rejects it.</div>
@@ -221,7 +236,8 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
             )}
             {staleEarlierDay && (
               <div className="att-banner warn">
-                Your check-in from {t.openSince} has no check-out. If you forgot to check out, check in for today and{' '}
+                {/* No check-in to suggest on an off day; the correction still applies. */}
+                Your check-in from {t.openSince} has no check-out. If you forgot to check out, {offDay ? '' : 'check in for today and '}
                 <a href={`${hrmsUrl}/attendance/corrections/new?date=${t.openSessionDate}`} target="_blank" rel="noopener noreferrer">request a correction</a>.
               </div>
             )}
@@ -234,6 +250,9 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
                 onSent={(m) => { setBlocked(null); setSentMsg(m); onPunched() }} />
             )}
             {error && <div className="att-banner error" role="alert">{error}</div>}
+            {error && compOffError && (
+              <p className="att-fine"><a href={compOffUrl} target="_blank" rel="noopener noreferrer">Ask for comp-off</a></p>
+            )}
             {sentMsg && <div className="att-banner ok" role="status">{sentMsg}</div>}
           </div>
         )}
