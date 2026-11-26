@@ -11,6 +11,7 @@ import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { onDownloadLink } from '../lib/saveFile'
 import { useDialog } from '../lib/useDialog'
+import { Linkify } from '../lib/linkify'
 import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
 import { attachable, attachToTask, fileExt } from '../lib/taskAttach'
 import { useSurface } from '../voice/uiRegistry'
@@ -26,6 +27,9 @@ const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reope
 // on a wide screen, where covering the page to read one task wastes the room.
 // `focusCommentId` is a comment to open on (a tapped comment notification);
 // `focusKey` changes on each such arrival, so a second tap lands again.
+// Characters past which a title is treated as a paragraph (see the hero below).
+const LONG_TITLE = 180
+
 export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal', focusCommentId = null, focusKey = 0 }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void; variant?: 'modal' | 'pane'; focusCommentId?: string | null; focusKey?: number }) {
   const { user } = useAuth()
   const pane = variant === 'pane'
@@ -71,6 +75,9 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   const [commentMenu, setCommentMenu] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [pendingAssignee, setPendingAssignee] = useState('')
+  // A title that is really a pasted paragraph is shown cut short until asked.
+  const [titleOpen, setTitleOpen] = useState(false)
+  useEffect(() => setTitleOpen(false), [taskId])
   // A status the user has picked but not yet confirmed — applied only on "Accept".
   const [pendingStatus, setPendingStatus] = useState('')
   // Inline edit of the task's core details (title, description, due date).
@@ -388,7 +395,14 @@ This cannot be undone — comments are not kept in the recycle bin.`,
             </div>
           ) : (
             <div className="dr-hero" style={{ ['--pr' as any]: PRIORITY_COLORS[task.priority] || 'var(--primary)' }}>
-              <h2 className="dr-title">{task.title}</h2>
+              {/* Smaller and cut to five lines when the title is a paragraph,
+                  so the status, fields and comments aren't pushed out of reach. */}
+              <h2 className={'dr-title' + (task.title.length > LONG_TITLE ? ' long' + (titleOpen ? '' : ' cut') : '')}><Linkify text={task.title} /></h2>
+              {task.title.length > LONG_TITLE && (
+                <button type="button" className="dr-more" aria-expanded={titleOpen} onClick={() => setTitleOpen((o) => !o)}>
+                  {titleOpen ? 'Show less' : 'Show full title'}
+                </button>
+              )}
               <div className="dr-badges">
                 <PriorityBadge p={task.priority} /><StatusBadge s={task.status} /><CategoryBadge c={task.category} />
                 {task.visible_to_manager === 0 && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)', border: '1px solid var(--info-border)' }}><Ic name="lock" size={12} /> Private</span>}
@@ -397,7 +411,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
               {task.description && task.description !== task.title && (
                 <>
                   <div className="dr-section-label">Description</div>
-                  <p className="dr-desc">{task.description}</p>
+                  <p className="dr-desc"><Linkify text={task.description} /></p>
                 </>
               )}
             </div>
@@ -627,7 +641,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                       const u = lookupUser(s.assignee_id)
                       return (
                         <div key={s.id} className="spread" style={{ fontSize: 13, padding: '7px 0', borderBottom: '1px solid #f1f5f9' }}>
-                          <span className="row" style={{ gap: 6 }}>{s.status === 'Done' ? <Ic name="check" size={13} /> : <span style={{ color: 'var(--muted)' }}>•</span>} {s.title}</span>
+                          <span className="row" style={{ gap: 6, minWidth: 0 }}>{s.status === 'Done' ? <Ic name="check" size={13} /> : <span style={{ color: 'var(--muted)' }}>•</span>} <span className="clamp-2" style={{ overflowWrap: 'anywhere' }}>{s.title}</span></span>
                           <span className="row" style={{ gap: 6 }}>
                             {u && <Avatar name={u.name} color={u.avatar_color} size={18} />}
                             <span className="muted">{u?.name || '—'}</span>
@@ -782,7 +796,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                       </div>
                     ) : (
                       <>
-                        <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{c.body}</div>
+                        <div className="comment-text"><Linkify text={c.body} /></div>
                       </>
                     )}
                   </div>

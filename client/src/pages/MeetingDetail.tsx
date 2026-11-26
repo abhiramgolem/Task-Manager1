@@ -283,7 +283,7 @@ export default function MeetingDetail() {
                       role="button" tabIndex={0} aria-label={`Open ${t.title}`}
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenId(t.id) } }}>
                       <td>
-                        <div style={{ fontWeight: 600 }}>{t.title}</div>
+                        <div className="clamp-2" style={{ fontWeight: 600 }}>{t.title}</div>
                         <div className="muted" style={{ fontSize: 11.5 }}>{t.assignee_name || t.assignee_name_raw || 'Unassigned'} · {dueLabel(t)}</div>
                       </td>
                       <td style={{ textAlign: 'right' }}><PriorityBadge p={t.priority} /><br /><StatusBadge s={t.status} /></td>
