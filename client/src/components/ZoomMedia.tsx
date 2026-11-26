@@ -85,7 +85,9 @@ export interface ZoomHandle {
 // picture, not the page under the viewer.
 //   picture: pinch, double-tap or double-click to zoom (1-4x); drag to pan
 //     once zoomed; at 1x, swipe sideways to step, pull down to close.
-//   dark ground: a tap closes (zooms out first, when zoomed).
+//   dark ground: a tap closes (zooms out first, when zoomed). Given onTap, a
+//     finger's tap there or on the picture shows or hides the viewer's bars
+//     instead, as in WhatsApp; a mouse click on the ground still closes.
 //   video: its taps and its control bar are its own; a finger swiping across
 //     the picture turns it like a photo. A mouse leaves it alone (arrows/keys).
 const ZoomMedia = forwardRef<ZoomHandle, {
@@ -105,7 +107,9 @@ const ZoomMedia = forwardRef<ZoomHandle, {
   // The items either side, shown sliding in during a swipe.
   prev?: Peek | null
   next?: Peek | null
-}>(function ZoomMedia({ src, video = false, alt, canPrev, canNext, onStep, onClose, armedAt, onZoom, prev, next }, handle) {
+  // A finger's single tap (see the gesture list above).
+  onTap?: () => void
+}>(function ZoomMedia({ src, video = false, alt, canPrev, canNext, onStep, onClose, armedAt, onZoom, prev, next, onTap }, handle) {
   const [state, setState] = useState<'loading' | 'ready' | 'broken'>('loading')
   const [zoomed, setZoomed] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -118,8 +122,11 @@ const ZoomMedia = forwardRef<ZoomHandle, {
   const setMedia = useCallback((el: HTMLImageElement | HTMLVideoElement | null) => { media.current = el }, [])
   const zoom = useRef<Zoom>(NO_ZOOM)
   // Read by the native listeners below, which are attached once.
-  const now = useRef({ canZoom: false, canPrev, canNext, onStep, onClose })
-  useLayoutEffect(() => { now.current = { canZoom: !video && state === 'ready', canPrev, canNext, onStep, onClose } })
+  const now = useRef({ canZoom: false, canPrev, canNext, onStep, onClose, onTap })
+  useLayoutEffect(() => { now.current = { canZoom: !video && state === 'ready', canPrev, canNext, onStep, onClose, onTap } })
+  // A tap on the picture waits to see whether a second one (a zoom) follows.
+  const tapTimer = useRef(0)
+  useEffect(() => () => window.clearTimeout(tapTimer.current), [])
   const onZoomRef = useRef(onZoom)
   useEffect(() => { onZoomRef.current = onZoom })
   useEffect(() => { onZoomRef.current?.(zoomed) }, [zoomed])
@@ -290,10 +297,13 @@ const ZoomMedia = forwardRef<ZoomHandle, {
     }
     // A tap on the dark ground closes (in the click — see closeOnClick), or
     // zooms back out first.
+    const tap = p.touch ? now.current.onTap : undefined
     if (!p.onPicture) {
       lastTap.current = null
       if (z.s > 1) show(NO_ZOOM, true)
-      else if (Date.now() >= armedAt) closeOnClick.current = true
+      else if (Date.now() < armedAt) { /* the thumbnail's second tap */ }
+      else if (tap) tap()
+      else closeOnClick.current = true
       return
     }
     // On the picture, two taps (or clicks: the system's double-click time is
@@ -301,11 +311,16 @@ const ZoomMedia = forwardRef<ZoomHandle, {
     const t = Date.now(), last = lastTap.current
     if (last && t - last.t < (p.touch ? 300 : 500) && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
       lastTap.current = null
+      window.clearTimeout(tapTimer.current)
       const f = frame()
       if (canZoom && f) show(z.s > 1 ? NO_ZOOM : zoomTo(z, ZOOM_TAP, e.clientX, e.clientY, e.clientX, e.clientY, f), true)
       return
     }
     lastTap.current = { t, x: e.clientX, y: e.clientY }
+    if (tap) {
+      window.clearTimeout(tapTimer.current)
+      tapTimer.current = window.setTimeout(() => now.current.onTap?.(), 300)
+    }
   }
 
   // Attached natively: React's wheel and touchmove listeners are passive, and

@@ -2613,9 +2613,11 @@ export default function Chats() {
     setStagedThumbs((m) => { const n = { ...m }; for (const id of ids) delete n[id]; return n })
   }
   // A file's row: its type badge, name and size, and Download. A PDF's says
-  // how many pages it has once its first page is drawn, and opens on a tap.
+  // how many pages it has once its first page is drawn. A tap opens it.
   const fileRow = (m: Msg, local: boolean, pages?: number, onOpen?: () => void) => (
-    <div className={'chat-file' + (onOpen ? ' chat-file-open' : '')}
+    <div className={'chat-file' + (onOpen ? ' chat-file-open' : '')} role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined}
+      aria-label={onOpen ? `Open ${m.file?.name || 'file'}` : undefined}
+      onKeyDown={onOpen ? (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); onOpen() } } : undefined}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen() } : undefined}>
       <span className="chat-file-icon" data-kind={fileKind(m.file?.name)}>{m.failed ? <Ic name="warning" size={18} /> : m.uploading ? <Ic name="clock" size={18} /> : fileKind(m.file?.name) ? fileKind(m.file?.name).toUpperCase() : <DocGlyph size={20} />}</span>
       <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.failed ? 'Not sent' : m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [pages ? `${pages} page${pages === 1 ? '' : 's'}` : '', fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
@@ -3698,6 +3700,9 @@ export default function Chats() {
               // file to show yet, so a picture or voice note shows as a file row.
               const local = !!(m.uploading || m.failed)
               const isImage = !!m.file && (m.file.type || '').startsWith('image/')
+              // A photo or video on the server: it fills its bubble, and with no
+              // caption its time sits on the picture (.media-bubble in the CSS).
+              const isMedia = !!m.file && !local && (isImage || isVideo(m.file))
               const isCard = !!m.kind && !m.deleted
               // A run: the same person again, straight after and within a few
               // minutes. As in WhatsApp and Cliq, only its first message carries
@@ -3791,7 +3796,7 @@ export default function Chats() {
                         <div className="bubble deleted row" style={{ gap: 6 }} {...bubbleTouch(m)}><Ic name="block" size={13} /> {mine ? 'You deleted this message' : 'This message was deleted'}<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
                       ) : (
                         <div
-                          className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !local ? ' pic-bubble' : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
+                          className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !local ? ' pic-bubble' : '') + (isMedia ? ' media-bubble' + (shownBody ? '' : ' bare') : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
                           {...bubbleTouch(m)}
                         >
                           {/* In the bubble, as WhatsApp writes who said it. */}
@@ -3836,7 +3841,9 @@ export default function Chats() {
                                   <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy"
                                     // A picture that finishes loading grows the thread; if the
                                     // reader was at the bottom, keep the newest line in view.
-                                    onLoad={() => { const el = logRef.current; if (el && stuckRef.current) el.scrollTop = el.scrollHeight }} />
+                                    // Until then it holds a shimmering space (.chat-image:not(.ready)).
+                                    onLoad={(e) => { e.currentTarget.classList.add('ready'); const el = logRef.current; if (el && stuckRef.current) el.scrollTop = el.scrollHeight }}
+                                    onError={(e) => e.currentTarget.classList.add('ready')} />
                                 </button>
                                 {mediaDl(m)}
                               </div>
@@ -3853,7 +3860,10 @@ export default function Chats() {
                                 : local && m.localThumb
                                   // Still sending: the page drawn here when it was picked.
                                   ? <div className="pdf-doc"><div className="pdf-thumb"><img src={m.localThumb} alt="" draggable={false} /></div>{fileRow(m, local, m.localPages)}</div>
-                                  : fileRow(m, local))}
+                                  // A sheet, a document, anything else: a tap anywhere on it opens
+                                  // it (the app saves it and opens it in its own app, as WhatsApp
+                                  // does; a browser downloads it). Only the small button did before.
+                                  : fileRow(m, local, undefined, local ? undefined : () => download(m)))}
                           {!m.file && !m.kind && !isTemp && /https?:\/\//i.test(body) && <LinkPreview messageId={m.id} version={m.edited_at || ''} />}
                           {shownBody && <MessageText body={shownBody} mentions={m.mentions} meId={user!.id} fromMe={mine} highlight={inSearch} />}
                           {folded && <button type="button" className="read-more" onClick={(e) => { e.stopPropagation(); setUnfolded((s) => new Set(s).add(m.id)) }}>Read more</button>}

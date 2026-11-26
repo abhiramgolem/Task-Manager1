@@ -47,6 +47,9 @@ export default function PhotoViewer({ items, startId, onClose, actions, label = 
   const armedAt = useRef(Date.now() + 350)
   const zoomCtl = useRef<ZoomHandle>(null)
   const [zoomed, setZoomed] = useState(false)
+  // A tap hides the bar and the caption to look at the picture alone, and
+  // brings them back (WhatsApp). On a phone they lie over the picture.
+  const [bare, setBare] = useState(false)
 
   // Android's back button closes the viewer, not the page or drawer under it.
   useEffect(() => pushBackHandler(() => { closeRef.current(); return true }), [])
@@ -81,7 +84,7 @@ export default function PhotoViewer({ items, startId, onClose, actions, label = 
   const sub = [it.subtitle, items.length > 1 ? `${idx + 1} of ${items.length}` : ''].filter(Boolean).join(' · ')
 
   return (
-    <div className="mv-overlay" ref={ref} role="dialog" aria-modal="true" aria-label={label}>
+    <div className={'mv-overlay' + (bare ? ' bare' : '')} ref={ref} role="dialog" aria-modal="true" aria-label={label}>
       <div className="mv-head">
         <button type="button" className="mv-btn" onClick={onClose} aria-label="Close"><ChevronLeft size={24} /></button>
         <div className="mv-who" aria-live="polite">
@@ -99,7 +102,8 @@ export default function PhotoViewer({ items, startId, onClose, actions, label = 
       <div className="mv-stage">
         <ZoomMedia key={it.id} ref={zoomCtl} src={it.src} video={it.video} alt={it.alt}
           canPrev={idx > 0} canNext={idx < items.length - 1} onStep={go} onClose={onClose}
-          armedAt={armedAt.current} onZoom={setZoomed} prev={peek(items[idx - 1])} next={peek(items[idx + 1])} />
+          armedAt={armedAt.current} onZoom={setZoomed} prev={peek(items[idx - 1])} next={peek(items[idx + 1])}
+          onTap={() => setBare((b) => !b)} />
         {idx > 0 && <button type="button" className="mv-nav prev" onClick={() => go(-1)} aria-label="Previous"><ChevronLeft size={30} /></button>}
         {idx < items.length - 1 && <button type="button" className="mv-nav next" onClick={() => go(1)} aria-label="Next"><ChevronRight size={30} /></button>}
       </div>

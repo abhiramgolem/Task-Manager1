@@ -779,6 +779,8 @@ function Lightbox({ kind, items, index, total, meId, onIndex, onClose, onShowMes
   const closeRef = useRef(close)
   useEffect(() => { closeRef.current = close })
   const noun = kind === 'images' ? 'Image' : 'Video'
+  // A tap hides the bar and the caption to look at the picture alone (WhatsApp).
+  const [bare, setBare] = useState(false)
   const go = (step: number) => {
     const j = index + step
     if (j >= 0 && j < items.length) onIndex(j)
@@ -825,7 +827,7 @@ function Lightbox({ kind, items, index, total, meId, onIndex, onClose, onShowMes
   const atStart = index <= 0, atEnd = index >= items.length - 1
 
   return (
-    <div className="ci-lb" ref={ref} role="dialog" aria-modal="true" aria-label={`${noun} viewer`} tabIndex={-1}>
+    <div className={'ci-lb' + (bare ? ' bare' : '')} ref={ref} role="dialog" aria-modal="true" aria-label={`${noun} viewer`} tabIndex={-1}>
       <div className="ci-lb-bar">
         <div className="ci-lb-who" aria-live="polite">
           <div className="ci-lb-name">{who(it, meId)}</div>
@@ -841,7 +843,7 @@ function Lightbox({ kind, items, index, total, meId, onIndex, onClose, onShowMes
       <div className="ci-lb-stage">
         <ZoomMedia key={it.id} src={chatFileUrl(it.id)} video={kind === 'videos'} alt={it.caption || it.name || (kind === 'images' ? 'Image' : 'Video')}
           canPrev={!atStart} canNext={!atEnd} onStep={go} onClose={close} armedAt={armedAt.current}
-          prev={peek(items[index - 1])} next={peek(items[index + 1])} />
+          prev={peek(items[index - 1])} next={peek(items[index + 1])} onTap={() => setBare((b) => !b)} />
         {items.length > 1 && (
           <>
             {/* aria-disabled rather than disabled at either end: a disabled
