@@ -640,7 +640,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                     {subs.map((s: any) => {
                       const u = lookupUser(s.assignee_id)
                       return (
-                        <div key={s.id} className="spread" style={{ fontSize: 13, padding: '7px 0', borderBottom: '1px solid #f1f5f9' }}>
+                        <div key={s.id} className="spread" style={{ fontSize: 13, padding: '7px 0', borderBottom: '1px solid var(--n-100)' }}>
                           <span className="row" style={{ gap: 6, minWidth: 0 }}>{s.status === 'Done' ? <Ic name="check" size={13} /> : <span style={{ color: 'var(--muted)' }}>•</span>} <span className="clamp-2" style={{ overflowWrap: 'anywhere' }}>{s.title}</span></span>
                           <span className="row" style={{ gap: 6 }}>
                             {u && <Avatar name={u.name} color={u.avatar_color} size={18} />}

@@ -125,9 +125,20 @@
 /* The handful of places that hard-code white rather than a token. Each one is a
    surface, so it maps to --surface; left as raw #fff in the light theme so this
    stays a purely additive change. */
-:root[data-theme="dark"] input,
-:root[data-theme="dark"] textarea,
-:root[data-theme="dark"] select,
+/* Form fields set only the colour, never the `background` shorthand: the
+   shorthand also cleared the forms plugin's select arrow, so every dropdown
+   read as a text box with no way to tell it opens ("there is no dropdown"), and
+   it outranked the plugin's :checked fill, so a ticked checkbox turned into an
+   empty square the colour of the row. Checkboxes and radios are drawn by their
+   own rules below. :where() keeps this at the old 0,2,1. */
+:root[data-theme="dark"] :is(input, textarea, select):where(:not([type="checkbox"], [type="radio"])) { background-color: var(--surface); }
+/* The plugin's grey arrow, a shade lighter so it shows on the dark field. Later
+   rules with their own caret (the toolbar filters below) still win. */
+:root[data-theme="dark"] select:not([multiple]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%23a7b3c4' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+}
+/* Desktop browsers draw the open list from the options' own colours. */
+:root[data-theme="dark"] option, :root[data-theme="dark"] optgroup { background-color: var(--surface); color: var(--text); }
 :root[data-theme="dark"] .modal,
 :root[data-theme="dark"] .task-mini,
 :root[data-theme="dark"] .back-btn,
@@ -146,6 +157,12 @@
 :root[data-theme="dark"] .pf-nav-logout:hover { background: var(--danger-bg); }
 /* The app logo is a light-background mark; a white tile behind it on dark reads
    as a bright hole, so give it the surface instead. */
+/* Menus and pickers mark the hovered or keyboard-chosen row with --bg. On dark
+   --bg is darker than the menu's --surface by a hair (1.05:1), so the row you
+   were on could not be seen. */
+:root[data-theme="dark"] :is(.addpick-opt.active, .mention-opt.active, .mention-opt:hover, .sortmenu-item:hover,
+  .am-item:hover, .am-item:focus-visible, .msg-menu button:hover, .report-menu > button:hover, .modal-user:hover,
+  .ta-pick-row:hover, .ta-pick-row.on, .emoji-tabs .active, .ci-mem-add-row:hover, .ci-mem-add-row:focus-within) { background: var(--n-100); }
 :root[data-theme="dark"] .brand-logo,
 :root[data-theme="dark"] .auth-brand-logo,
 :root[data-theme="dark"] .brand-logo-img { background: var(--n-100); }
@@ -184,6 +201,20 @@ input, textarea, select {
 }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(242,98,46,.20); }
 label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 5px; }
+
+/* Checkboxes and radios. The forms plugin (tailwind.css, loaded after this
+   file) draws them itself with appearance: none, so accent-color never reached
+   them: Tailwind blue on white in both themes. It fills a checked box with
+   currentColor, so the brand comes in through color. The :root prefix outranks
+   the plugin's plain [type] rules; its :checked rules still set the fill, the
+   tick and a transparent border. In dark the fill is a deeper orange than
+   --primary, which is too light under a white tick. */
+:root [type="checkbox"], :root [type="radio"] { color: #ea580c; border-color: var(--n-400); }
+:root[data-theme="dark"] :is([type="checkbox"], [type="radio"]):not(:checked) { background-color: var(--surface); }
+:root [type="checkbox"]:focus, :root [type="radio"]:focus {
+  --tw-ring-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  --tw-ring-offset-color: var(--surface);
+}
 
 /* ---- buttons ---- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--n-300); background: var(--n-50); color: var(--n-700); font-weight: 600; font-size: 13px; white-space: nowrap; transition: background .15s, border-color .15s, box-shadow .15s, transform .1s; }
@@ -224,6 +255,8 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
    theme, picked to match the tinted text on each. */
 :root { --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c2410c' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
 :root[data-theme="dark"] { --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fdba74' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
+:root[data-theme="dark"] :is(.toolbar, .toolbar-filters, .act-bar) select { background-color: color-mix(in srgb, var(--primary) 12%, var(--surface)); }
+:root[data-theme="dark"] :is(.toolbar, .toolbar-filters, .act-bar) select:hover { background-color: color-mix(in srgb, var(--primary) 20%, var(--surface)); }
 :root .toolbar select, :root .toolbar-filters select, :root .act-bar select,
 :root .toolbar select:hover, :root .toolbar-filters select:hover, :root .act-bar select:hover {
   appearance: none; -webkit-appearance: none;
@@ -2677,6 +2710,8 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 .modal-list { overflow-y: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .modal-user { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; cursor: pointer; }
 .modal-user:hover { background: var(--bg); }
+/* A picked person's row is tinted too, not only its small checkbox. */
+.modal-user:has(input:checked), .ci-mem-add-row:has(input:checked) { background: color-mix(in srgb, var(--primary) 12%, var(--surface)); }
 
 /* online presence + date separators */
 .avatar-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
@@ -4906,6 +4941,10 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .ta-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 3px; border-radius: 10px; background: var(--bg); }
 .ta-seg-btn { padding: 7px 4px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
 .ta-seg-btn.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(16,24,40,.12); }
+/* Dark: the surface on the --bg track was 1.05:1 and the shadow invisible, so
+   the chosen priority looked like the others. A brand-tinted fill and edge. */
+:root[data-theme="dark"] .ta-seg { background: var(--n-50); }
+:root[data-theme="dark"] .ta-seg-btn.on { background: color-mix(in srgb, var(--primary) 20%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent); }
 .ta-seg-btn.on.p-critical { color: var(--danger-ink); }
 .ta-seg-btn.on.p-high { color: var(--warning-ink); }
 .ta-seg-btn.on.p-medium { color: var(--info-ink); }

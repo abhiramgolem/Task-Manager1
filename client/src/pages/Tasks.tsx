@@ -326,8 +326,8 @@ function SearchDialog({ initial, onApply, onClose }: { initial: string; onApply:
             <div className="row" style={{ gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
               <span className="muted">Voice search:</span>
               {voiceFilters.assigneeName && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)' }}><Ic name="user" size={12} /> {voiceFilters.assigneeName}</span>}
-              {voiceFilters.status && <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }}>{voiceFilters.status}</span>}
-              {voiceFilters.priority && <span className="badge" style={{ background: '#fff7ed', color: '#c2410c' }}>{voiceFilters.priority}</span>}
+              {voiceFilters.status && <span className="badge" style={{ background: 'var(--n-100)', color: 'var(--n-700)' }}>{voiceFilters.status}</span>}
+              {voiceFilters.priority && <span className="badge" style={{ background: 'color-mix(in srgb, var(--primary) 14%, var(--surface))', color: 'var(--link)' }}>{voiceFilters.priority}</span>}
               <button className="search-dialog-clear" style={{ position: 'static' }} onClick={() => setVoiceFilters(null)} title="Clear voice filters" aria-label="Clear voice filters">✕</button>
             </div>
           )}

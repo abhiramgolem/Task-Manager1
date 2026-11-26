@@ -30,7 +30,7 @@ export default function ParticipantPicker({ value, onChange, autoSelectAll }: { 
   const remove = (id: string) => onChange(value.filter((x) => x !== id))
   const addAll = () => { onChange(users.map((u) => u.id)); setOpen(false) }
 
-  const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: '#ffedd5', color: '#c2410c', borderRadius: 999, padding: '3px 6px 3px 4px', fontSize: 12.5, fontWeight: 600 }
+  const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'color-mix(in srgb, var(--primary) 16%, var(--surface))', color: 'var(--link)', borderRadius: 999, padding: '3px 6px 3px 4px', fontSize: 12.5, fontWeight: 600 }
 
   return (
     <div>
@@ -39,7 +39,7 @@ export default function ParticipantPicker({ value, onChange, autoSelectAll }: { 
         {selected.map((u) => (
           <span key={u.id} style={chip}>
             <Avatar name={u.name} color={u.avatar_color} size={18} /> {u.name}
-            <button type="button" className="btn btn-ghost btn-sm" style={{ padding: '0 4px', color: '#c2410c' }} onClick={() => remove(u.id)} title="Remove">✕</button>
+            <button type="button" className="btn btn-ghost btn-sm" style={{ padding: '0 4px', color: 'var(--link)' }} onClick={() => remove(u.id)} title="Remove">✕</button>
           </span>
         ))}
         {!selected.length && <span className="muted" style={{ fontSize: 12 }}>No attendees yet.</span>}
@@ -61,7 +61,7 @@ export default function ParticipantPicker({ value, onChange, autoSelectAll }: { 
           <input placeholder="Filter employees…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
           <div style={{ maxHeight: 200, overflow: 'auto', marginTop: 8 }}>
             {available.map((u) => (
-              <div key={u.id} className="spread" style={{ padding: '7px 6px', borderBottom: '1px solid #e2e8f0' }}>
+              <div key={u.id} className="spread" style={{ padding: '7px 6px', borderBottom: '1px solid var(--border)' }}>
                 <span className="row" style={{ gap: 8 }}>
                   <Avatar name={u.name} color={u.avatar_color} size={22} /> {u.name}
                   <span className="muted" style={{ fontSize: 11, textTransform: 'capitalize' }}>{u.role}</span>

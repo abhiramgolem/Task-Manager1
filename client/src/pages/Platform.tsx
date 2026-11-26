@@ -102,7 +102,7 @@ export default function Platform() {
                 <td className="cell-title">
                   <button style={{ fontWeight: 600, textAlign: 'left', background: 'none', border: 'none', padding: 0, color: 'var(--primary)' }} onClick={() => openOrg(o.id)} title="View members & task breakdown">{o.name}</button>
                   {o.allowed_domains.length > 0 && <div className="muted" style={{ fontSize: 11 }}>{o.allowed_domains.join(', ')}</div>}</td>
-                <td data-label="Type">{o.is_personal ? <span className="badge" style={{ background: '#eef2ff', color: '#4f46e5' }}>Personal</span> : <span className="badge" style={{ background: '#ffedd5', color: '#ea580c' }}>Company</span>}</td>
+                <td data-label="Type">{o.is_personal ? <span className="badge" style={{ background: 'var(--info-bg)', color: 'var(--info-ink)' }}>Personal</span> : <span className="badge" style={{ background: '#ffedd5', color: '#ea580c' }}>Company</span>}</td>
                 <td data-label="Owner" className="muted">{o.owner_email || '—'}</td>
                 <td data-label="Users"><strong>{o.user_count}</strong></td>
                 <td data-label="Tasks">{o.task_count}</td>
