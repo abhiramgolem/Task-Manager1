@@ -12,6 +12,7 @@ import { toast } from '../lib/toast'
 import { onDownloadLink } from '../lib/saveFile'
 import { useDialog } from '../lib/useDialog'
 import { Linkify } from '../lib/linkify'
+import { readTaskNotifications } from '../push'
 import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
 import { attachable, attachToTask, fileExt } from '../lib/taskAttach'
 import { useSurface } from '../voice/uiRegistry'
@@ -106,6 +107,9 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   const [commentMenu, setCommentMenu] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [pendingAssignee, setPendingAssignee] = useState('')
+  // Its notifications have been seen once the task is open: off the bell, and
+  // out of the tray here and on the person's other devices.
+  useEffect(() => { readTaskNotifications(taskId) }, [taskId])
   // A title that is really a pasted paragraph is shown cut short until asked.
   const [titleOpen, setTitleOpen] = useState(false)
   useEffect(() => setTitleOpen(false), [taskId])

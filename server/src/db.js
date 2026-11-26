@@ -981,6 +981,9 @@ export function initSchema() {
   // It stays one of the task's attachments as well; NULL for one attached on
   // its own. No index: it is only read with the task's own attachments.
   ensureColumn('attachments', 'comment_id', 'TEXT')
+  // The tag the notification's push went out with, so reading it can take it
+  // out of the tray on the person's other devices (notifClear.js).
+  ensureColumn('notifications', 'push_tag', 'TEXT')
   ensureColumn('users', 'phone', "TEXT DEFAULT ''")
   ensureColumn('meetings', 'description', "TEXT DEFAULT ''")
 

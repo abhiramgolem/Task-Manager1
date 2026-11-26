@@ -4,13 +4,19 @@ import { api } from '../api'
 import { Ic } from '../ui'
 import { notifTarget, replacesEntry } from '../lib/notifTarget'
 import { playNotifSound } from '../lib/notifSound'
+import { clearTray } from '../push'
 
 interface Notif {
   id: string; type: string; message: string; task_id?: string | null
   conversation_id?: string | null; message_id?: string | null // chat notifications: where to open
   comment_id?: string | null // a task comment: which one to open the task on
+  push_tag?: string | null // the tag its push carried (server notifClear.js)
   read: number; created_at: string
 }
+
+// The tray tags the bell owns. A chat's own tags are cleared when the chat is read.
+const BELL_TAG_PREFIXES = ['task_', 'ntf_', 'due_']
+const tagOf = (n: Notif) => n.push_tag || (n.task_id ? `task_${n.task_id}` : null)
 
 // Each notification type → a line glyph + a semantic tone. Replaces the emoji
 // (📩📌💬…) which rendered differently per-OS and read informal; the tinted
@@ -102,9 +108,14 @@ export default function NotificationBell() {
   // VoTask's own chime, the same file the phone's notifications play.
   const playChime = () => playNotifSound('votask_chime')
 
-  const load = () => api.get('/notifications').then((d) => {
+  // `sweep`: also take down this device's notifications that are no longer
+  // unread on the bell, read on another device while this one was off or
+  // closed (a phone push or a socket message can't reach it then). Done when
+  // the app opens or comes back, not on every poll.
+  const load = (sweep = false) => api.get('/notifications').then((d) => {
     setItems(d.items)
     setUnread(d.unread)
+    if (sweep) clearTray([], { prefixes: BELL_TAG_PREFIXES, keep: new Set(d.items.filter((n: Notif) => !n.read).map(tagOf).filter(Boolean) as string[]) })
     const seen = seenIds.current
     const fresh: Notif[] = seen ? d.items.filter((n: Notif) => !n.read && !seen.has(n.id)) : []
     seenIds.current = new Set(d.items.map((n: Notif) => n.id))
@@ -124,14 +135,22 @@ export default function NotificationBell() {
   }).catch(() => {})
 
   useEffect(() => {
-    load()
+    load(true)
     // Poll every 15s, but never while the tab is hidden — a background tab (or a
     // pocketed phone in the wrapped app) shouldn't burn network and battery.
     // Catch up immediately when the user comes back.
     const iv = setInterval(() => { if (!document.hidden) load() }, 15000)
-    const onVisible = () => { if (!document.hidden) load() }
+    const onVisible = () => { if (!document.hidden) load(true) }
+    // Read here or on another device (the server's 'notif-clear', through the
+    // app's socket): off this device's tray, and the count follows at once.
+    const onClear = (e: Event) => {
+      const d: any = (e as CustomEvent).detail || {}
+      if (Array.isArray(d.tags) && d.tags.length) clearTray(d.tags)
+      if (d.bell !== false) load()
+    }
     document.addEventListener('visibilitychange', onVisible)
-    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVisible) }
+    window.addEventListener('votask-notif-clear', onClear)
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('votask-notif-clear', onClear) }
   }, [])
 
   // close on outside click or Escape

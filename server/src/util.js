@@ -161,16 +161,23 @@ export function notify(orgId, userId, type, message, taskId = null, link = null,
   // The bell is for tasks and mentions. Chat already has its own unread
   // counts and list, and filing every message there too buried the task
   // updates among them — so other chat events are pushed but never filed.
-  if (!BELL_SKIPPED_TYPES.includes(type)) {
+  const bell = !BELL_SKIPPED_TYPES.includes(type)
+  const nid = id('ntf')
+  // Every bell push carries a tag, so reading it can take it out of the tray
+  // on all of the person's devices (notifClear.js). One per task: a task's
+  // newer news replaces its older one in the tray, as a chat's lines do,
+  // instead of stacking; the bell still lists each one.
+  const tag = push?.tag || (bell ? (taskId ? `task_${taskId}` : `ntf_${nid}`) : undefined)
+  if (bell) {
     db.prepare(
-      `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, conversation_id, message_id, comment_id, read, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,0,?)`
-    ).run(id('ntf'), orgId, userId, type, message, taskId, conversationId, messageId, commentId, now())
+      `INSERT INTO notifications (id, org_id, user_id, type, message, task_id, conversation_id, message_id, comment_id, push_tag, read, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,0,?)`
+    ).run(nid, orgId, userId, type, message, taskId, conversationId, messageId, commentId, tag || null, now())
   }
   sendPushToUser(userId, {
     title: push?.title || PUSH_TITLES[type] || 'SmartTask',
     body: push?.body || message,
-    tag: push?.tag,
+    tag,
     rich: push?.rich,
     mention: !!push?.mention,
     data: { type, taskId, conversationId, messageId, commentId },

@@ -4,6 +4,7 @@ import { authRequired, signScoped, verifyScoped, sessionOk } from '../auth.js'
 import { saveDeviceToken, removeDeviceToken } from '../push.js'
 import { webPushKey, saveWebSub, removeWebSub } from '../webPush.js'
 import { BELL_SKIPPED_TYPES } from '../util.js'
+import { clearEverywhere, bellTags } from '../notifClear.js'
 
 const r = Router()
 
@@ -84,15 +85,32 @@ r.get('/', (req, res) => {
   res.json({ items: rows, unread })
 })
 
-// Mark all my notifications read.
+// Mark all my notifications read (the bell was opened), and take them down
+// on my other devices too.
 r.post('/read-all', (req, res) => {
+  const rows = db.prepare('SELECT push_tag, task_id FROM notifications WHERE user_id=? AND read=0').all(req.user.id)
   db.prepare('UPDATE notifications SET read=1 WHERE user_id=? AND read=0').run(req.user.id)
+  if (rows.length) clearEverywhere(req.user.id, bellTags(rows))
   res.json({ ok: true })
+})
+
+// A task was opened: its notifications have been seen, wherever they arrived.
+// The app calls this each time the task drawer shows a task.
+r.post('/read-task/:taskId', (req, res) => {
+  const tid = String(req.params.taskId || '')
+  const rows = db.prepare('SELECT push_tag, task_id FROM notifications WHERE user_id=? AND read=0 AND task_id=?').all(req.user.id, tid)
+  if (rows.length) {
+    db.prepare('UPDATE notifications SET read=1 WHERE user_id=? AND read=0 AND task_id=?').run(req.user.id, tid)
+    clearEverywhere(req.user.id, [...bellTags(rows), `task_${tid}`])
+  }
+  res.json({ ok: true, cleared: rows.length })
 })
 
 // Mark a single notification read.
 r.post('/:id/read', (req, res) => {
+  const row = db.prepare('SELECT push_tag, task_id, read FROM notifications WHERE id=? AND user_id=?').get(req.params.id, req.user.id)
   db.prepare('UPDATE notifications SET read=1 WHERE id=? AND user_id=?').run(req.params.id, req.user.id)
+  if (row && !row.read) clearEverywhere(req.user.id, bellTags([row]))
   res.json({ ok: true })
 })
 
