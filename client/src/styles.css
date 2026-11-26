@@ -5979,6 +5979,50 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
    jump as each one lands (Chats.tsx adds .ready on load, or on failure). */
 .chat-layout .chat-image:not(.ready) { min-height: 200px; background: linear-gradient(110deg, var(--n-100) 30%, var(--n-50) 50%, var(--n-100) 70%); background-size: 220% 100%; animation: chat-vcard-shine 1.4s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .chat-layout .chat-image:not(.ready) { animation: none; } }
+/* An album (AlbumGrid.tsx): four or more photos sent together, a 2x2 grid as
+   wide as a single photo, "+N" on the fourth. Each tile is its own message:
+   .sel is the one a long-press selected, .picked one ticked while picking,
+   .flash one a quote or a search jumped to. */
+.chat-layout .album-grid { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; width: min(260px, 68vw); }
+.chat-layout .album-tile { position: relative; aspect-ratio: 1; min-width: 0; border-radius: 3px; outline: none; }
+.chat-layout .album-tile:nth-child(1) { border-top-left-radius: 9px; }
+.chat-layout .album-tile:nth-child(2) { border-top-right-radius: 9px; }
+.chat-layout .album-tile:nth-child(3) { border-bottom-left-radius: 9px; }
+.chat-layout .album-tile:nth-child(4) { border-bottom-right-radius: 9px; }
+.chat-layout .album-open { position: absolute; inset: 0; display: block; padding: 0; border: 0; border-radius: inherit; overflow: hidden; background: var(--n-100); cursor: zoom-in; line-height: 0; }
+.chat-layout .album-media { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A video whose first frame hasn't come yet still reads as a video. */
+.chat-layout .album-open:has(> video) { background: linear-gradient(135deg, #2a2f3a, #14171d); }
+.chat-layout .album-media:not(.ready) { background: linear-gradient(110deg, var(--n-100) 30%, var(--n-50) 50%, var(--n-100) 70%); background-size: 220% 100%; animation: chat-vcard-shine 1.4s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .chat-layout .album-media:not(.ready) { animation: none; } }
+.chat-layout .album-play { position: absolute; left: 50%; top: 50%; width: 38px; height: 38px; margin: -19px 0 0 -19px; display: grid; place-items: center; padding-left: 3px; border-radius: 50%; background: rgba(0, 0, 0, .5); color: #fff; box-shadow: 0 0 0 2px rgba(255, 255, 255, .85) inset; }
+.chat-layout .album-play svg { fill: currentColor; }
+.chat-layout .album-more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(11, 20, 26, .58); color: #fff; font-size: 30px; font-weight: 600; line-height: 1; }
+.chat-layout .album-hidden { display: none; }
+/* Rings drawn over the picture (the picture would cover an inset shadow). */
+.chat-layout .album-tile::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
+.chat-layout .album-tile.sel::after,
+.chat-layout .album-tile.picked::after { box-shadow: inset 0 0 0 3px var(--primary); background: color-mix(in srgb, var(--primary) 22%, transparent); }
+.chat-layout .album-tile.flash::after { animation: album-flash 1.8s ease; }
+@keyframes album-flash { 0%, 55% { box-shadow: inset 0 0 0 3px var(--primary); background: color-mix(in srgb, var(--primary) 25%, transparent); } 100% { box-shadow: none; background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .chat-layout .album-tile.flash::after { animation: none; box-shadow: inset 0 0 0 3px var(--primary); } }
+.chat-layout .album-tile:focus-visible::after { box-shadow: inset 0 0 0 3px var(--primary); }
+/* A tile's reactions, in its corner; its pick mark while picking. */
+.chat-layout .album-rx { position: absolute; left: 5px; bottom: 5px; z-index: 1; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border: 0; border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 1.4; box-shadow: 0 1px 3px rgba(11, 20, 26, .25); cursor: pointer; }
+.chat-layout .album-rx span { font-size: 11px; font-weight: 600; color: var(--muted); }
+.chat-layout .album-rx.mine { box-shadow: 0 0 0 1.5px var(--primary), 0 1px 3px rgba(11, 20, 26, .25); }
+.chat-layout .album-check { position: absolute; top: 6px; left: 6px; z-index: 1; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; border: 2px solid #fff; background: rgba(11, 20, 26, .3); color: #fff; pointer-events: none; }
+.chat-layout .album-check.on { background: var(--primary); border-color: var(--primary); }
+/* Mouse screens: a tile's React, Reply and ⋯ sit on its top corner, shown on
+   hovering that tile (not the whole album, which would show four sets). */
+.chat-layout .album-tile .msg-tools.on-tile { position: absolute; top: 5px; right: 5px; z-index: 2; gap: 0; padding: 1px; border-radius: 999px; background: rgba(11, 20, 26, .5); opacity: 0; }
+.chat-layout .album-tile:hover .msg-tools.on-tile,
+.chat-layout .album-tile:focus-within .msg-tools.on-tile,
+.chat-layout .album-tile .msg-tools.on-tile.open { opacity: 1; }
+.chat-layout .album-tile .msg-tools.on-tile .msg-tool-btn { color: #fff; padding: 4px 6px; border-radius: 999px; }
+.chat-layout .album-tile .msg-tools.on-tile .msg-tool-btn:hover { background: rgba(255, 255, 255, .18); }
+/* The time sits on the grid's last tile; sender name above it in a group. */
+.chat-layout .bubble.album-bubble { width: auto; }
 /* Download over a photo or video: lighter, so the picture is what you see. */
 .chat-layout .chat-media-dl { top: 8px; right: 8px; width: 30px; height: 30px; background: rgba(11, 20, 26, .42); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 .chat-layout .chat-media-dl:hover { background: rgba(11, 20, 26, .62); }
