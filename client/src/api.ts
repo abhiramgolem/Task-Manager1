@@ -167,6 +167,8 @@ export interface Task {
   // Needed to tell "I raised this for myself" — which needs no manager sign-off
   // to complete or delete — from work someone else handed over.
   assignee_id?: string | null; assigned_by_id?: string | null
+  // The others the task is shared with; `assignee` stays its owner.
+  co_assignees?: User[]
   project?: { id: string; name: string }; meeting_id?: string
   assigned_at?: string; submitted_at?: string; completed_at?: string; created_at?: string; updated_at?: string
   // Who closed it — the person who marked it Done, or the approver. Null for

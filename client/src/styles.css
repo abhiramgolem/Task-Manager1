@@ -3342,6 +3342,20 @@ body:has(.rv-center) .va-dock { display: none; }
 .comment .body { background: var(--n-50); border-radius: 10px; padding: 8px 12px; flex: 1; }
 /* Shift+Enter writes a second line; keep it rather than running the lines together. */
 .comment-text { font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* A task shared by several people (components/TaskPeople.tsx): "+2" after the
+   owner in lists, and the others as chips in the drawer and the new-task form. */
+.an-more { flex-shrink: 0; font-size: 11px; font-weight: 700; line-height: 1.5; padding: 0 6px; border-radius: 999px; background: var(--n-100); color: var(--n-700); }
+.co-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.co-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-height: 28px; padding: 3px 3px 3px 3px; border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+  font-size: 12.5px; font-weight: 600; color: var(--text); }
+.co-chip:not(:has(.co-chip-x)) { padding-right: 10px; }
+.co-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.co-chip-x { flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); display: grid; place-items: center; font-size: 11px; cursor: pointer; }
+.co-chip-x:hover { background: var(--n-100); color: var(--text); }
+select.co-add { width: auto; max-width: 100%; min-height: 30px; padding: 4px 30px 4px 11px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+.dr-people { flex-direction: column; align-items: flex-end; }
+.dr-co { justify-content: flex-end; }
 /* Files sent with a comment, under its words. */
 .cmt-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .cmt-file-pic { padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); cursor: zoom-in; line-height: 0; }

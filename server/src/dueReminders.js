@@ -19,6 +19,7 @@ import { db } from './db.js'
 import { notify } from './util.js'
 import { zonedNow, deadlineHour } from './taskMail.js'
 import { addDays } from './clock.js'
+import { allAssigneeIds } from './taskAssignees.js'
 
 const OPEN = "('To Do','In Progress','Blocked','Reopened')"
 
@@ -47,8 +48,11 @@ export function runDueReminders(now = new Date()) {
     const byPerson = new Map()
     for (const t of rows) {
       mark.run(t.id, kind, now.toISOString())
-      if (!byPerson.has(t.assignee_id)) byPerson.set(t.assignee_id, [])
-      byPerson.get(t.assignee_id).push(t)
+      // The owner and everyone the task is shared with (taskAssignees.js).
+      for (const uid of allAssigneeIds(t)) {
+        if (!byPerson.has(uid)) byPerson.set(uid, [])
+        byPerson.get(uid).push(t)
+      }
     }
     for (const [userId, tasks] of byPerson) {
       const one = tasks.length === 1

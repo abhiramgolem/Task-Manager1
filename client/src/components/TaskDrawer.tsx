@@ -13,6 +13,7 @@ import { onDownloadLink } from '../lib/saveFile'
 import { useDialog } from '../lib/useDialog'
 import { Linkify } from '../lib/linkify'
 import { readTaskNotifications } from '../push'
+import { isOnTask } from './TaskPeople'
 import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
 import { attachable, attachToTask, fileExt } from '../lib/taskAttach'
 import { useSurface } from '../voice/uiRegistry'
@@ -442,7 +443,23 @@ This cannot be undone — comments are not kept in the recycle bin.`,
   // Managers can delete anything; everyone else, only what they made for themselves.
   const canDelete = isManager || isOwnWork || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
   // The task owner (or a manager) can split a top-level task into shared parts.
-  const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
+  const canSplit = (isManager || isOnTask(task, user?.id)) && !task.parent_task_id
+  // Sharing the task with more people (taskAssignees.js on the server): the
+  // people already on it may add a colleague, which shares the work rather
+  // than handing it off; taking someone off is for whoever set the brief, or
+  // the person themself leaving. A private to-do is nobody else's.
+  const coPeople = task.co_assignees || []
+  const canShare = !!task.assignee && task.visible_to_manager !== 0 && (isManager || task.assigned_by_id === user?.id || isOnTask(task, user?.id))
+  const share = (uid: string) => mutate(() => api.post(`/tasks/${taskId}/assignees`, { user_id: uid }))
+  const unshare = async (u: User) => {
+    const self = u.id === user?.id
+    const ok = await confirmDialog({
+      title: self ? 'Leave this task?' : `Take ${u.name} off this task?`,
+      message: self ? 'It will no longer be one of your tasks. The others on it keep it.' : `${u.name} will no longer have this task. The others on it keep it.`,
+      confirmText: self ? 'Leave task' : 'Remove', danger: true,
+    })
+    if (ok) await mutate(() => api.del(`/tasks/${taskId}/assignees/${u.id}`))
+  }
   // Whoever set the work owns what it asks for: managers, and the person who
   // handed it out. Being given a task is NOT a licence to rewrite it — the
   // assignee moves status and progress and nothing else, so they can't quietly
@@ -517,8 +534,8 @@ This cannot be undone — comments are not kept in the recycle bin.`,
 
           <div className="dr-fields">
             <div className="dr-field dr-field--tall">
-              <span className="dr-field-label">Assignee</span>
-              <div className="dr-field-val">
+              <span className="dr-field-label">{coPeople.length ? 'Assignees' : 'Assignee'}</span>
+              <div className="dr-field-val dr-people">
                 {canEdit ? (
                   <div className="row" style={{ gap: 8 }}>
                     <select data-va="task.drawer.assignee" value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
@@ -538,6 +555,26 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                   <div className="row" style={{ gap: 8 }}>{task.assignee ? <><Avatar name={task.assignee.name} color={task.assignee.avatar_color} size={24} /> {task.assignee.name}</> : '—'}</div>
                 )}
                 {task.assignee_name_raw && !task.assignee && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Heard as: “{task.assignee_name_raw}”</div>}
+                {(coPeople.length > 0 || canShare) && (
+                  <div className="co-chips dr-co">
+                    {coPeople.map((u) => (
+                      <span key={u.id} className="co-chip">
+                        <Avatar name={u.name} color={u.avatar_color} size={20} />
+                        <span className="co-chip-name">{u.id === user?.id ? 'You' : u.name}</span>
+                        {(canEdit || u.id === user?.id) && (
+                          <button type="button" className="co-chip-x" disabled={busy} onClick={() => unshare(u)}
+                            aria-label={u.id === user?.id ? 'Leave this task' : `Take ${u.name} off this task`} title={u.id === user?.id ? 'Leave this task' : 'Remove'}>✕</button>
+                        )}
+                      </span>
+                    ))}
+                    {canShare && (
+                      <select className="co-add" data-va="task.drawer.share" value="" disabled={busy} onChange={(e) => { if (e.target.value) share(e.target.value) }} aria-label="Share this task with another person">
+                        <option value="">＋ Add person</option>
+                        {users.filter((u) => u.role !== 'admin' && !isOnTask(task, u.id)).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             <div className="dr-field">
@@ -685,7 +722,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
             ) : task.approval_status === 'pending' ? (
               <div className="card-pad" style={{ background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: 10 }}>
                 <strong className="row" style={{ gap: 7 }}><Ic name="clock" size={15} /> Submitted for review</strong>
-                {task.assignee?.id === user?.id ? (
+                {isOnTask(task, user?.id) ? (
                   /* The assignee: their work is parked with the reviewer. */
                   <>
                     <p className="muted" style={{ margin: '4px 0 10px' }}>Waiting for your manager — or whoever assigned it to you — to approve. You'll get it back if changes are needed.</p>

@@ -39,7 +39,8 @@ r.get('/employee', (req, res) => {
     LEFT JOIN users ab ON ab.id=t.assigned_by_id
     LEFT JOIN users rb ON rb.id=t.reassigned_by_id
     LEFT JOIN tasks p ON p.id=t.parent_task_id
-    WHERE t.assignee_id=? AND t.org_id=? AND ${LEAF}`).all(uid, req.user.org_id).map((t) => ({ ...t, origin: originOf(t) }))
+    WHERE (t.assignee_id=? OR EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id=t.id AND ta.user_id=?))
+      AND t.org_id=? AND ${LEAF}`).all(uid, uid, req.user.org_id).map((t) => ({ ...t, origin: originOf(t) }))
 
   // Work I handed to someone else: tasks I created for a colleague, parts I
   // distributed, and tasks I moved off someone. Deliberately NOT folded into the
