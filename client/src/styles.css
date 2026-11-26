@@ -3342,6 +3342,22 @@ body:has(.rv-center) .va-dock { display: none; }
 .comment .body { background: var(--n-50); border-radius: 10px; padding: 8px 12px; flex: 1; }
 /* Shift+Enter writes a second line; keep it rather than running the lines together. */
 .comment-text { font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* Files sent with a comment, under its words. */
+.cmt-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cmt-file-pic { padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); cursor: zoom-in; line-height: 0; }
+.cmt-file-pic img { display: block; max-width: 220px; max-height: 160px; width: auto; height: auto; object-fit: cover; }
+.cmt-file { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 12.5px; font-weight: 600; }
+.cmt-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Files waiting in the comment box, as chat's tray: a preview, the name, a remove. */
+.cmt-stage { display: flex; gap: 8px; overflow-x: auto; margin-top: 10px; padding: 8px; border: 1px dashed color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--primary) 6%, var(--surface)); }
+.cmt-stage-item { position: relative; flex: 0 0 auto; width: 84px; display: flex; flex-direction: column; gap: 4px; }
+.cmt-stage-item img, .cmt-stage-file { width: 84px; height: 64px; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; background: var(--surface); }
+.cmt-stage-file { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--muted); font-size: 10.5px; font-weight: 700; }
+.cmt-stage-name { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmt-stage-x { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 11px; line-height: 1; display: grid; place-items: center; cursor: pointer; box-shadow: var(--e-1); }
+.cmt-compose { align-items: flex-end; gap: 6px; }
+.cmt-attach { padding: 8px; flex-shrink: 0; color: var(--muted); }
+.cmt-attach:hover { color: var(--text); }
 /* The comment a notification opened on: the chat's jump-to ring, held a little
    longer with a tint, because the drawer slides in and scrolls first. */
 .comment.flash .body { animation: comment-flash 2.6s ease; }

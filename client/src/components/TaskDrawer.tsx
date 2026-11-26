@@ -30,15 +30,46 @@ const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reope
 // Characters past which a title is treated as a paragraph (see the hero below).
 const LONG_TITLE = 180
 
+// The files sent with one comment, under its words: pictures as thumbnails that
+// open the drawer's photo viewer, a PDF in the app's viewer, anything else as a
+// named chip that downloads. They are task attachments too, listed above.
+function CommentFiles({ files, onPhoto }: { files: Attachment[]; onPhoto: (id: string) => void }) {
+  if (!files.length) return null
+  return (
+    <div className="cmt-files">
+      {files.map((a) => {
+        if ((a.file_type || '').startsWith('image/')) {
+          return (
+            <button key={a.id} type="button" className="cmt-file-pic" onClick={() => onPhoto(a.id)} aria-label={`View ${a.filename}`}>
+              <img src={taskAttachmentUrl(a.id)} alt="" loading="lazy" />
+            </button>
+          )
+        }
+        const pdf = isPdf({ name: a.filename, type: a.file_type || '' })
+        return (
+          <a key={a.id} href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="cmt-file" title={a.filename}
+            onClick={pdf
+              ? (e) => { e.preventDefault(); openPdf({ id: 'task:' + a.id, url: taskAttachmentUrl(a.id), downloadUrl: taskAttachmentUrl(a.id, true), saveKey: 'task:' + a.id, name: a.filename, subtitle: fmtBytes(a.file_size) }) }
+              : onDownloadLink(taskAttachmentUrl(a.id, true), a.filename, 'task:' + a.id)}>
+            <Ic name="doc" size={16} /><span className="cmt-file-name">{a.filename}</span>
+          </a>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal', focusCommentId = null, focusKey = 0 }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void; variant?: 'modal' | 'pane'; focusCommentId?: string | null; focusKey?: number }) {
   const { user } = useAuth()
   const pane = variant === 'pane'
   const drawerRef = useDialog<HTMLDivElement>(onClose, !pane)
-  // A screenshot pasted anywhere in the drawer (Ctrl+V — in the comment box too)
-  // or files dropped on it are attached to the task: comments carry words only,
-  // so the task's attachments are where a picture belongs. A paste of words is
-  // still words (lib/pasteFiles). Reached through a ref because `shell` is built
-  // before uploadFiles exists in a render that returns early (while loading).
+  // A screenshot pasted anywhere in the drawer (Ctrl+V, in the comment box too)
+  // or files dropped on it wait in the comment box, as in chat, so the words
+  // about them go with them: they used to be attached the moment they were
+  // pasted, and the message had to follow as a second, separate comment. They
+  // still become task attachments when the comment is posted. A paste of words
+  // is still words (lib/pasteFiles). Reached through a ref because `shell` is
+  // built before stageFiles exists in a render that returns early (while loading).
   const takeFilesRef = useRef<(files: File[]) => void>(() => {})
   const fileEvents = {
     onPaste: (e: React.ClipboardEvent) => {
@@ -180,6 +211,17 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   // The attached picture open full size, where it can be zoomed into. It used
   // to open in a new browser tab, which on the phone app left the app.
   const [photoAt, setPhotoAt] = useState<string | null>(null)
+  // Files waiting to go with the next comment, with a preview for pictures.
+  const [staged, setStaged] = useState<{ id: string; file: File; url: string | null }[]>([])
+  const stagedRef = useRef(staged)
+  stagedRef.current = staged
+  const commentFileInput = useRef<HTMLInputElement>(null)
+  const dropStaged = (keep: (s: { id: string }) => boolean = () => false) => setStaged((list) => {
+    for (const s of list) if (!keep(s) && s.url) URL.revokeObjectURL(s.url)
+    return list.filter(keep)
+  })
+  // Another task in the drawer, or the drawer closing: what was waiting is not for it.
+  useEffect(() => () => { for (const s of stagedRef.current) if (s.url) URL.revokeObjectURL(s.url); setStaged([]) }, [taskId])
   // The task on screen now. The modal drawer is reused when another task opens,
   // so a file that lands after that must not put its old task back on screen.
   const taskIdRef = useRef(taskId)
@@ -209,7 +251,21 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
     if (done.length) onChange?.()
     if (announce && done.length) toast.success(done.length === 1 ? `Attached "${done[0]}" to this task` : `Attached ${done.length} files to this task`)
   }
-  takeFilesRef.current = (files) => { if (!busy && !upload) uploadFiles(files, true) }
+  const stageFiles = (list: FileList | File[] | null) => {
+    if (!list) return
+    const { ok: picked, skipped } = attachable(list)
+    if (commentFileInput.current) commentFileInput.current.value = ''
+    if (skipped) toast.error(skipped)
+    if (!picked.length) return
+    setStaged((cur) => [...cur, ...picked.map((file) => ({
+      id: Math.random().toString(36).slice(2),
+      file,
+      url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+    }))].slice(0, 20))
+    // Straight back to the box, to write what the picture is about.
+    requestAnimationFrame(() => drawerRef.current?.querySelector<HTMLTextAreaElement>('textarea[data-va="task.drawer.comment"]')?.focus())
+  }
+  takeFilesRef.current = (files) => stageFiles(files)
   // Deleting an attachment is irreversible — confirm it like the task delete.
   const removeAttachment = async (a: Attachment) => {
     if (!(await confirmDialog({ title: 'Remove attachment', message: `Remove "${a.filename}"? This cannot be undone.`, confirmText: 'Remove', danger: true }))) return
@@ -238,7 +294,39 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
     if (!draggingRef.current) progressTimer.current = setTimeout(commitProgress, 400)
   }
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
-  const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
+  const sendingComment = useRef(false)
+  const addComment = async () => {
+    const files = staged
+    if (!comment.trim() && !files.length) return
+    if (sendingComment.current || upload) return
+    if (!files.length) { await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment(''); return }
+    // The files go up first, onto the task, then one comment names them. One
+    // that fails stays in the box to try again; the rest go with the words.
+    sendingComment.current = true
+    const tid = taskId
+    const ids: string[] = []
+    const sent = new Set<string>()
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i].file
+        setUpload({ taskId: tid, name: f.name, pct: 0, n: i + 1, of: files.length })
+        try {
+          const r = await attachToTask(tid, f, (pct) => setUpload((u) => (u ? { ...u, pct } : u)))
+          sent.add(files[i].id)
+          if (r?.attachment_id) ids.push(r.attachment_id)
+        } catch (e: any) { toast.error(`Couldn't send ${f.name}: ${e?.message || 'upload failed'}`) }
+      }
+    } finally { setUpload(null) }
+    try {
+      if (tid !== taskIdRef.current) return
+      dropStaged((s) => !sent.has(s.id))
+      if (!comment.trim() && !ids.length) { if (sent.size) await load(); return }
+      await mutate(() => api.post(`/tasks/${tid}/comments`, { body: comment, attachment_ids: ids }))
+      setComment('')
+    } catch (e: any) {
+      toast.error(e?.message || "Couldn't post the comment")
+    } finally { sendingComment.current = false }
+  }
   const saveComment = async (c: any) => {
     const body = commentDraft.trim()
     if (!body || body === c.body) { setEditingComment(null); return }
@@ -796,18 +884,37 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                       </div>
                     ) : (
                       <>
-                        <div className="comment-text"><Linkify text={c.body} /></div>
+                        {c.body && <div className="comment-text"><Linkify text={c.body} /></div>}
+                        <CommentFiles files={(task.attachments || []).filter((a: Attachment) => a.comment_id === c.id)} onPhoto={setPhotoAt} />
                       </>
                     )}
                   </div>
                 </div>
               )
             })}
-            <div className="row" style={{ marginTop: 10 }}>
+            {staged.length > 0 && (
+              <div className="cmt-stage" aria-label="Files to send with your comment">
+                {staged.map((s) => (
+                  <div key={s.id} className="cmt-stage-item" title={s.file.name}>
+                    {s.url ? <img src={s.url} alt="" /> : (
+                      <span className="cmt-stage-file"><Ic name="doc" size={20} />{fileExt(s.file.name) && <span>{fileExt(s.file.name)}</span>}</span>
+                    )}
+                    <span className="cmt-stage-name">{s.file.name}</span>
+                    <button type="button" className="cmt-stage-x" disabled={!!upload} onClick={() => dropStaged((x) => x.id !== s.id)} aria-label={`Remove ${s.file.name}`}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="row cmt-compose" style={{ marginTop: 10 }}>
+              <input ref={commentFileInput} type="file" multiple style={{ display: 'none' }} onChange={(e) => stageFiles(e.target.files)} />
+              <button type="button" className="btn btn-ghost cmt-attach" disabled={!!upload} onClick={() => commentFileInput.current?.click()}
+                title="Add a photo or file to your comment (or paste one)" aria-label="Add a photo or file to your comment">
+                <Ic name="attach" size={17} />
+              </button>
               <AutoTextarea
                 data-va="task.drawer.comment"
                 aria-label="Add a comment"
-                placeholder="Add a comment…"
+                placeholder={staged.length ? 'Add a message (optional)…' : 'Add a comment…'}
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 // Enter posts, Shift+Enter breaks the line — the messenger
@@ -817,7 +924,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                 onKeyDown={(e) => { if (enterSends(e)) { e.preventDefault(); addComment() } }}
                 style={{ flex: 1 }}
               />
-              <button data-va="task.drawer.postComment" className="btn btn-primary" onClick={addComment} disabled={busy}>Post</button>
+              <button data-va="task.drawer.postComment" className="btn btn-primary" onClick={addComment} disabled={busy || !!upload}>Post</button>
             </div>
           </div>
         </div>

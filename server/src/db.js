@@ -977,6 +977,10 @@ export function initSchema() {
   ensureColumn('attachments', 'stored_name', 'TEXT')   // generated name on disk (data/task_uploads)
   ensureColumn('attachments', 'file_type', 'TEXT')     // mime type
   ensureColumn('attachments', 'file_size', 'INTEGER')  // bytes
+  // A file sent with a comment (a pasted screenshot plus the words about it).
+  // It stays one of the task's attachments as well; NULL for one attached on
+  // its own. No index: it is only read with the task's own attachments.
+  ensureColumn('attachments', 'comment_id', 'TEXT')
   ensureColumn('users', 'phone', "TEXT DEFAULT ''")
   ensureColumn('meetings', 'description', "TEXT DEFAULT ''")
 

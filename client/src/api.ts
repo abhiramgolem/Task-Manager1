@@ -190,4 +190,6 @@ export type TaskOrigin = 'assigned' | 'reassigned' | 'split' | 'self'
 export interface Attachment {
   id: string; task_id: string; filename: string; file_type?: string | null; file_size?: number | null
   uploaded_by?: string | null; created_at?: string
+  // Set when the file was sent with a comment (it is shown under that comment).
+  comment_id?: string | null
 }

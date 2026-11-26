@@ -1017,18 +1017,32 @@ r.post('/:id/approve', (req, res) => {
 
 // COMMENTS
 r.post('/:id/comments', (req, res) => {
-  const { body } = req.body || {}
-  if (!body) return res.status(400).json({ error: 'body required' })
+  const body = typeof req.body?.body === 'string' ? req.body.body.trim() : ''
+  // Files sent with the comment, already uploaded onto this task by the same
+  // person (POST /:id/attachments). A comment may be a picture alone, as in chat.
+  const ids = Array.isArray(req.body?.attachment_ids)
+    ? [...new Set(req.body.attachment_ids.filter((x) => typeof x === 'string' && x.length <= 64))].slice(0, 20) : []
+  if (!body && !ids.length) return res.status(400).json({ error: 'body required' })
   const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!t) return res.status(404).json({ error: 'Not found' })
   const cid = id('cmt')
-  db.prepare('INSERT INTO task_comments (id, task_id, user_id, body, created_at) VALUES (?,?,?,?,?)')
-    .run(cid, t.id, req.user.id, body, now())
+  // Only files of this task, uploaded by the commenter and not already on a
+  // comment: an id cannot pull someone else's file into your comment.
+  const linked = ids.filter((aid) => db.prepare(
+    'SELECT 1 FROM attachments WHERE id=? AND task_id=? AND uploaded_by=? AND comment_id IS NULL').get(aid, t.id, req.user.id))
+  if (!body && !linked.length) return res.status(400).json({ error: 'body required' })
+  db.transaction(() => {
+    db.prepare('INSERT INTO task_comments (id, task_id, user_id, body, created_at) VALUES (?,?,?,?,?)')
+      .run(cid, t.id, req.user.id, body, now())
+    for (const aid of linked) db.prepare('UPDATE attachments SET comment_id=? WHERE id=?').run(cid, aid)
+  })()
   audit(req.user.org_id, req.user.id, 'task.comment', 'task', t.id)
   // Notify the people involved (assignee + whoever assigned it), except the commenter.
   // The comment's id goes with it, so tapping the notification opens the task on
   // that comment instead of at the top of a long drawer.
-  const snippet = body.length > 80 ? body.slice(0, 77) + '…' : body
+  const files = linked.length === 1 ? '📎 a file' : `📎 ${linked.length} files`
+  const text = body.length > 80 ? body.slice(0, 77) + '…' : body
+  const snippet = !linked.length ? text : text ? `${text} (${files})` : files
   const recipients = new Set([t.assignee_id, t.assigned_by_id].filter(Boolean))
   recipients.delete(req.user.id)
   // "@Ravi can you check this?" in a comment reached nobody unless Ravi already
@@ -1074,6 +1088,8 @@ r.delete('/:id/comments/latest-own', (req, res) => {
   const c = db.prepare('SELECT * FROM task_comments WHERE task_id=? AND user_id=? ORDER BY created_at DESC LIMIT 1').get(t.id, req.user.id)
   if (!c) return res.status(404).json({ error: 'No comment of yours to remove' })
   db.prepare('DELETE FROM task_comments WHERE id=?').run(c.id)
+  // Its files stay on the task, as attachments on their own.
+  db.prepare('UPDATE attachments SET comment_id=NULL WHERE comment_id=?').run(c.id)
   // The leaderboard counts comments live from task_comments, so the undone
   // comment's point disappears with it — exactly what an undo should mean.
   audit(req.user.org_id, req.user.id, 'task.comment.delete', 'task', t.id)
@@ -1110,6 +1126,9 @@ r.delete('/:id/comments/:cid', (req, res) => {
     return res.status(403).json({ error: 'You can only delete your own comments.' })
   }
   db.prepare('DELETE FROM task_comments WHERE id=?').run(c.id)
+  // Its files stay on the task, as attachments on their own: removing one is a
+  // separate, confirmed step in the attachments list.
+  db.prepare('UPDATE attachments SET comment_id=NULL WHERE comment_id=?').run(c.id)
   // The leaderboard counts comments live, so its point goes with it.
   audit(req.user.org_id, req.user.id, 'task.comment.delete', 'task', t.id, c.user_id === req.user.id ? 'own' : `by ${c.user_id}`)
   res.json({ ok: true })
@@ -1128,7 +1147,9 @@ r.post('/:id/attachments', taskFiles.receive, (req, res) => {
     aid, t.id, t.org_id, req.file.originalname || 'file', req.file.filename, req.file.mimetype || null, req.file.size || 0, req.user.id, now())
   audit(req.user.org_id, req.user.id, 'task.attach', 'task', t.id, req.file.originalname || '')
   db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(now(), t.id)
-  res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+  // attachment_id: the drawer sends a pasted file with a comment, and names
+  // it in the comment that follows. Older apps read only the task.
+  res.status(201).json({ ...hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)), attachment_id: aid })
 })
 
 // Remove an attachment (uploader, or any manager/admin). Deletes the file too.
