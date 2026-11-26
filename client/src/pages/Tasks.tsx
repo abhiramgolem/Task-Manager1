@@ -10,6 +10,7 @@ import { UserForm } from '../components/UserManagement'
 import TaskBoard from '../components/TaskBoard'
 import TaskActivity from '../components/TaskActivity'
 import { TaskHandoverLine } from '../components/TaskOriginBadge'
+import { AssigneeLine } from '../components/TaskPeople'
 import { pushBackHandler } from '../back'
 import { toast } from '../lib/toast'
 import { takeTaskDraft, TaskDraft } from '../lib/taskDraft'
@@ -326,8 +327,8 @@ function SearchDialog({ initial, onApply, onClose }: { initial: string; onApply:
             <div className="row" style={{ gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
               <span className="muted">Voice search:</span>
               {voiceFilters.assigneeName && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)' }}><Ic name="user" size={12} /> {voiceFilters.assigneeName}</span>}
-              {voiceFilters.status && <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }}>{voiceFilters.status}</span>}
-              {voiceFilters.priority && <span className="badge" style={{ background: '#fff7ed', color: '#c2410c' }}>{voiceFilters.priority}</span>}
+              {voiceFilters.status && <span className="badge" style={{ background: 'var(--n-100)', color: 'var(--n-700)' }}>{voiceFilters.status}</span>}
+              {voiceFilters.priority && <span className="badge" style={{ background: 'color-mix(in srgb, var(--primary) 14%, var(--surface))', color: 'var(--link)' }}>{voiceFilters.priority}</span>}
               <button className="search-dialog-clear" style={{ position: 'static' }} onClick={() => setVoiceFilters(null)} title="Clear voice filters" aria-label="Clear voice filters">✕</button>
             </div>
           )}
@@ -808,7 +809,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       {!personal && (
         <td data-label="Assignee">
           {t.assignee ? (
-            <span className="row an"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> <span className="an-name">{t.assignee.name}</span></span>
+            <AssigneeLine task={t} />
           ) : isManager ? (
             <select
               className="btn btn-sm"
@@ -849,7 +850,7 @@ export default function Tasks({ personal = false }: { personal?: boolean }) {
       {!personal && (
         <td data-label="Assignee">
           {t.assignee
-            ? <span className="row"><Avatar name={t.assignee.name} color={t.assignee.avatar_color} size={22} /> {t.assignee.name}</span>
+            ? <AssigneeLine task={t} />
             : <span className="muted">Unassigned</span>}
         </td>
       )}
@@ -1168,9 +1169,20 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
     description: draft?.description || '',
     priority: draftPriority,
     assignee_id: draft?.assignee_id || (isEmployee ? (user?.id || '') : ''),
+    // The others the task is shared with, besides the owner above.
+    co_ids: [] as string[],
     due_date: draft?.due_date || dueDateForPriority(draftPriority),
     source_message_id: draft?.source_message_id || undefined,
   })
+  // A new owner who was already among the others moves up rather than being
+  // listed twice; clearing the owner hands the task to the first of the others.
+  const ownerPicked = (f: any, id: string) => {
+    const co: string[] = (f.co_ids || []).filter((x: string) => x !== id)
+    if (!id && co.length) return { ...f, assignee_id: co[0], co_ids: co.slice(1) }
+    return { ...f, assignee_id: id, co_ids: co }
+  }
+  // Which picker the "Add new employee" form was opened from.
+  const newUserFor = useRef<'owner' | 'co'>('owner')
   // Once the user picks a date by hand, stop auto-syncing it to the priority. A
   // date the draft read out of the message ("by Friday") counts as picked — the
   // sender said it, so a later priority change must not silently overwrite it.
@@ -1200,7 +1212,10 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
     if (!form.title) return
     setBusy(true)
     try {
-      const created = await api.post('/tasks', { ...form, personal: asPersonal })
+      const { co_ids: coIds, ...fields } = form
+      // Everyone it is for, the owner first (the server keeps assignee_id too).
+      const assigneeIds = asPersonal ? [] : [form.assignee_id, ...(coIds || [])].filter(Boolean)
+      const created = await api.post('/tasks', { ...fields, assignee_ids: assigneeIds, personal: asPersonal })
       // Upload staged attachments to the freshly-created task (best-effort per file).
       for (let i = 0; i < files.length; i++) {
         const f = files[i]
@@ -1511,7 +1526,7 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
             <div><label>Priority</label><select data-va="tasks.new.priority" value={form.priority} onChange={(e) => setPriority(e.target.value)}>{['Critical', 'High', 'Medium', 'Low'].map((p) => <option key={p}>{p}</option>)}</select></div>
             {!asPersonal && <div><label>Assign to {form.assignee_id === user?.id && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· defaults to you — pick anyone</span>}</label>
               <PickerWithAdd
-                dataVa="tasks.new.assignee" value={form.assignee_id} onChange={(id) => setForm((f: any) => ({ ...f, assignee_id: id }))}
+                dataVa="tasks.new.assignee" value={form.assignee_id} onChange={(id) => setForm((f: any) => ownerPicked(f, id))}
                 options={assignable.map((u) => ({ id: u.id, name: u.name + (u.id === user?.id ? ' (me)' : '') }))}
                 blankLabel="Unassigned" addLabel="Add new employee or manager…" noun="person"
                 canAdd={canAddPeople} onAddClick={() => setShowNewUser(true)} ariaLabel="Assign to"
@@ -1519,6 +1534,33 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
             </div>}
             <div><label>Due date {!dueManual && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto from priority</span>}</label><input data-va="tasks.new.due_date" type="date" value={form.due_date} onChange={(e) => { setDueManual(true); setForm({ ...form, due_date: e.target.value }) }} /></div>
           </div>
+          {/* Sharing one task between several people: the owner above, plus
+              anyone added here. They all get it, and any of them can move it on. */}
+          {!asPersonal && form.assignee_id && (
+            <div>
+              <label>Also assign to <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· optional — share this task with more people</span></label>
+              <div className="co-chips">
+                {(form.co_ids as string[]).map((cid) => {
+                  const u = assignable.find((x) => x.id === cid)
+                  if (!u) return null
+                  return (
+                    <span key={cid} className="co-chip">
+                      <Avatar name={u.name} color={u.avatar_color} size={20} />
+                      <span className="co-chip-name">{u.name}{u.id === user?.id ? ' (me)' : ''}</span>
+                      <button type="button" className="co-chip-x" onClick={() => setForm((f: any) => ({ ...f, co_ids: f.co_ids.filter((x: string) => x !== cid) }))} aria-label={`Remove ${u.name}`}>✕</button>
+                    </span>
+                  )
+                })}
+                <PickerWithAdd
+                  compact dataVa="tasks.new.coassignee" value=""
+                  onChange={(id) => { if (id) setForm((f: any) => (id === f.assignee_id || f.co_ids.includes(id) ? f : { ...f, co_ids: [...f.co_ids, id] })) }}
+                  options={assignable.filter((u) => u.id !== form.assignee_id && !form.co_ids.includes(u.id)).map((u) => ({ id: u.id, name: u.name + (u.id === user?.id ? ' (me)' : '') }))}
+                  blankLabel="＋ Add person" addLabel="Add new employee or manager…" noun="person"
+                  canAdd={canAddPeople} onAddClick={() => { newUserFor.current = 'co'; setShowNewUser(true) }} ariaLabel="Also assign to"
+                />
+              </div>
+            </div>
+          )}
           <div><label>Category {!form.category && <span className="muted" style={{ fontWeight: 500, fontSize: 10.5 }}>· auto-detected if left blank</span>}</label>
             <CategorySelect value={form.category || ''} onChange={(c) => setForm((f: any) => ({ ...f, category: c }))} blankLabel="Auto-detect" />
           </div>
@@ -1556,7 +1598,9 @@ function NewTaskModal({ users, personal, draft, onUserCreated, onClose, onCreate
                   setShowNewUser(false)
                   if (!u) return
                   onUserCreated?.(u)
-                  setForm((f: any) => ({ ...f, assignee_id: u.id }))
+                  if (newUserFor.current === 'co') setForm((f: any) => ({ ...f, co_ids: [...f.co_ids, u.id] }))
+                  else setForm((f: any) => ownerPicked(f, u.id))
+                  newUserFor.current = 'owner'
                   toast.success(`${u.name} added and assigned`)
                 }}
               />

@@ -184,18 +184,43 @@ export async function registerPush() {
   }
 }
 
+// Takes notifications off this device by the tag their push carried: the
+// phone's tray in the app, the browser's own notifications on the website.
+// `keep` is the opposite: everything with one of `prefixes` that is NOT in it
+// goes (the sweep of things read elsewhere while this device was away).
+export async function clearTray(tags: string[], sweep?: { prefixes: string[]; keep: Set<string> }) {
+  const want = new Set(tags)
+  const drop = (tag?: string | null) => !!tag && (want.has(tag) || (!!sweep && sweep.prefixes.some((p) => tag.startsWith(p)) && !sweep.keep.has(tag)))
+  if (!want.size && !sweep) return
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const { PushNotifications } = await import('@capacitor/push-notifications')
+      const { notifications } = await PushNotifications.getDeliveredNotifications()
+      const shown = notifications.filter((n) => drop(n.tag))
+      if (shown.length) await PushNotifications.removeDeliveredNotifications({ notifications: shown })
+      return
+    }
+    if (!('serviceWorker' in navigator)) return
+    const reg = await navigator.serviceWorker.getRegistration()
+    for (const n of (await reg?.getNotifications()) || []) if (drop(n.tag)) n.close()
+  } catch {}
+}
+
 // Opening a chat takes its notification out of the tray, as Cliq does: the
 // messages it announced are on screen now. The server tags a chat's pushes
 // `chat_<id>` (its reactions `react_<id>`), which is how they are found here.
-export async function clearChatNotifications(conversationId: string) {
-  if (!conversationId || !Capacitor.isNativePlatform()) return
-  try {
-    const { PushNotifications } = await import('@capacitor/push-notifications')
-    const { notifications } = await PushNotifications.getDeliveredNotifications()
-    const tags = [`chat_${conversationId}`, `react_${conversationId}`]
-    const shown = notifications.filter((n) => n.tag && tags.includes(n.tag))
-    if (shown.length) await PushNotifications.removeDeliveredNotifications({ notifications: shown })
-  } catch {}
+export function clearChatNotifications(conversationId: string) {
+  if (!conversationId) return
+  return clearTray([`chat_${conversationId}`, `react_${conversationId}`])
+}
+
+// A task opened in the drawer: its notifications have been seen. Here at once,
+// and on the person's other devices through the server (notifClear.js), which
+// also refreshes the bell everywhere.
+export function readTaskNotifications(taskId: string) {
+  if (!taskId) return
+  clearTray([`task_${taskId}`])
+  api.post(`/notifications/read-task/${encodeURIComponent(taskId)}`).catch(() => {})
 }
 
 // On logout, stop this device receiving the current user's pushes.

@@ -735,6 +735,9 @@ export default function CallCenter() {
         if (msg.type === 'message') { window.dispatchEvent(new CustomEvent('votask-chat-message', { detail: msg })); return }
         // Someone in the org checked in or out: the In chips' board (lib/attendanceBoard).
         if (msg.type === 'attendance') { window.dispatchEvent(new CustomEvent('votask-attendance', { detail: msg })); return }
+        // Notifications read somewhere (this device or another): the bell
+        // takes them off the tray and refreshes (NotificationBell).
+        if (msg.type === 'notif-clear') { window.dispatchEvent(new CustomEvent('votask-notif-clear', { detail: msg })); return }
 
         if (msg.type === 'call-ring') { showRing(msg); return }
         if (msg.type === 'call-ring-stop') { dismissRing(msg.callId); return }

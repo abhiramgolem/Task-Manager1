@@ -249,7 +249,7 @@ export default function Assistant() {
                           <tr key={t.id} className="clickable" onClick={() => setOpenId(t.id)}
                             role="button" tabIndex={0} aria-label={`Open ${t.title}`}
                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenId(t.id) } }}>
-                            <td><div style={{ fontWeight: 600, fontSize: 13 }}>{t.title}</div><div className="muted" style={{ fontSize: 11.5 }}>{t.assignee_name || 'Unassigned'} · {dueLabel(t)}</div></td>
+                            <td><div className="clamp-2" style={{ fontWeight: 600, fontSize: 13 }}>{t.title}</div><div className="muted" style={{ fontSize: 11.5 }}>{t.assignee_name || 'Unassigned'} · {dueLabel(t)}</div></td>
                             <td style={{ textAlign: 'right' }}><PriorityBadge p={t.priority} /> <StatusBadge s={t.status} /></td>
                           </tr>
                         ))}

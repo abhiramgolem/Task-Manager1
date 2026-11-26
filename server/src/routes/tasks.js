@@ -15,6 +15,7 @@ import { recordUsage } from '../ai/usage.js'
 import { MB, bigFileUpload, sendStoredFile } from '../fileStore.js'
 import { archivedEntry, sendArchived, forgetArchived } from '../archive.js'
 import { attachMessageFile } from '../taskFromMessage.js'
+import { IS_ASSIGNEE, coAssigneeIds, allAssigneeIds, isAssigneeOf, addCoAssignees, orgUserIds } from '../taskAssignees.js'
 import { localDay } from '../clock.js'
 
 // The configured speech-to-text provider, for usage attribution.
@@ -148,9 +149,11 @@ function hydrate(t) {
   const comments = db.prepare(`SELECT c.*, u.name AS user_name, u.avatar_color FROM task_comments c JOIN users u ON u.id=c.user_id WHERE c.task_id=? ORDER BY c.created_at`).all(t.id)
   const deps = db.prepare(`SELECT d.depends_on_task_id AS id, t2.title, t2.status FROM task_dependencies d JOIN tasks t2 ON t2.id=d.depends_on_task_id WHERE d.task_id=?`).all(t.id)
   const attachments = db.prepare('SELECT * FROM attachments WHERE task_id=?').all(t.id)
+  const coAssignees = db.prepare(`SELECT u.id,u.name,u.avatar_color,u.role FROM task_assignees ta JOIN users u ON u.id=ta.user_id
+    WHERE ta.task_id=? ORDER BY ta.added_at, ta.rowid`).all(t.id)
   return {
     ...t, assignee, assignedBy, reassignedBy, previousAssignee, completedBy, parent, project,
-    subtasks, comments, dependencies: deps, attachments,
+    subtasks, comments, dependencies: deps, attachments, co_assignees: coAssignees,
     origin: taskOrigin(t),
     is_split_parent: subtasks.length > 0,
   }
@@ -201,6 +204,9 @@ function hydrateMany(rows) {
   'of_task', (d) => ({ id: d.id, title: d.title, status: d.status }))
   const attachments = groupBy(inList(`SELECT * FROM attachments WHERE task_id IN (SELECT value FROM json_each(?))
     ORDER BY task_id, rowid`, taskIds), 'task_id')
+  const coAssignees = groupBy(inList(`SELECT ta.task_id, u.id, u.name, u.avatar_color, u.role FROM task_assignees ta JOIN users u ON u.id=ta.user_id
+    WHERE ta.task_id IN (SELECT value FROM json_each(?)) ORDER BY ta.task_id, ta.added_at, ta.rowid`, taskIds),
+  'task_id', (u) => ({ id: u.id, name: u.name, avatar_color: u.avatar_color, role: u.role }))
 
   return rows.map((t) => {
     const subs = subtasks.get(t.id) || []
@@ -217,6 +223,7 @@ function hydrateMany(rows) {
       comments: comments.get(t.id) || [],
       dependencies: deps.get(t.id) || [],
       attachments: attachments.get(t.id) || [],
+      co_assignees: coAssignees.get(t.id) || [],
       origin: taskOrigin(t),
       is_split_parent: subs.length > 0,
     }
@@ -245,7 +252,7 @@ function notifyCompleted(t, actor) {
     notify(t.org_id, uid, 'task_completed', msg, t.id)
   }
   tell(t.assigned_by_id)
-  tell(t.assignee_id)
+  for (const uid of allAssigneeIds(t)) tell(uid)
   if (actor.role === 'employee') {
     for (const m of db.prepare("SELECT id FROM users WHERE org_id=? AND role IN ('manager','admin')").all(t.org_id)) tell(m.id)
   }
@@ -303,17 +310,18 @@ r.get('/', (req, res) => {
     sql += ' AND t.assignee_id IS NOT NULL AND t.assignee_id != ? AND (t.assigned_by_id=? OR t.reassigned_by_id=?)'
     args.push(req.user.id, req.user.id, req.user.id)
   } else if (req.user.role === 'employee') {
-    // Employees see all of their own tasks (including private drafts).
-    sql += ' AND t.assignee_id=?'; args.push(req.user.id)
+    // Employees see all of their own tasks (including private drafts), and
+    // the ones they share with someone (taskAssignees.js).
+    sql += ` AND ${IS_ASSIGNEE}`; args.push(req.user.id, req.user.id)
   } else {
     // Managers/admins don't see an employee's private draft until it's submitted.
-    sql += ' AND (t.visible_to_manager=1 OR t.assignee_id=?)'; args.push(req.user.id)
+    sql += ` AND (t.visible_to_manager=1 OR ${IS_ASSIGNEE})`; args.push(req.user.id, req.user.id)
   }
-  if (mine) { sql += ' AND t.assignee_id=?'; args.push(req.user.id) }
+  if (mine) { sql += ` AND ${IS_ASSIGNEE}`; args.push(req.user.id, req.user.id) }
   if (status) { sql += ' AND t.status=?'; args.push(status) }
   if (priority) { sql += ' AND t.priority=?'; args.push(priority) }
   if (assignee === 'unassigned') { sql += ' AND t.assignee_id IS NULL' }
-  else if (assignee) { sql += ' AND t.assignee_id=?'; args.push(assignee) }
+  else if (assignee) { sql += ` AND ${IS_ASSIGNEE}`; args.push(assignee, assignee) }
   if (project) { sql += ' AND t.project_id=?'; args.push(project) }
   if (meeting) { sql += ' AND t.meeting_id=?'; args.push(meeting) }
   if (confidence) { sql += ' AND t.ownership_confidence=?'; args.push(confidence) }
@@ -585,6 +593,10 @@ r.post('/trash/:id/restore', (req, res) => {
       if (!taskExists(dep.task_id) || !taskExists(dep.depends_on_task_id)) continue
       db.prepare('INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?,?)').run(dep.task_id, dep.depends_on_task_id)
     }
+    for (const a of p.assignees || []) {
+      if (!taskExists(a.task_id) || !userExists(a.user_id)) continue
+      db.prepare('INSERT OR IGNORE INTO task_assignees (task_id, user_id, added_by_id, added_at) VALUES (?,?,?,?)').run(a.task_id, a.user_id, a.added_by_id, a.added_at)
+    }
     db.prepare('DELETE FROM deleted_tasks WHERE id=?').run(d.id)
   })()
 
@@ -770,9 +782,13 @@ r.post('/', (req, res) => {
   // to ANYONE in the org (employee→employee, employee→manager, …) or leave it
   // unassigned.
   const personal = !!b.personal
+  // assignee_ids: everyone the task is for, the first being its owner (newer
+  // apps); assignee_id alone is the owner (older apps, voice, MCP, meetings).
+  const people = personal ? [] : orgUserIds(req.user.org_id, b.assignee_ids)
+  const ownerId = personal ? req.user.id : (b.assignee_id || people[0] || null)
   const assignee = personal
     ? { id: req.user.id }
-    : (b.assignee_id ? db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(b.assignee_id, req.user.org_id) : null)
+    : (ownerId ? db.prepare('SELECT id FROM users WHERE id=? AND org_id=?').get(ownerId, req.user.org_id) : null)
   const visible = personal ? 0 : 1
   const confidence = personal ? 'high' : (b.ownership_confidence || (assignee ? 'high' : 'needs_confirmation'))
   const priority = b.priority || 'Medium'
@@ -794,9 +810,14 @@ r.post('/', (req, res) => {
   audit(req.user.org_id, req.user.id, 'task.create', 'task', tid, b.title)
   // Made from a chat message: its picture / document comes along as an attachment.
   if (b.source_message_id) attachMessageFile({ id: tid, org_id: req.user.org_id }, b.source_message_id, req.user)
+  // The others it is shared with.
+  const sharedWith = assignee ? addCoAssignees({ id: tid, assignee_id: assignee.id }, people, req.user.id, now()) : []
   // Notify the assignee when someone assigns them a task (not their own).
   if (assignee && assignee.id !== req.user.id) {
     notify(req.user.org_id, assignee.id, 'task_assigned', `${req.user.name} assigned you "${b.title}"`, tid)
+  }
+  for (const uid of sharedWith) {
+    if (uid !== req.user.id) notify(req.user.org_id, uid, 'task_assigned', `${req.user.name} assigned you "${b.title}" (shared with others)`, tid)
   }
   indexTask(tid) // fire-and-forget RAG indexing
   res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(tid)))
@@ -855,6 +876,8 @@ r.patch('/:id', (req, res) => {
   sets.push('updated_at=?'); args.push(now())
   args.push(t.id)
   db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id=?`).run(...args)
+  // A person who shared the task and now owns it is no longer also "another".
+  if (newlyAssigned) db.prepare('DELETE FROM task_assignees WHERE task_id=? AND user_id=?').run(t.id, newlyAssigned)
   // Reassignment gets its own audit action so it can be told apart from an
   // ordinary field edit — 'task.update' is excluded from the activity feed.
   audit(req.user.org_id, req.user.id, takenFrom ? 'task.reassign' : 'task.update', 'task', t.id, b)
@@ -997,12 +1020,14 @@ r.post('/:id/approve', (req, res) => {
     .run(approved ? 'approved' : 'rejected', approved ? 'Done' : 'Reopened', approved ? now() : null, approved ? req.user.id : null, now(), t.id)
   audit(req.user.org_id, req.user.id, 'task.approval', 'task', t.id, decision)
   // Tell the assignee the verdict.
-  notify(
-    t.org_id, t.assignee_id,
-    approved ? 'task_approved' : 'task_reopened',
-    approved ? `✓ "${t.title}" was approved by ${req.user.name}` : `↩ "${t.title}" needs changes — reopened by ${req.user.name}`,
-    t.id,
-  )
+  for (const uid of allAssigneeIds(t)) {
+    notify(
+      t.org_id, uid,
+      approved ? 'task_approved' : 'task_reopened',
+      approved ? `✓ "${t.title}" was approved by ${req.user.name}` : `↩ "${t.title}" needs changes — reopened by ${req.user.name}`,
+      t.id,
+    )
+  }
   // Any manager can approve, so the person who asked for the work is often not
   // the one who signs it off — and was never told it had been finished.
   if (approved && t.assigned_by_id && t.assigned_by_id !== req.user.id && t.assigned_by_id !== t.assignee_id) {
@@ -1015,21 +1040,85 @@ r.post('/:id/approve', (req, res) => {
   res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
 })
 
+// SHARE a task with more people, or take someone off it. The task keeps its
+// owner (assignee_id); these are the others on it (taskAssignees.js).
+// Adding: whoever may edit the brief (a manager, the person who assigned it)
+// and anyone already on the task, which is sharing the work rather than
+// handing it off. Removing: the same editors, or the person themself leaving.
+const canEditBrief = (t, user) => user.role === 'manager' || user.role === 'admin' || t.assigned_by_id === user.id
+r.post('/:id/assignees', (req, res) => {
+  const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  if (!t.visible_to_manager) return res.status(400).json({ error: 'A private task cannot be shared.' })
+  if (!canEditBrief(t, req.user) && !isAssigneeOf(t, req.user.id)) {
+    return res.status(403).json({ error: 'Only the people on this task, whoever assigned it, or a manager can add someone.' })
+  }
+  const want = orgUserIds(req.user.org_id, Array.isArray(req.body?.user_ids) ? req.body.user_ids : [req.body?.user_id])
+  if (!want.length) return res.status(400).json({ error: 'Pick someone in your organisation.' })
+  if (coAssigneeIds(t.id).length + want.length > 20) return res.status(400).json({ error: 'A task can be shared with at most 20 people.' })
+  // An unowned task gets its first person as owner, as assigning it would.
+  if (!t.assignee_id) {
+    db.prepare("UPDATE tasks SET assignee_id=?, assigned_at=?, ownership_confidence='high', updated_at=? WHERE id=?").run(want[0], now(), now(), t.id)
+    t.assignee_id = want[0]
+    notify(t.org_id, want[0], 'task_assigned', `${req.user.name} assigned you "${t.title}"`, t.id)
+  }
+  const added = addCoAssignees(t, want, req.user.id, now())
+  if (added.length) {
+    db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(now(), t.id)
+    audit(req.user.org_id, req.user.id, 'task.share', 'task', t.id, JSON.stringify({ added }))
+    for (const uid of added) {
+      if (uid !== req.user.id) notify(t.org_id, uid, 'task_assigned', `${req.user.name} shared "${t.title}" with you`, t.id)
+    }
+    indexTask(t.id)
+  }
+  res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+})
+r.delete('/:id/assignees/:userId', (req, res) => {
+  const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  const uid = req.params.userId
+  if (!canEditBrief(t, req.user) && uid !== req.user.id) {
+    return res.status(403).json({ error: 'Only whoever assigned this task or a manager can take someone off it.' })
+  }
+  const gone = db.prepare('DELETE FROM task_assignees WHERE task_id=? AND user_id=?').run(t.id, uid).changes
+  if (gone) {
+    db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(now(), t.id)
+    audit(req.user.org_id, req.user.id, 'task.unshare', 'task', t.id, JSON.stringify({ removed: uid }))
+    if (uid !== req.user.id) notify(t.org_id, uid, 'task_reassigned', `${req.user.name} took you off "${t.title}"`, t.id)
+    indexTask(t.id)
+  }
+  res.json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+})
+
 // COMMENTS
 r.post('/:id/comments', (req, res) => {
-  const { body } = req.body || {}
-  if (!body) return res.status(400).json({ error: 'body required' })
+  const body = typeof req.body?.body === 'string' ? req.body.body.trim() : ''
+  // Files sent with the comment, already uploaded onto this task by the same
+  // person (POST /:id/attachments). A comment may be a picture alone, as in chat.
+  const ids = Array.isArray(req.body?.attachment_ids)
+    ? [...new Set(req.body.attachment_ids.filter((x) => typeof x === 'string' && x.length <= 64))].slice(0, 20) : []
+  if (!body && !ids.length) return res.status(400).json({ error: 'body required' })
   const t = db.prepare('SELECT * FROM tasks WHERE id=? AND org_id=?').get(req.params.id, req.user.org_id)
   if (!t) return res.status(404).json({ error: 'Not found' })
   const cid = id('cmt')
-  db.prepare('INSERT INTO task_comments (id, task_id, user_id, body, created_at) VALUES (?,?,?,?,?)')
-    .run(cid, t.id, req.user.id, body, now())
+  // Only files of this task, uploaded by the commenter and not already on a
+  // comment: an id cannot pull someone else's file into your comment.
+  const linked = ids.filter((aid) => db.prepare(
+    'SELECT 1 FROM attachments WHERE id=? AND task_id=? AND uploaded_by=? AND comment_id IS NULL').get(aid, t.id, req.user.id))
+  if (!body && !linked.length) return res.status(400).json({ error: 'body required' })
+  db.transaction(() => {
+    db.prepare('INSERT INTO task_comments (id, task_id, user_id, body, created_at) VALUES (?,?,?,?,?)')
+      .run(cid, t.id, req.user.id, body, now())
+    for (const aid of linked) db.prepare('UPDATE attachments SET comment_id=? WHERE id=?').run(cid, aid)
+  })()
   audit(req.user.org_id, req.user.id, 'task.comment', 'task', t.id)
   // Notify the people involved (assignee + whoever assigned it), except the commenter.
   // The comment's id goes with it, so tapping the notification opens the task on
   // that comment instead of at the top of a long drawer.
-  const snippet = body.length > 80 ? body.slice(0, 77) + '…' : body
-  const recipients = new Set([t.assignee_id, t.assigned_by_id].filter(Boolean))
+  const files = linked.length === 1 ? '📎 a file' : `📎 ${linked.length} files`
+  const text = body.length > 80 ? body.slice(0, 77) + '…' : body
+  const snippet = !linked.length ? text : text ? `${text} (${files})` : files
+  const recipients = new Set([...allAssigneeIds(t), t.assigned_by_id].filter(Boolean))
   recipients.delete(req.user.id)
   // "@Ravi can you check this?" in a comment reached nobody unless Ravi already
   // owned or assigned the task — the way Cliq users pull a colleague in. A
@@ -1074,6 +1163,8 @@ r.delete('/:id/comments/latest-own', (req, res) => {
   const c = db.prepare('SELECT * FROM task_comments WHERE task_id=? AND user_id=? ORDER BY created_at DESC LIMIT 1').get(t.id, req.user.id)
   if (!c) return res.status(404).json({ error: 'No comment of yours to remove' })
   db.prepare('DELETE FROM task_comments WHERE id=?').run(c.id)
+  // Its files stay on the task, as attachments on their own.
+  db.prepare('UPDATE attachments SET comment_id=NULL WHERE comment_id=?').run(c.id)
   // The leaderboard counts comments live from task_comments, so the undone
   // comment's point disappears with it — exactly what an undo should mean.
   audit(req.user.org_id, req.user.id, 'task.comment.delete', 'task', t.id)
@@ -1110,6 +1201,9 @@ r.delete('/:id/comments/:cid', (req, res) => {
     return res.status(403).json({ error: 'You can only delete your own comments.' })
   }
   db.prepare('DELETE FROM task_comments WHERE id=?').run(c.id)
+  // Its files stay on the task, as attachments on their own: removing one is a
+  // separate, confirmed step in the attachments list.
+  db.prepare('UPDATE attachments SET comment_id=NULL WHERE comment_id=?').run(c.id)
   // The leaderboard counts comments live, so its point goes with it.
   audit(req.user.org_id, req.user.id, 'task.comment.delete', 'task', t.id, c.user_id === req.user.id ? 'own' : `by ${c.user_id}`)
   res.json({ ok: true })
@@ -1128,7 +1222,9 @@ r.post('/:id/attachments', taskFiles.receive, (req, res) => {
     aid, t.id, t.org_id, req.file.originalname || 'file', req.file.filename, req.file.mimetype || null, req.file.size || 0, req.user.id, now())
   audit(req.user.org_id, req.user.id, 'task.attach', 'task', t.id, req.file.originalname || '')
   db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(now(), t.id)
-  res.status(201).json(hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)))
+  // attachment_id: the drawer sends a pasted file with a comment, and names
+  // it in the comment that follows. Older apps read only the task.
+  res.status(201).json({ ...hydrate(db.prepare('SELECT * FROM tasks WHERE id=?').get(t.id)), attachment_id: aid })
 })
 
 // Remove an attachment (uploader, or any manager/admin). Deletes the file too.
@@ -1181,6 +1277,7 @@ r.delete('/:id', (req, res) => {
     comments: db.prepare(`SELECT * FROM task_comments WHERE task_id IN (${ph})`).all(...ids),
     attachments: db.prepare(`SELECT * FROM attachments WHERE task_id IN (${ph})`).all(...ids),
     dependencies: db.prepare(`SELECT * FROM task_dependencies WHERE task_id IN (${ph}) OR depends_on_task_id IN (${ph})`).all(...ids, ...ids),
+    assignees: db.prepare(`SELECT * FROM task_assignees WHERE task_id IN (${ph})`).all(...ids),
   }
   const assigneeName = t.assignee_id
     ? (db.prepare('SELECT name FROM users WHERE id=?').get(t.assignee_id)?.name || null)

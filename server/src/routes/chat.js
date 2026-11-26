@@ -15,6 +15,7 @@ import { parseDueDate } from '../ai/dates.js'
 import { detectPriority, restateRuleSummary } from '../ai/rules.js'
 import { linkPreview } from '../chatLinkPreview.js'
 import { sendCallPush } from '../push.js'
+import { clearEverywhere } from '../notifClear.js'
 import { MB, bigFileUpload, streamingStorage, sendStoredFile } from '../fileStore.js'
 import { archivedEntry, sendArchived, aliasArchived, forgetArchived, readArchived } from '../archive.js'
 import { localDay } from '../clock.js'
@@ -880,7 +881,9 @@ r.get('/conversations/:id', (req, res) => {
   const ctx = { reactions, mentions, stars, ...receiptCtx(conv.id, me.id) }
   const messages = rows.map((row) => shapeMessage(row, me.id, ctx))
   pushToConversation(conv.id, { type: 'read', conversationId: conv.id, userId: me.id, last_read_at: ts }, me.id)
-  if (moved) pushReceipts(conv.id)
+  // Opening the chat is the commonest way to read it, and it used to leave the
+  // notification on the person's other devices: only an explicit "read" did.
+  if (moved) { pushReceipts(conv.id); clearOnOtherDevices(conv.id, me.id) }
   res.json({ conversation: summarizeConvo(conv, me.id), messages, last_read_at: prevRead, has_more: hasMore })
 })
 
@@ -977,6 +980,11 @@ function readConversation(convId, userId) {
 // new line, and one push after the burst says the same as twenty.
 const clearTimers = new Map()
 function clearOnOtherDevices(convId, userId) {
+  // Its @mentions on the bell have been seen too, now the chat has.
+  const mentions = db.prepare("UPDATE notifications SET read=1 WHERE user_id=? AND read=0 AND conversation_id=?").run(userId, convId).changes
+  // Open tabs close the chat's browser notification and, if a mention went,
+  // refresh the bell; the phone push below does the tray.
+  clearEverywhere(userId, [`chat_${convId}`, `react_${convId}`], { bell: mentions > 0 })
   const key = userId + ':' + convId
   if (clearTimers.has(key)) return
   clearTimers.set(key, setTimeout(() => {

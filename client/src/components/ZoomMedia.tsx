@@ -6,6 +6,13 @@ import { Ic } from '../ui'
 // PhotoViewer — the thread's photos, pictures waiting to be sent, a task's
 // attachments — so a picture zooms the same way wherever it was opened. The
 // frame around it (bar, arrows, caption) is the viewer's own.
+//
+// Swiping works as in WhatsApp: the pictures either side wait just off screen
+// (`prev` / `next`) and slide in with the finger, and a swipe that counts
+// carries on until the neighbour sits where this one was, and only then hands
+// over (onStep). The viewer's next render shows that same picture in the same
+// place, so the hand-over can't be seen. Before, only the picture on screen
+// moved and the next one appeared from nowhere; a video took no swipe at all.
 
 const ZOOM_MAX = 4
 // A double-click or double-tap: near enough to read a whiteboard photo, with
@@ -13,8 +20,22 @@ const ZOOM_MAX = 4
 export const ZOOM_TAP = 2.5
 // How far a press may wander and still be a tap.
 const SLOP = 8
+// How far an unzoomed drag goes before it is called sideways or downwards.
+// Deciding at SLOP read a thumb's arc, which often sets off steeply, as a
+// pull down: the viewer closed instead of turning the picture.
+const AXIS_AT = 20
 // How far down a finger must pull an unzoomed picture to close the viewer.
 const PULL_CLOSE = 110
+// The dark space between two pictures as they slide past each other.
+const GAP = 24
+// How long a turn takes to finish once the finger lets go (.zm-anim in the CSS).
+const TURN_MS = 200
+// A video's own control bar (play, seek, volume, full screen) along its
+// bottom edge: a drag that starts there seeks, and is not a swipe.
+const VIDEO_BAR = 64
+
+// A neighbour waiting off screen to slide in.
+export interface Peek { src: string; video?: boolean }
 
 // The picture's scale and offset from where it sits unzoomed.
 interface Zoom { s: number; x: number; y: number }
@@ -64,8 +85,11 @@ export interface ZoomHandle {
 // picture, not the page under the viewer.
 //   picture: pinch, double-tap or double-click to zoom (1-4x); drag to pan
 //     once zoomed; at 1x, swipe sideways to step, pull down to close.
-//   dark ground: a tap closes (zooms out first, when zoomed).
-//   video: its own controls keep their drags and taps; swipes work around it.
+//   dark ground: a tap closes (zooms out first, when zoomed). Given onTap, a
+//     finger's tap there or on the picture shows or hides the viewer's bars
+//     instead, as in WhatsApp; a mouse click on the ground still closes.
+//   video: its taps and its control bar are its own; a finger swiping across
+//     the picture turns it like a photo. A mouse leaves it alone (arrows/keys).
 const ZoomMedia = forwardRef<ZoomHandle, {
   src: string
   video?: boolean
@@ -80,17 +104,29 @@ const ZoomMedia = forwardRef<ZoomHandle, {
   armedAt: number
   // Tells the viewer whether its zoom button should read "in" or "out".
   onZoom?: (zoomed: boolean) => void
-}>(function ZoomMedia({ src, video = false, alt, canPrev, canNext, onStep, onClose, armedAt, onZoom }, handle) {
+  // The items either side, shown sliding in during a swipe.
+  prev?: Peek | null
+  next?: Peek | null
+  // A finger's single tap (see the gesture list above).
+  onTap?: () => void
+}>(function ZoomMedia({ src, video = false, alt, canPrev, canNext, onStep, onClose, armedAt, onZoom, prev, next, onTap }, handle) {
   const [state, setState] = useState<'loading' | 'ready' | 'broken'>('loading')
   const [zoomed, setZoomed] = useState(false)
   const [dragging, setDragging] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
+  const prevRef = useRef<HTMLDivElement>(null)
+  const nextRef = useRef<HTMLDivElement>(null)
+  // A turn is sliding to its end: presses wait for the next item.
+  const turning = useRef(false)
   const media = useRef<HTMLImageElement | HTMLVideoElement | null>(null)
   const setMedia = useCallback((el: HTMLImageElement | HTMLVideoElement | null) => { media.current = el }, [])
   const zoom = useRef<Zoom>(NO_ZOOM)
   // Read by the native listeners below, which are attached once.
-  const now = useRef({ canZoom: false, canPrev, canNext, onStep, onClose })
-  useLayoutEffect(() => { now.current = { canZoom: !video && state === 'ready', canPrev, canNext, onStep, onClose } })
+  const now = useRef({ canZoom: false, canPrev, canNext, onStep, onClose, onTap })
+  useLayoutEffect(() => { now.current = { canZoom: !video && state === 'ready', canPrev, canNext, onStep, onClose, onTap } })
+  // A tap on the picture waits to see whether a second one (a zoom) follows.
+  const tapTimer = useRef(0)
+  useEffect(() => () => window.clearTimeout(tapTimer.current), [])
   const onZoomRef = useRef(onZoom)
   useEffect(() => { onZoomRef.current = onZoom })
   useEffect(() => { onZoomRef.current?.(zoomed) }, [zoomed])
@@ -107,11 +143,28 @@ const ZoomMedia = forwardRef<ZoomHandle, {
   // re-render per frame would be wasted work.
   const show = (z: Zoom, animate = false) => {
     zoom.current = z
+    // The neighbours follow a sideways drag at 1x, and only that: a pan of a
+    // zoomed picture or a pull down leaves them off screen.
+    const dx = z.s === 1 && !z.y ? z.x : 0
+    for (const [peek, side] of [[prevRef.current, -1], [nextRef.current, 1]] as const) {
+      if (!peek) continue
+      peek.classList.toggle('zm-anim', animate)
+      peek.style.transform = dx ? `translateX(calc(${side * 100}% + ${side * GAP + dx}px))` : ''
+    }
+    setZoomed(z.s > 1)
     const el = media.current
     if (!el) return
     el.classList.toggle('zm-anim', animate)
     el.style.transform = z.s === 1 && !z.x && !z.y ? '' : `translate(${z.x}px, ${z.y}px) scale(${z.s})`
-    setZoomed(z.s > 1)
+  }
+
+  // A swipe that counts: slide on until the neighbour fills the box, then step.
+  const turn = (dir: 1 | -1) => {
+    turning.current = true
+    const w = boxRef.current?.clientWidth || window.innerWidth
+    show({ s: 1, x: -dir * (w + GAP), y: 0 }, true)
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    window.setTimeout(() => now.current.onStep(dir), reduced ? 0 : TURN_MS)
   }
 
   const zoomAboutMiddle = (s: number) => {
@@ -127,7 +180,7 @@ const ZoomMedia = forwardRef<ZoomHandle, {
 
   // The press in progress: the pointers down (two at most), where they and
   // the picture were when the current pointer set formed, and what the press
-  // has been so far. `axis` is fixed by the first move past SLOP, so an
+  // has been so far. `axis` is fixed once the drag reaches AXIS_AT, so an
   // unzoomed drag is a sideways swipe or a pull down, never both by turns.
   const press = useRef<{
     pts: Map<number, { x: number; y: number }>
@@ -136,7 +189,7 @@ const ZoomMedia = forwardRef<ZoomHandle, {
     touch: boolean
     onPicture: boolean
     moved: boolean
-    axis: 'x' | 'y'
+    axis: 'x' | 'y' | null
     pinched: boolean
   } | null>(null)
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null)
@@ -159,19 +212,27 @@ const ZoomMedia = forwardRef<ZoomHandle, {
 
   const down = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
-    if ((e.target as HTMLElement).tagName === 'VIDEO') return
+    if (turning.current) return
+    const onVideo = (e.target as HTMLElement).tagName === 'VIDEO'
+    if (onVideo) {
+      if (e.pointerType === 'mouse') return
+      if (e.clientY > (e.target as HTMLElement).getBoundingClientRect().bottom - VIDEO_BAR) return
+    }
     if (!press.current) {
       closeOnClick.current = false
       press.current = {
         pts: new Map(), at: { x: 0, y: 0, d: 0, z: zoom.current, f: null },
-        t0: Date.now(), touch: e.pointerType !== 'mouse', onPicture: e.target !== e.currentTarget, moved: false, axis: 'x', pinched: false,
+        t0: Date.now(), touch: e.pointerType !== 'mouse', onPicture: e.target !== e.currentTarget, moved: false, axis: null, pinched: false,
       }
     }
     const p = press.current
     if (p.pts.size >= 2) return
     p.pts.set(e.pointerId, { x: e.clientX, y: e.clientY })
     if (p.pts.size === 2) p.pinched = true
-    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* already lifted */ }
+    // Not over a video: capturing would take the lift away from it, and with
+    // it the tap that plays or pauses. A finger stays with the element it went
+    // down on anyway, and its moves reach this box through it.
+    if (!onVideo) try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* already lifted */ }
     anchor()
   }
 
@@ -186,7 +247,6 @@ const ZoomMedia = forwardRef<ZoomHandle, {
     if (!p.moved) {
       if (Math.hypot(dx, dy) < SLOP && Math.abs(d - p.at.d) < SLOP) return
       p.moved = true
-      p.axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y'
       setDragging(true)
     }
     const { canZoom, canPrev: back, canNext: fwd } = now.current
@@ -196,6 +256,11 @@ const ZoomMedia = forwardRef<ZoomHandle, {
     } else if (p.at.z.s > 1) {
       if (f) show(fit({ s: p.at.z.s, x: p.at.z.x + dx, y: p.at.z.y + dy }, f))
     } else if (p.touch && !p.pinched) {
+      // Sideways unless clearly downwards (see AXIS_AT); fixed from then on.
+      if (!p.axis) {
+        if (Math.hypot(dx, dy) < AXIS_AT) return
+        p.axis = Math.abs(dy) > Math.abs(dx) * 1.5 ? 'y' : 'x'
+      }
       // The picture follows the finger: sideways it drags heavily where there
       // is nothing further to swipe to; downwards it is on its way out.
       if (p.axis === 'x') show({ s: 1, x: dx * ((dx > 0 ? back : fwd) ? 1 : 0.3), y: 0 })
@@ -221,18 +286,24 @@ const ZoomMedia = forwardRef<ZoomHandle, {
       if (p.at.z.s > 1) return
       const dx = e.clientX - p.at.x, dy = e.clientY - p.at.y
       if (p.touch && p.axis === 'y' && dy > PULL_CLOSE) { close(); return }
+      // Once sideways, how far the finger rose or fell on the way no longer
+      // matters (an arc ends well below where it began): a flick, or a slower
+      // drag a quarter of the way across, turns.
       const width = p.at.f ? p.at.f.box.width : window.innerWidth
-      const swipe = p.touch && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && (Date.now() - p.t0 < 700 || Math.abs(dx) > width / 3)
-      if (swipe && (dx < 0 ? fwd : back)) step(dx < 0 ? 1 : -1)
+      const swipe = p.touch && p.axis === 'x' && Math.abs(dx) > 40 && (Date.now() - p.t0 < 700 || Math.abs(dx) > width / 4)
+      if (swipe && (dx < 0 ? fwd : back)) turn(dx < 0 ? 1 : -1)
       else show(NO_ZOOM, true)
       return
     }
     // A tap on the dark ground closes (in the click — see closeOnClick), or
     // zooms back out first.
+    const tap = p.touch ? now.current.onTap : undefined
     if (!p.onPicture) {
       lastTap.current = null
       if (z.s > 1) show(NO_ZOOM, true)
-      else if (Date.now() >= armedAt) closeOnClick.current = true
+      else if (Date.now() < armedAt) { /* the thumbnail's second tap */ }
+      else if (tap) tap()
+      else closeOnClick.current = true
       return
     }
     // On the picture, two taps (or clicks: the system's double-click time is
@@ -240,11 +311,16 @@ const ZoomMedia = forwardRef<ZoomHandle, {
     const t = Date.now(), last = lastTap.current
     if (last && t - last.t < (p.touch ? 300 : 500) && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
       lastTap.current = null
+      window.clearTimeout(tapTimer.current)
       const f = frame()
       if (canZoom && f) show(z.s > 1 ? NO_ZOOM : zoomTo(z, ZOOM_TAP, e.clientX, e.clientY, e.clientX, e.clientY, f), true)
       return
     }
     lastTap.current = { t, x: e.clientX, y: e.clientY }
+    if (tap) {
+      window.clearTimeout(tapTimer.current)
+      tapTimer.current = window.setTimeout(() => now.current.onTap?.(), 300)
+    }
   }
 
   // Attached natively: React's wheel and touchmove listeners are passive, and
@@ -328,6 +404,25 @@ const ZoomMedia = forwardRef<ZoomHandle, {
         now.current.onClose()
       }}>
       {body}
+      {prev && <PeekLayer ref={prevRef} side="prev" peek={prev} />}
+      {next && <PeekLayer ref={nextRef} side="next" peek={next} />}
+    </div>
+  )
+})
+
+// A neighbour, laid out exactly as it will be once it is the one on screen,
+// one box-width (plus GAP) to the side. It also loads the neighbour ahead of
+// time, so the picture is there when the turn hands over. A video shows a
+// still (#t=0.1: at 0 many encoders give a black frame) and a play mark.
+const PeekLayer = forwardRef<HTMLDivElement, { side: 'prev' | 'next'; peek: Peek }>(function PeekLayer({ side, peek }, ref) {
+  return (
+    <div ref={ref} className={'zm-peek ' + side} aria-hidden="true">
+      {peek.video ? (
+        <>
+          <video className="zm-video" src={peek.src + '#t=0.1'} preload="metadata" muted playsInline disablePictureInPicture disableRemotePlayback />
+          <span className="zm-peek-play"><Ic name="play" size={28} /></span>
+        </>
+      ) : <img className="zm-img" src={peek.src} alt="" draggable={false} decoding="async" />}
     </div>
   )
 })

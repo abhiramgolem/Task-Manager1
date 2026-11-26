@@ -36,6 +36,7 @@ import TaskAssignSheet, { Draft } from '../components/chat/TaskAssignSheet'
 import { TaskCard, PollCard, PollVotesSheet, LocationCard, ContactCard, LinkPreview, CallSummaryCard } from '../components/chat/MessageCards'
 import { MessageInfoSheet, DeleteDialog, PollComposer, LocationPicker, ContactPicker, CallsSheet, DescriptionEditor } from '../components/chat/ChatDialogs'
 import MediaViewer from '../components/chat/MediaViewer'
+import AlbumGrid, { ALBUM_MIN } from '../components/chat/AlbumGrid'
 import { UpdateCard, UpdateSheet, TodayUpdates } from '../components/chat/DailyUpdate'
 import PhotoViewer from '../components/PhotoViewer'
 import { PdfDocPreview, openPdf } from '../components/PdfViewer'
@@ -104,6 +105,16 @@ const MAX_STAGED = 10
 // pasted log should not push a whole conversation off the screen.
 // Messages from one person this close together read as one turn (see `cont`).
 const RUN_GAP_MS = 5 * 60_000
+// Photos from one person this close together were sent together: four or more
+// in a row become an album (AlbumGrid). Each upload is stamped when it lands,
+// so a slow connection spaces a batch out; two minutes covers that.
+const ALBUM_GAP_MS = 2 * 60_000
+// A photo or video that can sit in an album: on the server, and with nothing
+// of its own to show beside it. A caption, a quote or "Forwarded" belongs to
+// that one photo, so such a photo stays a message of its own.
+const albumable = (m: Msg) => !!m.file && !m.deleted && !m.kind && !m.call && !m.meeting && !m.body?.trim()
+  && !m.reply && !m.forwarded && !m.uploading && !m.failed && !m.id.startsWith('tmp_')
+  && ((m.file.type || '').startsWith('image/') || isVideo(m.file))
 // A held voice note: slide this far left to cancel, this far up to lock; a
 // press shorter than HOLD_TAP_MS is a tap.
 const SLIDE_CANCEL_PX = 110
@@ -1464,7 +1475,9 @@ export default function Chats() {
       if (document.activeElement && document.activeElement !== document.body) return
       // An action opened a dialog (Forward, Remind me, Fork): focus is its.
       if (document.querySelector('.confirm-center, .modal-overlay, .modal-center')) return
-      logRef.current?.querySelector<HTMLElement>(`[data-msg="${was}"] .bubble`)?.focus({ preventScroll: true })
+      // A photo in an album: its tile is what takes focus.
+      const el = logRef.current?.querySelector<HTMLElement>(`[data-msg="${was}"] .bubble`) || logRef.current?.querySelector<HTMLElement>(`.album-tile[data-msg="${was}"]`)
+      el?.focus({ preventScroll: true })
     })
   }, [selectedId])
 
@@ -2543,6 +2556,14 @@ export default function Chats() {
     const next = !cur ? [id] : cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
     return next.length ? next : null
   })
+  // Several at once (an album, or its "+N" tile): all picked already, all
+  // let go; otherwise the missing ones join.
+  const pickMany = (ids: string[]) => setMulti((cur) => {
+    const set = new Set(cur || [])
+    const all = ids.every((x) => set.has(x))
+    for (const x of ids) { if (all) set.delete(x); else set.add(x) }
+    return set.size ? [...set] : null
+  })
   const multiMsgs = (multi || []).map((id) => messages.find((m) => m.id === id)).filter((m): m is Msg => !!m && !m.deleted)
   // In thread order, so a copy or a forward reads the way it was said.
   const inOrder = (list: Msg[]) => list.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))
@@ -2613,9 +2634,11 @@ export default function Chats() {
     setStagedThumbs((m) => { const n = { ...m }; for (const id of ids) delete n[id]; return n })
   }
   // A file's row: its type badge, name and size, and Download. A PDF's says
-  // how many pages it has once its first page is drawn, and opens on a tap.
+  // how many pages it has once its first page is drawn. A tap opens it.
   const fileRow = (m: Msg, local: boolean, pages?: number, onOpen?: () => void) => (
-    <div className={'chat-file' + (onOpen ? ' chat-file-open' : '')}
+    <div className={'chat-file' + (onOpen ? ' chat-file-open' : '')} role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined}
+      aria-label={onOpen ? `Open ${m.file?.name || 'file'}` : undefined}
+      onKeyDown={onOpen ? (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); onOpen() } } : undefined}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen() } : undefined}>
       <span className="chat-file-icon" data-kind={fileKind(m.file?.name)}>{m.failed ? <Ic name="warning" size={18} /> : m.uploading ? <Ic name="clock" size={18} /> : fileKind(m.file?.name) ? fileKind(m.file?.name).toUpperCase() : <DocGlyph size={20} />}</span>
       <span className="chat-file-meta"><span className="chat-file-name">{m.file?.name}</span><span className="chat-file-size">{m.failed ? 'Not sent' : m.uploading ? (m.progress != null && m.progress < 100 ? `Sending… ${m.progress}%` : 'Sending…') : [pages ? `${pages} page${pages === 1 ? '' : 's'}` : '', fmtSize(m.file?.size), (/\.([a-z0-9]{1,5})$/i.exec(m.file?.name || '')?.[1] || '').toUpperCase()].filter(Boolean).join(' · ')}</span></span>
@@ -2970,6 +2993,161 @@ export default function Chats() {
     },
   })
 
+  // Mouse screens: the tools beside a message, shown on hover. Over an album's
+  // tile (onTile) only React, Reply and ⋯ fit, so Assign as task joins the menu.
+  const deskTools = (m: Msg, mine: boolean, onTile = false) => {
+    const taskAct = onTile && m.kind !== 'task' ? msgActions(m).find((a) => a.key === 'task') : undefined
+    const menu = deskMenu(m)
+    return (
+      <div className={'msg-tools' + (onTile ? ' on-tile' : '') + (menuId === m.id || reactFor === m.id || emojiFor === m.id ? ' open' : '')}>
+        <button className="msg-tool-btn" title="React" aria-label="React" aria-expanded={reactFor === m.id} onClick={(e) => {
+          e.stopPropagation()
+          // Below the line unless that is under the composer: the
+          // thread clips it, and the newest message is the one
+          // most often reacted to.
+          const log = logRef.current?.getBoundingClientRect()
+          setReactUp(!!log && log.bottom - e.currentTarget.getBoundingClientRect().bottom < REACT_ROOM)
+          setReactFor(reactFor === m.id ? null : m.id); setMenuId(null)
+        }}><Ic name="smile" size={16} /></button>
+        <button className="msg-tool-btn" title="Reply" aria-label="Reply" onClick={(e) => { e.stopPropagation(); startReply(m) }}><Ic name="reply" size={16} /></button>
+        {!onTile && mine && (isEditable(m) || canEditUpdate(m)) && <button className="msg-tool-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); if (canEditUpdate(m)) editUpdateCard(m); else startEdit(m) }}><PencilGlyph size={16} /></button>}
+        {!onTile && m.kind !== 'task' && <button className="msg-tool-btn task-tool" title="Assign as task" aria-label="Assign as task" onClick={(e) => { e.stopPropagation(); toTask({ messageId: m.id }, m) }}><Ic name="taskAdd" size={16} /></button>}
+        <div className="msg-menu-wrap">
+          <button className="msg-tool-btn" title="More" aria-label="More actions" aria-haspopup="menu" aria-expanded={menuId === m.id}
+            onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuId(menuId === m.id ? null : m.id); setReactFor(null) }}>⋯</button>
+          {menuId === m.id && (
+            <ActionMenu anchor={menuAnchor} alignEnd={mine} label="Message actions" onClose={closeMsgMenu}
+              groups={taskAct ? [[{ key: 'task', label: taskAct.label, run: taskAct.run, icon: actionIcon(taskAct, 16) }], ...menu] : menu} />
+          )}
+        </div>
+        {reactFor === m.id && (
+          <div className={'react-picker' + (reactUp ? ' up' : '')} onClick={(e) => e.stopPropagation()}>
+            {EMOJIS.map((emo) => <button key={emo} onClick={() => react(m, emo)}>{emo}</button>)}
+            <button className="react-more" title="More emoji" aria-label="More emoji" onClick={() => { setReactFor(null); setEmojiFor(m.id) }}>＋</button>
+          </div>
+        )}
+        {emojiFor === m.id && (
+          <EmojiPicker align={mine ? 'right' : 'left'} onClose={() => setEmojiFor(null)} onPick={(e) => { setEmojiFor(null); react(m, e) }} />
+        )}
+      </div>
+    )
+  }
+  // Touch screens: the selected message's quick reactions, one tap from done.
+  // Yours is ringed, and tapping it takes it back; one picked from the full set
+  // joins the row so it can be taken back too. ＋ opens every emoji (over the
+  // composer, where a phone has the room).
+  const reactTray = (m: Msg, mine: boolean) => {
+    const myEmoji = (m.reactions || []).find((rx) => rx.user_id === user!.id)?.emoji
+    const quick = myEmoji && !EMOJIS.includes(myEmoji) ? [myEmoji, ...EMOJIS] : EMOJIS
+    return (
+      <div className={'react-tray ' + trayPlace + (mine ? ' mine' : '')} style={trayPlace === 'inside' ? { top: trayTop } : undefined} role="group" aria-label="React to this message" onClick={(e) => e.stopPropagation()}>
+        {/* The label names the action ("Take back…"), not a pressed
+            state: reactions are one per person, and a different
+            emoji replaces yours rather than adding to it. */}
+        {quick.map((emo) => (
+          <button key={emo} className={emo === myEmoji ? 'on' : undefined} aria-label={emo === myEmoji ? `Take back your ${emo}` : `React with ${emo}`} onClick={() => react(m, emo)}>{emo}</button>
+        ))}
+        <button className="react-tray-more" aria-label="More emoji" onClick={() => setEmojiFor(m.id)}><Ic name="plus" size={18} /></button>
+      </div>
+    )
+  }
+
+  // ---- An album: four or more photos sent together (AlbumGrid) ----
+  // A tile behaves as its photo's own bubble does on a touch screen; while
+  // picking, the "+N" tile picks every photo behind it too.
+  const albumTouch = (m: Msg, group: Msg[]): React.HTMLAttributes<HTMLDivElement> => {
+    const p = bubbleTouch(m) as React.HTMLAttributes<HTMLDivElement>
+    if (group.length < 2 || !multi || !touchUI) return p
+    return {
+      ...p,
+      onClickCapture: (e: React.MouseEvent<HTMLDivElement>) => {
+        e.preventDefault(); e.stopPropagation()
+        if (longPressedRef.current) { longPressedRef.current = false; return }
+        pickMany(group.map((x) => x.id))
+      },
+    }
+  }
+  // Over a tile: its reactions, its pick mark, and on a mouse screen its tools.
+  const albumTileExtra = (m: Msg, mine: boolean) => {
+    const rxs = m.reactions || []
+    const top = [...new Set(rxs.map((rx) => rx.emoji))].slice(0, 2)
+    return (
+      <>
+        {rxs.length > 0 && (
+          <button type="button" className={'album-rx' + (rxs.some((rx) => rx.user_id === user!.id) ? ' mine' : '')}
+            aria-label={`Reactions: ${rxs.map((rx) => `${rx.user_id === user!.id ? 'You' : senderName(rx.user_id)} ${rx.emoji}`).join(', ')}. Show who reacted`}
+            onClick={(e) => { e.stopPropagation(); setSelectedId(null); setReactionsOf(m.id) }}>
+            {top.join('')}{rxs.length > 1 && <span>{rxs.length}</span>}
+          </button>
+        )}
+        {multi && <span className={'album-check' + (multi.includes(m.id) ? ' on' : '')} aria-hidden="true">{multi.includes(m.id) && <Ic name="check" size={12} />}</span>}
+        {!touchUI && !multi && deskTools(m, mine, true)}
+      </>
+    )
+  }
+  const albumRow = (ms: Msg[], prevM: Msg | null) => {
+    const first = ms[0], last = ms[ms.length - 1]
+    const mine = first.sender_id === user!.id
+    const ids = ms.map((x) => x.id)
+    const cont = !!prevM && prevM.kind !== 'system' && !prevM.call && !prevM.meeting && !prevM.deleted && prevM.sender_id === first.sender_id
+      && new Date(first.created_at).getTime() - new Date(prevM.created_at).getTime() < RUN_GAP_MS
+    const inGroup = active?.type === 'group'
+    const withFace = inGroup && !mine
+    const face = withFace && !cont ? active?.members.find((mm) => mm.id === first.sender_id) : null
+    const sel = touchUI && selectedId ? ms.find((x) => x.id === selectedId) || null : null
+    const allPicked = !!multi && ids.every((x) => multi.includes(x))
+    const tick = last.seen ? 'read' : last.delivered ? 'delivered' : 'sent'
+    return (
+      <div key={'album' + first.id} data-album={first.id}
+        className={'msg-wrap album-wrap' + (sel ? ' selected' : '') + (allPicked ? ' picked' : '') + (mine ? ' mine' : '') + (cont ? ' cont' : '') + (withFace ? ' has-face' : '')}
+        style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}
+        // Desktop, picking messages: a tile picks its photo (and what is behind
+        // its "+N"); anywhere else on the row, the whole album.
+        onClickCapture={multi && !touchUI ? (e) => {
+          if ((e.target as HTMLElement).closest('.pick-box')) return
+          e.preventDefault(); e.stopPropagation()
+          const tile = (e.target as HTMLElement).closest<HTMLElement>('.album-tile')
+          const at = tile ? ids.indexOf(tile.dataset.msg || '') : -1
+          pickMany(at < 0 ? ids : at === 3 ? ids.slice(3) : [ids[at]])
+        } : undefined}>
+        {multi && (
+          <button type="button" className={'pick-box' + (allPicked ? ' on' : '')} aria-pressed={allPicked}
+            aria-label={allPicked ? 'Unselect these photos' : 'Select these photos'}
+            onClick={(e) => { e.stopPropagation(); pickMany(ids) }}>
+            {allPicked && <Ic name="check" size={12} />}
+          </button>
+        )}
+        {touchUI && !multi && <span className="swipe-ic" aria-hidden="true"><Ic name="reply" size={16} /></span>}
+        {face && (
+          <span className="msg-face" aria-hidden="true">
+            <Avatar name={face.name} color={face.avatar_color} size={28} src={face.avatar_file ? userAvatarUrl(face.id, face.avatar_file) : undefined} />
+          </span>
+        )}
+        <div className={'msg-line' + (mine ? ' mine' : '')}>
+          <div className="msg-body">
+            <div className={'bubble ' + (mine ? 'user' : 'ai') + ' file-bubble media-bubble bare album-bubble'}>
+              {inGroup && !mine && !cont && <div className="msg-sender" style={{ color: senderColor(first.sender_id) }}>{senderName(first.sender_id)}</div>}
+              <AlbumGrid items={ms} onOpen={(m) => setViewerAt(m.id)}
+                tileProps={albumTouch}
+                tileClass={(m, group) => [
+                  sel?.id === m.id ? 'sel' : '',
+                  multi && group.every((x) => multi.includes(x.id)) ? 'picked' : '',
+                  flashId && group.some((x) => x.id === flashId) ? 'flash' : '',
+                ].join(' ')}
+                extra={(m) => albumTileExtra(m, mine)} />
+              <span className="bubble-foot">
+                {last.starred && <span title="Starred" style={{ display: 'inline-flex' }}><Ic name="star" size={11} /></span>}
+                <span className="bubble-time">{fmtTime(last.created_at)}</span>
+                {mine && <Ticks state={tick} />}
+              </span>
+            </div>
+          </div>
+        </div>
+        {sel && !multi && emojiFor !== sel.id && reactTray(sel, mine)}
+      </div>
+    )
+  }
+
   // minutes = 0 unmutes. A timed mute wears off by itself server-side, which is
   // the difference between "quiet for this meeting" and accidentally going dark
   // on a channel for a month.
@@ -3229,17 +3407,29 @@ export default function Chats() {
   // which says how many, as WhatsApp's does.
   const isUnreadForMe = (m: Msg) => !!threadLastRead && m.created_at > threadLastRead && m.sender_id !== user?.id && m.kind !== 'system'
   const unreadCount = inSearch ? 0 : messages.filter(isUnreadForMe).length
-  const logItems: ({ sep: string } | { unread: number } | { m: Msg })[] = []
+  type LogItem = { sep: string } | { unread: number } | { m: Msg } | { album: Msg[] }
+  const lines: LogItem[] = []
   let lastDay = ''
   let unreadShown = false
   for (const m of shownMessages) {
     const day = new Date(m.created_at).toDateString()
-    if (day !== lastDay) { logItems.push({ sep: dayLabel(m.created_at) }); lastDay = day }
+    if (day !== lastDay) { lines.push({ sep: dayLabel(m.created_at) }); lastDay = day }
     if (!unreadShown && !inSearch && isUnreadForMe(m)) {
-      logItems.push({ unread: unreadCount }); unreadShown = true
+      lines.push({ unread: unreadCount }); unreadShown = true
     }
-    logItems.push({ m })
+    // Straight after another photo from the same person, sent together: one run.
+    const prev = lines[lines.length - 1]
+    const run = prev && 'album' in prev ? prev.album : prev && 'm' in prev && albumable(prev.m) ? [prev.m] : null
+    const tail = run?.[run.length - 1]
+    if (run && tail && albumable(m) && tail.sender_id === m.sender_id
+      && new Date(m.created_at).getTime() - new Date(tail.created_at).getTime() < ALBUM_GAP_MS) {
+      lines[lines.length - 1] = { album: [...run, m] }
+      continue
+    }
+    lines.push({ m })
   }
+  // Fewer than ALBUM_MIN in a run stay single photos, as WhatsApp shows two or three.
+  const logItems = lines.flatMap((it): LogItem[] => ('album' in it && it.album.length < ALBUM_MIN ? it.album.map((m) => ({ m })) : [it]))
   // Group: "Send messages — only admins" and I am not one.
   const readOnly = !!active && active.type === 'group' && !!active.admins_only && active.role !== 'admin'
 
@@ -3689,6 +3879,8 @@ export default function Chats() {
             {logItems.map((it, idx) => {
               if ('sep' in it) return <div key={'sep' + idx} className="date-sep"><span>{it.sep}</span></div>
               if ('unread' in it) return <div key={'unread' + idx} className="unread-sep"><span>{it.unread} unread message{it.unread === 1 ? '' : 's'}</span></div>
+              const before = logItems[idx - 1]
+              if ('album' in it) return albumRow(it.album, before && 'm' in before ? before.m : before && 'album' in before ? before.album[before.album.length - 1] : null)
               const m = it.m
               // A group event ("Priya added Ravi"): a centred line, nobody's message.
               if (m.kind === 'system') return <div key={m.id} data-msg={m.id} className="sys-line"><span>{m.system}</span></div>
@@ -3698,13 +3890,15 @@ export default function Chats() {
               // file to show yet, so a picture or voice note shows as a file row.
               const local = !!(m.uploading || m.failed)
               const isImage = !!m.file && (m.file.type || '').startsWith('image/')
+              // A photo or video on the server: it fills its bubble, and with no
+              // caption its time sits on the picture (.media-bubble in the CSS).
+              const isMedia = !!m.file && !local && (isImage || isVideo(m.file))
               const isCard = !!m.kind && !m.deleted
               // A run: the same person again, straight after and within a few
               // minutes. As in WhatsApp and Cliq, only its first message carries
               // the name and the face, and the run sits closer together — a name
               // over every line made a busy group read like a list of strangers.
-              const prevIt = logItems[idx - 1]
-              const prevM = prevIt && 'm' in prevIt ? prevIt.m : null
+              const prevM = before && 'm' in before ? before.m : before && 'album' in before ? before.album[before.album.length - 1] : null
               const plain = (x: Msg) => x.kind !== 'system' && !x.call && !x.meeting
               const cont = !!prevM && plain(prevM) && plain(m) && !prevM.deleted && prevM.sender_id === m.sender_id
                 && new Date(m.created_at).getTime() - new Date(prevM.created_at).getTime() < RUN_GAP_MS
@@ -3791,7 +3985,7 @@ export default function Chats() {
                         <div className="bubble deleted row" style={{ gap: 6 }} {...bubbleTouch(m)}><Ic name="block" size={13} /> {mine ? 'You deleted this message' : 'This message was deleted'}<span className="bubble-foot"><span className="bubble-time">{fmtTime(m.created_at)}</span></span></div>
                       ) : (
                         <div
-                          className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !local ? ' pic-bubble' : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
+                          className={'bubble ' + (mine ? 'user' : 'ai') + (m.file ? ' file-bubble' : '') + (isImage && !local ? ' pic-bubble' : '') + (isMedia ? ' media-bubble' + (shownBody ? '' : ' bare') : '') + (isCard ? ' card-bubble' : '') + (mentionsMe ? ' mentions-me' : '')}
                           {...bubbleTouch(m)}
                         >
                           {/* In the bubble, as WhatsApp writes who said it. */}
@@ -3836,7 +4030,9 @@ export default function Chats() {
                                   <img className="chat-image" src={fileUrl(m)} alt={m.file.name} loading="lazy"
                                     // A picture that finishes loading grows the thread; if the
                                     // reader was at the bottom, keep the newest line in view.
-                                    onLoad={() => { const el = logRef.current; if (el && stuckRef.current) el.scrollTop = el.scrollHeight }} />
+                                    // Until then it holds a shimmering space (.chat-image:not(.ready)).
+                                    onLoad={(e) => { e.currentTarget.classList.add('ready'); const el = logRef.current; if (el && stuckRef.current) el.scrollTop = el.scrollHeight }}
+                                    onError={(e) => e.currentTarget.classList.add('ready')} />
                                 </button>
                                 {mediaDl(m)}
                               </div>
@@ -3853,7 +4049,10 @@ export default function Chats() {
                                 : local && m.localThumb
                                   // Still sending: the page drawn here when it was picked.
                                   ? <div className="pdf-doc"><div className="pdf-thumb"><img src={m.localThumb} alt="" draggable={false} /></div>{fileRow(m, local, m.localPages)}</div>
-                                  : fileRow(m, local))}
+                                  // A sheet, a document, anything else: a tap anywhere on it opens
+                                  // it (the app saves it and opens it in its own app, as WhatsApp
+                                  // does; a browser downloads it). Only the small button did before.
+                                  : fileRow(m, local, undefined, local ? undefined : () => download(m)))}
                           {!m.file && !m.kind && !isTemp && /https?:\/\//i.test(body) && <LinkPreview messageId={m.id} version={m.edited_at || ''} />}
                           {shownBody && <MessageText body={shownBody} mentions={m.mentions} meId={user!.id} fromMe={mine} highlight={inSearch} />}
                           {folded && <button type="button" className="read-more" onClick={(e) => { e.stopPropagation(); setUnfolded((s) => new Set(s).add(m.id)) }}>Read more</button>}
@@ -3892,60 +4091,10 @@ export default function Chats() {
                         Touch screens select the message instead (bubbleTouch).
                         Edit is one of them, for your own messages — it was only in
                         the ⋯ menu before, and nobody found it there. */}
-                    {!touchUI && !isTemp && !m.deleted && !multi && (
-                      <div className={'msg-tools' + (menuId === m.id || reactFor === m.id || emojiFor === m.id ? ' open' : '')}>
-                        <button className="msg-tool-btn" title="React" aria-label="React" aria-expanded={reactFor === m.id} onClick={(e) => {
-                          e.stopPropagation()
-                          // Below the line unless that is under the composer: the
-                          // thread clips it, and the newest message is the one
-                          // most often reacted to.
-                          const log = logRef.current?.getBoundingClientRect()
-                          setReactUp(!!log && log.bottom - e.currentTarget.getBoundingClientRect().bottom < REACT_ROOM)
-                          setReactFor(reactFor === m.id ? null : m.id); setMenuId(null)
-                        }}><Ic name="smile" size={16} /></button>
-                        <button className="msg-tool-btn" title="Reply" aria-label="Reply" onClick={(e) => { e.stopPropagation(); startReply(m) }}><Ic name="reply" size={16} /></button>
-                        {mine && (isEditable(m) || canEditUpdate(m)) && <button className="msg-tool-btn" title="Edit" aria-label="Edit" onClick={(e) => { e.stopPropagation(); if (canEditUpdate(m)) editUpdateCard(m); else startEdit(m) }}><PencilGlyph size={16} /></button>}
-                        {m.kind !== 'task' && <button className="msg-tool-btn task-tool" title="Assign as task" aria-label="Assign as task" onClick={(e) => { e.stopPropagation(); toTask({ messageId: m.id }, m) }}><Ic name="taskAdd" size={16} /></button>}
-                        <div className="msg-menu-wrap">
-                          <button className="msg-tool-btn" title="More" aria-label="More actions" aria-haspopup="menu" aria-expanded={menuId === m.id}
-                            onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuId(menuId === m.id ? null : m.id); setReactFor(null) }}>⋯</button>
-                          {menuId === m.id && (
-                            <ActionMenu anchor={menuAnchor} alignEnd={mine} groups={deskMenu(m)} label="Message actions" onClose={closeMsgMenu} />
-                          )}
-                        </div>
-                        {reactFor === m.id && (
-                          <div className={'react-picker' + (reactUp ? ' up' : '')} onClick={(e) => e.stopPropagation()}>
-                            {EMOJIS.map((emo) => <button key={emo} onClick={() => react(m, emo)}>{emo}</button>)}
-                            <button className="react-more" title="More emoji" aria-label="More emoji" onClick={() => { setReactFor(null); setEmojiFor(m.id) }}>＋</button>
-                          </div>
-                        )}
-                        {emojiFor === m.id && (
-                          <EmojiPicker align={mine ? 'right' : 'left'} onClose={() => setEmojiFor(null)} onPick={(e) => { setEmojiFor(null); react(m, e) }} />
-                        )}
-                      </div>
-                    )}
+                    {!touchUI && !isTemp && !m.deleted && !multi && deskTools(m, mine)}
                   </div>
                   )}
-                  {/* Touch screens: the selected message's quick reactions, one
-                      tap from done. Yours is ringed, and tapping it takes it
-                      back; one picked from the full set joins the row so it can
-                      be taken back too. ＋ opens every emoji (over the composer,
-                      where a phone has the room). */}
-                  {touchUI && selectedId === m.id && !multi && !m.deleted && !isTemp && !m.call && !m.meeting && emojiFor !== m.id && (() => {
-                    const myEmoji = rxs.find((rx) => rx.user_id === user!.id)?.emoji
-                    const quick = myEmoji && !EMOJIS.includes(myEmoji) ? [myEmoji, ...EMOJIS] : EMOJIS
-                    return (
-                      <div className={'react-tray ' + trayPlace + (mine ? ' mine' : '')} style={trayPlace === 'inside' ? { top: trayTop } : undefined} role="group" aria-label="React to this message" onClick={(e) => e.stopPropagation()}>
-                        {/* The label names the action ("Take back…"), not a pressed
-                            state: reactions are one per person, and a different
-                            emoji replaces yours rather than adding to it. */}
-                        {quick.map((emo) => (
-                          <button key={emo} className={emo === myEmoji ? 'on' : undefined} aria-label={emo === myEmoji ? `Take back your ${emo}` : `React with ${emo}`} onClick={() => react(m, emo)}>{emo}</button>
-                        ))}
-                        <button className="react-tray-more" aria-label="More emoji" onClick={() => setEmojiFor(m.id)}><Ic name="plus" size={18} /></button>
-                      </div>
-                    )
-                  })()}
+                  {touchUI && selectedId === m.id && !multi && !m.deleted && !isTemp && !m.call && !m.meeting && emojiFor !== m.id && reactTray(m, mine)}
                 </div>
               )
             })}

@@ -345,10 +345,10 @@ function ApiKeys() {
         {fresh && (
           <div style={{ border: '1px solid var(--primary)', borderRadius: 'var(--r-lg)', padding: 12, display: 'grid', gap: 8 }}>
             <div style={{ fontWeight: 700, fontSize: 12.5 }}>Copy this now — it cannot be shown again.</div>
-            <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--surface-2, #f8fafc)', padding: '8px 10px', borderRadius: 8 }}>{fresh}</code>
+            <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--n-50)', padding: '8px 10px', borderRadius: 8 }}>{fresh}</code>
             {freshScope === 'mcp' && (<>
               <div style={{ fontWeight: 700, fontSize: 12.5, marginTop: 4 }}>Connector URL — paste this into Claude</div>
-              <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--surface-2, #f8fafc)', padding: '8px 10px', borderRadius: 8 }}>{connectorUrl}</code>
+              <code style={{ wordBreak: 'break-all', fontSize: 12.5, background: 'var(--n-50)', padding: '8px 10px', borderRadius: 8 }}>{connectorUrl}</code>
               <div className="muted" style={{ fontSize: 12 }}>
                 Customize &rarr; Connectors &rarr; + &rarr; Add custom connector. This key works ONLY here — it is
                 refused by the rest of the API, so the URL leaking does not hand over a general credential.

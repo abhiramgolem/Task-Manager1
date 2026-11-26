@@ -125,9 +125,20 @@
 /* The handful of places that hard-code white rather than a token. Each one is a
    surface, so it maps to --surface; left as raw #fff in the light theme so this
    stays a purely additive change. */
-:root[data-theme="dark"] input,
-:root[data-theme="dark"] textarea,
-:root[data-theme="dark"] select,
+/* Form fields set only the colour, never the `background` shorthand: the
+   shorthand also cleared the forms plugin's select arrow, so every dropdown
+   read as a text box with no way to tell it opens ("there is no dropdown"), and
+   it outranked the plugin's :checked fill, so a ticked checkbox turned into an
+   empty square the colour of the row. Checkboxes and radios are drawn by their
+   own rules below. :where() keeps this at the old 0,2,1. */
+:root[data-theme="dark"] :is(input, textarea, select):where(:not([type="checkbox"], [type="radio"])) { background-color: var(--surface); }
+/* The plugin's grey arrow, a shade lighter so it shows on the dark field. Later
+   rules with their own caret (the toolbar filters below) still win. */
+:root[data-theme="dark"] select:not([multiple]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%23a7b3c4' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+}
+/* Desktop browsers draw the open list from the options' own colours. */
+:root[data-theme="dark"] option, :root[data-theme="dark"] optgroup { background-color: var(--surface); color: var(--text); }
 :root[data-theme="dark"] .modal,
 :root[data-theme="dark"] .task-mini,
 :root[data-theme="dark"] .back-btn,
@@ -146,6 +157,12 @@
 :root[data-theme="dark"] .pf-nav-logout:hover { background: var(--danger-bg); }
 /* The app logo is a light-background mark; a white tile behind it on dark reads
    as a bright hole, so give it the surface instead. */
+/* Menus and pickers mark the hovered or keyboard-chosen row with --bg. On dark
+   --bg is darker than the menu's --surface by a hair (1.05:1), so the row you
+   were on could not be seen. */
+:root[data-theme="dark"] :is(.addpick-opt.active, .mention-opt.active, .mention-opt:hover, .sortmenu-item:hover,
+  .am-item:hover, .am-item:focus-visible, .msg-menu button:hover, .report-menu > button:hover, .modal-user:hover,
+  .ta-pick-row:hover, .ta-pick-row.on, .emoji-tabs .active, .ci-mem-add-row:hover, .ci-mem-add-row:focus-within) { background: var(--n-100); }
 :root[data-theme="dark"] .brand-logo,
 :root[data-theme="dark"] .auth-brand-logo,
 :root[data-theme="dark"] .brand-logo-img { background: var(--n-100); }
@@ -184,6 +201,20 @@ input, textarea, select {
 }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(242,98,46,.20); }
 label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 5px; }
+
+/* Checkboxes and radios. The forms plugin (tailwind.css, loaded after this
+   file) draws them itself with appearance: none, so accent-color never reached
+   them: Tailwind blue on white in both themes. It fills a checked box with
+   currentColor, so the brand comes in through color. The :root prefix outranks
+   the plugin's plain [type] rules; its :checked rules still set the fill, the
+   tick and a transparent border. In dark the fill is a deeper orange than
+   --primary, which is too light under a white tick. */
+:root [type="checkbox"], :root [type="radio"] { color: #ea580c; border-color: var(--n-400); }
+:root[data-theme="dark"] :is([type="checkbox"], [type="radio"]):not(:checked) { background-color: var(--surface); }
+:root [type="checkbox"]:focus, :root [type="radio"]:focus {
+  --tw-ring-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  --tw-ring-offset-color: var(--surface);
+}
 
 /* ---- buttons ---- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--n-300); background: var(--n-50); color: var(--n-700); font-weight: 600; font-size: 13px; white-space: nowrap; transition: background .15s, border-color .15s, box-shadow .15s, transform .1s; }
@@ -224,6 +255,8 @@ label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; 
    theme, picked to match the tinted text on each. */
 :root { --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c2410c' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
 :root[data-theme="dark"] { --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fdba74' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
+:root[data-theme="dark"] :is(.toolbar, .toolbar-filters, .act-bar) select { background-color: color-mix(in srgb, var(--primary) 12%, var(--surface)); }
+:root[data-theme="dark"] :is(.toolbar, .toolbar-filters, .act-bar) select:hover { background-color: color-mix(in srgb, var(--primary) 20%, var(--surface)); }
 :root .toolbar select, :root .toolbar-filters select, :root .act-bar select,
 :root .toolbar select:hover, :root .toolbar-filters select:hover, :root .act-bar select:hover {
   appearance: none; -webkit-appearance: none;
@@ -642,7 +675,8 @@ tbody tr:hover { background: var(--n-50); }
 .rev-row:hover { background: var(--bg); }
 .rev-row:focus-visible { outline: none; background: var(--bg); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 30%, transparent); }
 .rev-main { flex: 1; min-width: 0; }
-.rev-title { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+.rev-title { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .rev-meta { font-size: 11.5px; margin-top: 2px; }
 .rev-actions { display: flex; gap: 6px; flex-shrink: 0; }
 /* On phones the buttons drop under the title rather than squeezing it out. */
@@ -1770,7 +1804,13 @@ tbody tr:hover { background: var(--n-50); }
 .dr-title { font-size: 21px; font-weight: 800; letter-spacing: -.01em; margin: 0 0 10px; line-height: 1.25; overflow-wrap: anywhere; }
 .dr-badges { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
 .dr-section-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 5px; }
-.dr-desc { margin: 0; font-size: 14px; line-height: 1.55; color: var(--n-700); }
+.dr-desc { margin: 0; font-size: 14px; line-height: 1.55; color: var(--n-700); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dr-title.long { font-size: 16.5px; font-weight: 700; line-height: 1.45; letter-spacing: 0; }
+.dr-title.cut { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 4px; }
+.dr-more { display: block; border: 0; background: none; padding: 2px 0; margin: 0 0 10px; color: var(--link); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.dr-more:hover { text-decoration: underline; }
+/* A link in task text (lib/linkify.tsx), opened in a new tab or the browser. */
+.task-link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
 .dr-fields { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; margin: 16px 0; background: var(--surface); }
 .dr-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--n-100); min-height: 52px; }
 .dr-field:last-child { border-bottom: none; }
@@ -2670,6 +2710,8 @@ body:has(.overlay, .modal-center, .modal-overlay, .mv-overlay, .ci-lb, .va-panel
 .modal-list { overflow-y: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .modal-user { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; cursor: pointer; }
 .modal-user:hover { background: var(--bg); }
+/* A picked person's row is tinted too, not only its small checkbox. */
+.modal-user:has(input:checked), .ci-mem-add-row:has(input:checked) { background: color-mix(in srgb, var(--primary) 12%, var(--surface)); }
 
 /* online presence + date separators */
 .avatar-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
@@ -3022,7 +3064,8 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .act-line { font-size: 13.5px; line-height: 1.45; color: var(--text); }
 .act-line b { font-weight: 700; }
 .act-who { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; vertical-align: bottom; }
-.act-task { margin-top: 3px; font-size: 14px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.act-task { margin-top: 3px; font-size: 14px; font-weight: 600; color: var(--text); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .act-row.is-gone .act-task { color: var(--muted); }
 .act-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 7px; font-size: 12px; color: var(--muted); }
 .act-owner { display: inline-flex; align-items: center; gap: 5px; }
@@ -3047,6 +3090,14 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 
 /* Due-date urgency: left accent bar on each task row */
 .cell-title { overflow-wrap: anywhere; }
+/* A task title is a line or two, but people paste whole paragraphs into it.
+   In a list it is cut to two lines (phones already did this, under 640px) so
+   one task can't stretch its row down the screen; the drawer shows all of it. */
+.cell-title > div:first-child { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* The same cut for the other places a task title is listed. */
+.clamp-2, .clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.clamp-2 { -webkit-line-clamp: 2; }
+.clamp-3 { -webkit-line-clamp: 3; }
 .table-cards tbody tr.row-overdue .cell-title { box-shadow: inset 3px 0 0 #ef4444; }
 .table-cards tbody tr.row-today .cell-title { box-shadow: inset 3px 0 0 #f59e0b; }
 .table-cards tbody tr.row-done .cell-title { box-shadow: inset 3px 0 0 #10b981; }
@@ -3065,7 +3116,8 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 .board-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; cursor: pointer; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
 .board-card:hover { border-color: var(--primary); transform: translateY(-1px); transition: transform .1s, border-color .1s; }
 .board-card.dragging { opacity: .45; }
-.board-card-title { font-weight: 600; font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; }
+.board-card-title { font-weight: 600; font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .board-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .board-card-due { font-size: 12px; }
 .board-card-assignee { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
@@ -3136,20 +3188,29 @@ body.is-split-view .tasks-page { flex: 1; min-height: 0; }
 /* Notifications dropdown, hung under the bell and aligned to its right edge. */
 .notif-panel {
   position: absolute; right: 0; top: calc(100% + 8px);
-  width: 330px; max-height: 420px; overflow-y: auto;
+  width: 330px; max-height: min(420px, calc(100dvh - 90px)); overflow-y: auto;
   /* Never sideways: one notification with a long unbroken word (a link, a
      task title with no spaces) made the whole list wider than the panel, and
      on a phone it slid left and right under the finger, cutting every row. */
   overflow-x: hidden; overscroll-behavior: contain;
   z-index: 100; box-shadow: 0 10px 30px rgba(0, 0, 0, .15);
 }
-.notif-msg { line-height: 1.4; overflow-wrap: anywhere; }
-/* On phones the bell is ~60px in from the screen edge (the profile avatar sits
-   to its right), so a 330px panel anchored to it hangs off the LEFT edge —
-   29px of it at 360px wide. Shift it out over that unused gutter, and let it
-   shrink on very narrow devices so it always stays fully on screen. */
-@media (max-width: 420px) {
-  .notif-panel { right: -44px; width: min(330px, calc(100vw - 20px)); }
+/* The heading stays put while the list scrolls under it. */
+.notif-panel > .card-head { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+/* Three lines at most: a task with a pasted paragraph for a title made one
+   notification fill the whole panel. Opening it shows the task in full. */
+.notif-msg { line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* Phones: a 330px panel hung off the bell sat narrow and off-centre (the
+   avatar is to the bell's right), so it becomes a sheet across the screen,
+   10px in from each edge. top stays auto: a fixed box with no top keeps its
+   place in the flow, just under the bell, whatever the top bar's height and
+   the status-bar inset. The top bar is lifted over the bottom tab bar (35)
+   while it is open, so the sheet is never painted under it; below the
+   drawer (39/40). */
+@media (max-width: 720px) {
+  .notif-panel { position: fixed; top: auto; left: 10px; right: 10px; width: auto; margin-top: 16px;
+    max-height: calc(100dvh - 170px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+  .topbar:has(.notif-panel) { z-index: 38; }
 }
 
 /* Clickable notification rows open their related task / chat */
@@ -3279,6 +3340,38 @@ body:has(.rv-center) .va-dock { display: none; }
 .rv-conf { padding-top: 1px; flex-shrink: 0; }
 .comment { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--n-100); }
 .comment .body { background: var(--n-50); border-radius: 10px; padding: 8px 12px; flex: 1; }
+/* Shift+Enter writes a second line; keep it rather than running the lines together. */
+.comment-text { font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* A task shared by several people (components/TaskPeople.tsx): "+2" after the
+   owner in lists, and the others as chips in the drawer and the new-task form. */
+.an-more { flex-shrink: 0; font-size: 11px; font-weight: 700; line-height: 1.5; padding: 0 6px; border-radius: 999px; background: var(--n-100); color: var(--n-700); }
+.co-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.co-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-height: 28px; padding: 3px 3px 3px 3px; border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+  font-size: 12.5px; font-weight: 600; color: var(--text); }
+.co-chip:not(:has(.co-chip-x)) { padding-right: 10px; }
+.co-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.co-chip-x { flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); display: grid; place-items: center; font-size: 11px; cursor: pointer; }
+.co-chip-x:hover { background: var(--n-100); color: var(--text); }
+select.co-add { width: auto; max-width: 100%; min-height: 30px; padding: 4px 30px 4px 11px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+.dr-people { flex-direction: column; align-items: flex-end; }
+.dr-co { justify-content: flex-end; }
+/* Files sent with a comment, under its words. */
+.cmt-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cmt-file-pic { padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); cursor: zoom-in; line-height: 0; }
+.cmt-file-pic img { display: block; max-width: 220px; max-height: 160px; width: auto; height: auto; object-fit: cover; }
+.cmt-file { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 12.5px; font-weight: 600; }
+.cmt-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Files waiting in the comment box, as chat's tray: a preview, the name, a remove. */
+.cmt-stage { display: flex; gap: 8px; overflow-x: auto; margin-top: 10px; padding: 8px; border: 1px dashed color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--primary) 6%, var(--surface)); }
+.cmt-stage-item { position: relative; flex: 0 0 auto; width: 84px; display: flex; flex-direction: column; gap: 4px; }
+.cmt-stage-item img, .cmt-stage-file { width: 84px; height: 64px; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; background: var(--surface); }
+.cmt-stage-file { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--muted); font-size: 10.5px; font-weight: 700; }
+.cmt-stage-name { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmt-stage-x { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 11px; line-height: 1; display: grid; place-items: center; cursor: pointer; box-shadow: var(--e-1); }
+.cmt-compose { align-items: flex-end; gap: 6px; }
+.cmt-attach { padding: 8px; flex-shrink: 0; color: var(--muted); }
+.cmt-attach:hover { color: var(--text); }
 /* The comment a notification opened on: the chat's jump-to ring, held a little
    longer with a tint, because the drawer slides in and scrolls first. */
 .comment.flash .body { animation: comment-flash 2.6s ease; }
@@ -4603,7 +4696,8 @@ button.reply-quote {
 .task-card-ic { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); }
 .task-card-kind { flex: 1; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--primary); }
 .task-card-status { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border: 1px solid; border-radius: 999px; }
-.task-card-title { font-weight: 700; font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
+.task-card-title { font-weight: 700; font-size: 14px; line-height: 1.35; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .task-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--muted); }
 .task-card-who { display: inline-flex; align-items: center; gap: 5px; color: var(--text); font-weight: 600; }
 .task-card-due { display: inline-flex; align-items: center; gap: 4px; }
@@ -4877,6 +4971,10 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .ta-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 3px; border-radius: 10px; background: var(--bg); }
 .ta-seg-btn { padding: 7px 4px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
 .ta-seg-btn.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(16,24,40,.12); }
+/* Dark: the surface on the --bg track was 1.05:1 and the shadow invisible, so
+   the chosen priority looked like the others. A brand-tinted fill and edge. */
+:root[data-theme="dark"] .ta-seg { background: var(--n-50); }
+:root[data-theme="dark"] .ta-seg-btn.on { background: color-mix(in srgb, var(--primary) 20%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent); }
 .ta-seg-btn.on.p-critical { color: var(--danger-ink); }
 .ta-seg-btn.on.p-high { color: var(--warning-ink); }
 .ta-seg-btn.on.p-medium { color: var(--info-ink); }
@@ -4942,6 +5040,16 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .mv-nav.prev { left: 12px; } .mv-nav.next { right: 12px; }
 .mv-caption { flex-shrink: 0; max-height: 28vh; overflow-y: auto; padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); text-align: center; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; background: rgba(0,0,0,.35); touch-action: pan-y; overscroll-behavior: contain; }
 @media (hover: none) { .mv-nav { display: none; } }
+/* A tap shows or hides the bar and the caption (PhotoViewer's .bare). On a
+   phone they lie over the picture on soft shades, so the picture has the
+   whole screen and hiding them doesn't move it. */
+.mv-head, .mv-caption, .mv-nav { transition: opacity .2s ease, visibility 0s linear 0s; }
+.mv-overlay.bare .mv-head, .mv-overlay.bare .mv-caption, .mv-overlay.bare .mv-nav { opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility 0s linear .2s; }
+@media (max-width: 720px) {
+  .mv-overlay:not(.pdfv) .mv-head { position: absolute; top: 0; left: 0; right: 0; z-index: 2; padding-bottom: 22px; background: linear-gradient(rgba(0, 0, 0, .62), rgba(0, 0, 0, .3) 60%, rgba(0, 0, 0, 0)); }
+  .mv-overlay:not(.pdfv) .mv-caption { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; padding-top: 26px; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .45) 35%, rgba(0, 0, 0, .7)); }
+}
+@media (prefers-reduced-motion: reduce) { .mv-head, .mv-caption, .mv-nav { transition: none; } }
 
 /* ---- PDF viewer (PdfViewer.tsx) -------------------------------------------
    The photo viewer's dark screen and bar, with the pages scrolling down it.
@@ -5362,6 +5470,14 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .spinner.zm-spin { position: absolute; top: 50%; left: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-color: rgba(255, 255, 255, .25); border-top-color: #fff; animation: spin .7s linear infinite, overlay-fade .2s ease .3s both; }
 .zm-missing { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 320px; text-align: center; font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, .85); }
 .zm-missing-sub { font-size: 12.5px; font-weight: 400; color: rgba(255, 255, 255, .6); }
+/* The pictures either side, waiting one box-width (+24px, GAP in ZoomMedia)
+   off screen; a swipe slides them in with the finger. Laid out as the box lays
+   out its own picture (same padding), so the hand-over at the end of a turn
+   doesn't move a pixel. The stage's overflow: hidden keeps them out of sight. */
+.zm-peek { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: inherit; pointer-events: none; }
+.zm-peek.prev { transform: translateX(calc(-100% - 24px)); }
+.zm-peek.next { transform: translateX(calc(100% + 24px)); }
+.zm-peek-play { position: absolute; top: 50%; left: 50%; width: 60px; height: 60px; margin: -30px 0 0 -30px; display: grid; place-items: center; padding-left: 4px; border-radius: 50%; background: rgba(0, 0, 0, .5); color: #fff; }
 /* The whole screen on a phone: the picture uses every pixel and the arrows
    float over it. */
 @media (max-width: 720px) { .zm-box { padding: 0; } }
@@ -5421,7 +5537,14 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
   .ci-lb-prev { left: 6px; }
   .ci-lb-next { right: 6px; }
   .ci-lb-caption { padding-left: 16px; padding-right: 16px; }
+  /* The bar and caption lie over the picture, as in the photo viewer (.mv-head). */
+  .ci-lb-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 2; padding-bottom: 22px; background: linear-gradient(rgba(0, 0, 0, .62), rgba(0, 0, 0, .3) 60%, rgba(0, 0, 0, 0)); }
+  .ci-lb-caption { position: absolute; left: 0; right: 0; bottom: env(safe-area-inset-bottom, 0px); z-index: 2; padding-top: 26px; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .45) 35%, rgba(0, 0, 0, .7)); }
 }
+/* A tap shows or hides the bar, caption and arrows (ChatMedia's .bare). */
+.ci-lb-bar, .ci-lb-caption, .ci-lb-nav { transition: opacity .2s ease, visibility 0s linear 0s; }
+.ci-lb.bare .ci-lb-bar, .ci-lb.bare .ci-lb-caption, .ci-lb.bare .ci-lb-nav { opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility 0s linear .2s; }
+@media (prefers-reduced-motion: reduce) { .ci-lb-bar, .ci-lb-caption, .ci-lb-nav { transition: none; } }
 
 /* ---- Chat info panel: meetings (calls, summaries, one summary) --------------
    A meeting here is a call, so "All meetings" is the call log and a summary
@@ -5531,7 +5654,8 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .ci-mt-task { padding: 11px 16px; }
 .ci-mt-task + .ci-mt-task { border-top: 1px solid var(--border); }
 .ci-mt-task-top { display: flex; align-items: flex-start; gap: 10px; }
-.ci-mt-task-title { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.ci-mt-task-title { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .ci-mt-task.is-rejected .ci-mt-task-title { color: var(--muted); text-decoration: line-through; }
 .ci-mt-task.is-merged .ci-mt-task-title,
 .ci-mt-task.is-other .ci-mt-task-title { color: var(--muted); }
@@ -5832,6 +5956,76 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .chat-layout .chat-video { width: min(260px, 68vw); max-width: none; max-height: 340px; }
 .chat-layout .chat-vcard { width: min(260px, 68vw); }
 .chat-layout .bubble.pic-bubble { min-width: 0; }
+/* A photo or video fills its bubble, the bubble's colour only a thin frame,
+   as WhatsApp shows them (.media-bubble, Chats.tsx). With no caption the time
+   and ticks sit on the picture's corner (.bare): the strip of bubble under the
+   picture that held only them made every photo look like a card. */
+.chat-layout .bubble.media-bubble { width: min-content; padding: 3px; }
+.chat-layout .bubble.media-bubble > .msg-sender,
+.chat-layout .bubble.media-bubble > .forwarded-tag { margin: 3px 7px 4px; }
+.chat-layout .bubble.media-bubble > .reply-quote { margin: 0 0 3px; }
+.chat-layout .bubble.media-bubble .chat-image-btn,
+.chat-layout .bubble.media-bubble .chat-image,
+.chat-layout .bubble.media-bubble .chat-vcard { border-radius: 9px; }
+.chat-layout .bubble.media-bubble > .bubble-text { display: block; padding: 5px 7px 0; }
+.chat-layout .bubble.media-bubble > .read-more { margin: 0 7px; }
+.chat-layout .bubble.media-bubble .bubble-foot { margin: 3px 7px 3px 10px; }
+.chat-layout .bubble.media-bubble.bare .bubble-foot,
+.chat-layout .bubble.media-bubble.bare.user .bubble-foot { position: absolute; right: 9px; bottom: 9px; float: none; margin: 0; padding: 3px 7px; border-radius: 10px; background: rgba(11, 20, 26, .45); color: #fff; pointer-events: none; }
+.chat-layout .bubble.media-bubble.bare .bubble-foot .ticks:not(.read):not([title="Seen"]) { color: #fff; }
+/* A video's length sits bottom-left already; the time takes the right. */
+.chat-layout .bubble.media-bubble.bare .chat-vcard-dur { bottom: 9px; }
+/* Until it arrives a photo holds a shimmering space, so the thread doesn't
+   jump as each one lands (Chats.tsx adds .ready on load, or on failure). */
+.chat-layout .chat-image:not(.ready) { min-height: 200px; background: linear-gradient(110deg, var(--n-100) 30%, var(--n-50) 50%, var(--n-100) 70%); background-size: 220% 100%; animation: chat-vcard-shine 1.4s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .chat-layout .chat-image:not(.ready) { animation: none; } }
+/* An album (AlbumGrid.tsx): four or more photos sent together, a 2x2 grid as
+   wide as a single photo, "+N" on the fourth. Each tile is its own message:
+   .sel is the one a long-press selected, .picked one ticked while picking,
+   .flash one a quote or a search jumped to. */
+.chat-layout .album-grid { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; width: min(260px, 68vw); }
+.chat-layout .album-tile { position: relative; aspect-ratio: 1; min-width: 0; border-radius: 3px; outline: none; }
+.chat-layout .album-tile:nth-child(1) { border-top-left-radius: 9px; }
+.chat-layout .album-tile:nth-child(2) { border-top-right-radius: 9px; }
+.chat-layout .album-tile:nth-child(3) { border-bottom-left-radius: 9px; }
+.chat-layout .album-tile:nth-child(4) { border-bottom-right-radius: 9px; }
+.chat-layout .album-open { position: absolute; inset: 0; display: block; padding: 0; border: 0; border-radius: inherit; overflow: hidden; background: var(--n-100); cursor: zoom-in; line-height: 0; }
+.chat-layout .album-media { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A video whose first frame hasn't come yet still reads as a video. */
+.chat-layout .album-open:has(> video) { background: linear-gradient(135deg, #2a2f3a, #14171d); }
+.chat-layout .album-media:not(.ready) { background: linear-gradient(110deg, var(--n-100) 30%, var(--n-50) 50%, var(--n-100) 70%); background-size: 220% 100%; animation: chat-vcard-shine 1.4s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .chat-layout .album-media:not(.ready) { animation: none; } }
+.chat-layout .album-play { position: absolute; left: 50%; top: 50%; width: 38px; height: 38px; margin: -19px 0 0 -19px; display: grid; place-items: center; padding-left: 3px; border-radius: 50%; background: rgba(0, 0, 0, .5); color: #fff; box-shadow: 0 0 0 2px rgba(255, 255, 255, .85) inset; }
+.chat-layout .album-play svg { fill: currentColor; }
+.chat-layout .album-more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(11, 20, 26, .58); color: #fff; font-size: 30px; font-weight: 600; line-height: 1; }
+.chat-layout .album-hidden { display: none; }
+/* Rings drawn over the picture (the picture would cover an inset shadow). */
+.chat-layout .album-tile::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
+.chat-layout .album-tile.sel::after,
+.chat-layout .album-tile.picked::after { box-shadow: inset 0 0 0 3px var(--primary); background: color-mix(in srgb, var(--primary) 22%, transparent); }
+.chat-layout .album-tile.flash::after { animation: album-flash 1.8s ease; }
+@keyframes album-flash { 0%, 55% { box-shadow: inset 0 0 0 3px var(--primary); background: color-mix(in srgb, var(--primary) 25%, transparent); } 100% { box-shadow: none; background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .chat-layout .album-tile.flash::after { animation: none; box-shadow: inset 0 0 0 3px var(--primary); } }
+.chat-layout .album-tile:focus-visible::after { box-shadow: inset 0 0 0 3px var(--primary); }
+/* A tile's reactions, in its corner; its pick mark while picking. */
+.chat-layout .album-rx { position: absolute; left: 5px; bottom: 5px; z-index: 1; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border: 0; border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 1.4; box-shadow: 0 1px 3px rgba(11, 20, 26, .25); cursor: pointer; }
+.chat-layout .album-rx span { font-size: 11px; font-weight: 600; color: var(--muted); }
+.chat-layout .album-rx.mine { box-shadow: 0 0 0 1.5px var(--primary), 0 1px 3px rgba(11, 20, 26, .25); }
+.chat-layout .album-check { position: absolute; top: 6px; left: 6px; z-index: 1; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; border: 2px solid #fff; background: rgba(11, 20, 26, .3); color: #fff; pointer-events: none; }
+.chat-layout .album-check.on { background: var(--primary); border-color: var(--primary); }
+/* Mouse screens: a tile's React, Reply and ⋯ sit on its top corner, shown on
+   hovering that tile (not the whole album, which would show four sets). */
+.chat-layout .album-tile .msg-tools.on-tile { position: absolute; top: 5px; right: 5px; z-index: 2; gap: 0; padding: 1px; border-radius: 999px; background: rgba(11, 20, 26, .5); opacity: 0; }
+.chat-layout .album-tile:hover .msg-tools.on-tile,
+.chat-layout .album-tile:focus-within .msg-tools.on-tile,
+.chat-layout .album-tile .msg-tools.on-tile.open { opacity: 1; }
+.chat-layout .album-tile .msg-tools.on-tile .msg-tool-btn { color: #fff; padding: 4px 6px; border-radius: 999px; }
+.chat-layout .album-tile .msg-tools.on-tile .msg-tool-btn:hover { background: rgba(255, 255, 255, .18); }
+/* The time sits on the grid's last tile; sender name above it in a group. */
+.chat-layout .bubble.album-bubble { width: auto; }
+/* Download over a photo or video: lighter, so the picture is what you see. */
+.chat-layout .chat-media-dl { top: 8px; right: 8px; width: 30px; height: 30px; background: rgba(11, 20, 26, .42); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.chat-layout .chat-media-dl:hover { background: rgba(11, 20, 26, .62); }
 /* A tall photo is mostly a phone screenshot: its top is what matters. In dark
    the generic rule paints the unread label's text for an orange pill. */
 :root[data-theme="dark"] .chat-layout .unread-sep span { color: var(--text); }
@@ -5845,6 +6039,23 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .chat-layout .chat-file-icon[data-kind="xls"] { background: #1e8e4e; }
 .chat-layout .chat-file-icon[data-kind="ppt"] { background: #e2621b; }
 .chat-layout .chat-file-icon[data-kind="zip"] { background: #7c6a55; }
+/* The document itself sits on a panel inside the bubble, as in WhatsApp, and
+   the whole panel opens it: a tap target the size of the thing, not a 26px
+   button beside it. */
+.chat-layout .bubble .chat-file { gap: 11px; padding: 9px 8px 9px 10px; border-radius: 9px; background: rgba(11, 20, 26, .05); transition: background .15s; }
+:root[data-theme="dark"] .chat-layout .bubble .chat-file { background: rgba(255, 255, 255, .06); }
+.chat-layout .bubble .chat-file-open:hover { background: rgba(11, 20, 26, .08); }
+:root[data-theme="dark"] .chat-layout .bubble .chat-file-open:hover { background: rgba(255, 255, 255, .1); }
+.chat-layout .bubble .chat-file-open:active { background: rgba(11, 20, 26, .11); }
+.chat-layout .bubble .chat-file-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.chat-layout .chat-file-icon[data-kind]:not([data-kind=""]) { width: 36px; height: 44px; border-radius: 6px; font-size: 10px; box-shadow: inset 0 -8px 0 rgba(0, 0, 0, .12); }
+.chat-layout .chat-file-size { margin-top: 2px; font-size: 12px; opacity: .65; }
+.chat-layout .bubble .chat-file-dl,
+.chat-layout .bubble.user .chat-file-dl { width: 34px; height: 34px; display: grid; place-items: center; background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, currentColor 30%, transparent); }
+.chat-layout .bubble .chat-file-dl:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+/* A PDF's first page and its panel read as one piece. */
+.chat-layout .pdf-doc .pdf-thumb { margin-bottom: 0; border-radius: 9px 9px 0 0; }
+.chat-layout .pdf-doc .pdf-thumb + .chat-file { border-radius: 0 0 9px 9px; }
 
 /* ---- the open chat's header on wide screens, as Cliq's ----------------------
    The name, how many people (a group), and Messages | Media Files under it; a
@@ -5974,8 +6185,18 @@ body.verify-pop-open .va-coach { display: none !important; }
 .att-cam { display: flex; flex-direction: column; gap: 10px; }
 .att-cam-title { font-weight: 700; font-size: 14px; }
 .att-cam-frame { position: relative; aspect-ratio: 4 / 3; overflow: hidden; border-radius: var(--r-md); background: #0f172a; }
-.att-cam-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.att-cam-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.att-cam-video.mirror { transform: scaleX(-1); }
 .att-cam-video.hidden { visibility: hidden; }
+/* Front/back switch over the picture, where a phone's own camera app puts it;
+   shown only on a device with more than one camera (SelfieCamera.tsx). */
+.att-cam-flip { position: absolute; top: 10px; right: 10px; display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.35); border-radius: 999px; background: rgba(15,23,42,.6); color: #fff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.att-cam-flip:hover { background: rgba(15,23,42,.8); }
+.att-cam-flip:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.att-cam-tag { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); max-width: calc(100% - 20px); padding: 4px 10px; border-radius: 999px;
+  background: rgba(15,23,42,.6); color: #fff; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .att-cam-oval { position: absolute; top: 47%; left: 50%; width: 44%; height: 70%; transform: translate(-50%, -50%); border: 2px dashed rgba(255,255,255,.6); border-radius: 50%; pointer-events: none; }
 .att-cam-msg { position: absolute; inset: 0; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; text-align: center; color: #e2e8f0; font-size: 13px; }
 .att-cam-msg strong { color: #fff; font-size: 14px; }

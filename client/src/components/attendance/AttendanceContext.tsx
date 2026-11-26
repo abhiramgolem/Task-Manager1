@@ -65,7 +65,24 @@ function describe(view: View, elapsed: number | null): AttendanceStatus {
     return { tone: 'warn', on: false, pillText: 'Pending', pillShort: '', cardText: 'Check-in waiting for HR', aria: 'Check-in waiting for HR approval' }
   }
   if (t.state === 'STALE_OPEN') {
-    return { tone: 'warn', on: false, pillText: 'Check in', pillShort: '', cardText: 'Earlier check-out missing', aria: 'Earlier check-out missing. Check in' }
+    // On an off day the sheet has no check-in, only the overnight check-out
+    // (when the HRMS still allows one), so the pill offers that instead.
+    const action = !t.offDay ? 'Check in' : t.canCheckOut ? 'Check out' : 'Off today'
+    return { tone: 'warn', on: false, pillText: action, pillShort: '', cardText: 'Earlier check-out missing', aria: `Earlier check-out missing. ${action}` }
+  }
+  // A weekly off or holiday (HRMS A120): the HRMS refuses a check-in, so don't
+  // offer one. After the branches above, so an open or pending session still
+  // shows what it needs.
+  if (t.offDay && t.state === 'NOT_CHECKED_IN') {
+    const kind = t.offDay.kind === 'HOLIDAY' ? 'Holiday' : 'Weekly off'
+    return {
+      tone: 'done',
+      on: false,
+      pillText: 'Off today',
+      pillShort: '',
+      cardText: t.offDay.name || kind,
+      aria: `${kind} today${t.offDay.name ? ` (${t.offDay.name})` : ''}, check-in closed`,
+    }
   }
   if (t.checkedOutToday && !t.firstCheckInAvailable && t.state === 'NOT_CHECKED_IN') {
     return { tone: 'done', on: false, pillText: 'Checked out', pillShort: '', cardText: 'Checked out for today', aria: 'Checked out for today' }
@@ -144,8 +161,14 @@ export function AttendanceProvider({ children }: { children: React.ReactNode }) 
     const id = setInterval(() => setTick((n) => n + 1), 10_000)
     return () => clearInterval(id)
   }, [checkedIn])
+  // The HRMS allows several check-ins a day and adds them up, so the clock is
+  // the day's total: today's finished sessions (workedSeconds) plus the open
+  // one, carrying on from the last check-out rather than starting at 0:00. A
+  // session opened on an earlier day (an overnight shift) is not part of
+  // today's total, so it counts alone.
+  const earlier = t && t.openSessionDate === t.today ? t.workedSeconds : 0
   const elapsed = view.kind === 'ready' && t?.openElapsedSeconds != null
-    ? t.openElapsedSeconds + (performance.now() - view.at) / 1000 : null
+    ? earlier + t.openElapsedSeconds + (performance.now() - view.at) / 1000 : null
 
   const visible = view.kind !== 'hidden' && !!user
   const openSheet = useCallback(() => setOpen(true), [])

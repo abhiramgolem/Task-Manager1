@@ -1,6 +1,7 @@
 package io.smarttask.app;
 
 import androidx.annotation.NonNull;
+import androidx.core.app.NotificationManagerCompat;
 import com.capacitorjs.plugins.pushnotifications.MessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 import java.util.Map;
@@ -34,6 +35,22 @@ public class CallMessagingService extends MessagingService {
         // notification down here too, as WhatsApp does.
         if ("chat-read".equals(type)) {
             ChatNotifier.clear(this, data.get("conversation_id"));
+            return;
+        }
+        // Task and bell notifications read on another device (or in the app
+        // while this one was in a pocket): take them down here too. Firebase
+        // draws a notification push under the tag the server gave it
+        // ("task_<id>", "ntf_<id>"...) with id 0, so that is what is cancelled
+        // (server notifClear.js).
+        if ("notif-clear".equals(type)) {
+            String tags = data.get("tags");
+            if (tags != null && !tags.isEmpty()) {
+                NotificationManagerCompat nm = NotificationManagerCompat.from(this);
+                for (String tag : tags.split(",")) {
+                    String t = tag.trim();
+                    if (!t.isEmpty()) nm.cancel(t, 0);
+                }
+            }
             return;
         }
         // A chat line, sent as data so the app can draw it WhatsApp's way

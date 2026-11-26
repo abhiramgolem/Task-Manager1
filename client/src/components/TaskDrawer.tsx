@@ -11,6 +11,9 @@ import { confirmDialog } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { onDownloadLink } from '../lib/saveFile'
 import { useDialog } from '../lib/useDialog'
+import { Linkify } from '../lib/linkify'
+import { readTaskNotifications } from '../push'
+import { isOnTask } from './TaskPeople'
 import { clipboardFiles, droppedFiles, dragHasFiles } from '../lib/pasteFiles'
 import { attachable, attachToTask, fileExt } from '../lib/taskAttach'
 import { useSurface } from '../voice/uiRegistry'
@@ -26,15 +29,49 @@ const STATUSES = ['To Do', 'In Progress', 'Blocked', 'In Review', 'Done', 'Reope
 // on a wide screen, where covering the page to read one task wastes the room.
 // `focusCommentId` is a comment to open on (a tapped comment notification);
 // `focusKey` changes on each such arrival, so a second tap lands again.
+// Characters past which a title is treated as a paragraph (see the hero below).
+const LONG_TITLE = 180
+
+// The files sent with one comment, under its words: pictures as thumbnails that
+// open the drawer's photo viewer, a PDF in the app's viewer, anything else as a
+// named chip that downloads. They are task attachments too, listed above.
+function CommentFiles({ files, onPhoto }: { files: Attachment[]; onPhoto: (id: string) => void }) {
+  if (!files.length) return null
+  return (
+    <div className="cmt-files">
+      {files.map((a) => {
+        if ((a.file_type || '').startsWith('image/')) {
+          return (
+            <button key={a.id} type="button" className="cmt-file-pic" onClick={() => onPhoto(a.id)} aria-label={`View ${a.filename}`}>
+              <img src={taskAttachmentUrl(a.id)} alt="" loading="lazy" />
+            </button>
+          )
+        }
+        const pdf = isPdf({ name: a.filename, type: a.file_type || '' })
+        return (
+          <a key={a.id} href={taskAttachmentUrl(a.id)} target="_blank" rel="noreferrer" className="cmt-file" title={a.filename}
+            onClick={pdf
+              ? (e) => { e.preventDefault(); openPdf({ id: 'task:' + a.id, url: taskAttachmentUrl(a.id), downloadUrl: taskAttachmentUrl(a.id, true), saveKey: 'task:' + a.id, name: a.filename, subtitle: fmtBytes(a.file_size) }) }
+              : onDownloadLink(taskAttachmentUrl(a.id, true), a.filename, 'task:' + a.id)}>
+            <Ic name="doc" size={16} /><span className="cmt-file-name">{a.filename}</span>
+          </a>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal', focusCommentId = null, focusKey = 0 }: { taskId: string; onClose: () => void; onChange?: (updated?: Task) => void; variant?: 'modal' | 'pane'; focusCommentId?: string | null; focusKey?: number }) {
   const { user } = useAuth()
   const pane = variant === 'pane'
   const drawerRef = useDialog<HTMLDivElement>(onClose, !pane)
-  // A screenshot pasted anywhere in the drawer (Ctrl+V — in the comment box too)
-  // or files dropped on it are attached to the task: comments carry words only,
-  // so the task's attachments are where a picture belongs. A paste of words is
-  // still words (lib/pasteFiles). Reached through a ref because `shell` is built
-  // before uploadFiles exists in a render that returns early (while loading).
+  // A screenshot pasted anywhere in the drawer (Ctrl+V, in the comment box too)
+  // or files dropped on it wait in the comment box, as in chat, so the words
+  // about them go with them: they used to be attached the moment they were
+  // pasted, and the message had to follow as a second, separate comment. They
+  // still become task attachments when the comment is posted. A paste of words
+  // is still words (lib/pasteFiles). Reached through a ref because `shell` is
+  // built before stageFiles exists in a render that returns early (while loading).
   const takeFilesRef = useRef<(files: File[]) => void>(() => {})
   const fileEvents = {
     onPaste: (e: React.ClipboardEvent) => {
@@ -71,6 +108,12 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   const [commentMenu, setCommentMenu] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [pendingAssignee, setPendingAssignee] = useState('')
+  // Its notifications have been seen once the task is open: off the bell, and
+  // out of the tray here and on the person's other devices.
+  useEffect(() => { readTaskNotifications(taskId) }, [taskId])
+  // A title that is really a pasted paragraph is shown cut short until asked.
+  const [titleOpen, setTitleOpen] = useState(false)
+  useEffect(() => setTitleOpen(false), [taskId])
   // A status the user has picked but not yet confirmed — applied only on "Accept".
   const [pendingStatus, setPendingStatus] = useState('')
   // Inline edit of the task's core details (title, description, due date).
@@ -173,6 +216,17 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
   // The attached picture open full size, where it can be zoomed into. It used
   // to open in a new browser tab, which on the phone app left the app.
   const [photoAt, setPhotoAt] = useState<string | null>(null)
+  // Files waiting to go with the next comment, with a preview for pictures.
+  const [staged, setStaged] = useState<{ id: string; file: File; url: string | null }[]>([])
+  const stagedRef = useRef(staged)
+  stagedRef.current = staged
+  const commentFileInput = useRef<HTMLInputElement>(null)
+  const dropStaged = (keep: (s: { id: string }) => boolean = () => false) => setStaged((list) => {
+    for (const s of list) if (!keep(s) && s.url) URL.revokeObjectURL(s.url)
+    return list.filter(keep)
+  })
+  // Another task in the drawer, or the drawer closing: what was waiting is not for it.
+  useEffect(() => () => { for (const s of stagedRef.current) if (s.url) URL.revokeObjectURL(s.url); setStaged([]) }, [taskId])
   // The task on screen now. The modal drawer is reused when another task opens,
   // so a file that lands after that must not put its old task back on screen.
   const taskIdRef = useRef(taskId)
@@ -202,7 +256,21 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
     if (done.length) onChange?.()
     if (announce && done.length) toast.success(done.length === 1 ? `Attached "${done[0]}" to this task` : `Attached ${done.length} files to this task`)
   }
-  takeFilesRef.current = (files) => { if (!busy && !upload) uploadFiles(files, true) }
+  const stageFiles = (list: FileList | File[] | null) => {
+    if (!list) return
+    const { ok: picked, skipped } = attachable(list)
+    if (commentFileInput.current) commentFileInput.current.value = ''
+    if (skipped) toast.error(skipped)
+    if (!picked.length) return
+    setStaged((cur) => [...cur, ...picked.map((file) => ({
+      id: Math.random().toString(36).slice(2),
+      file,
+      url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+    }))].slice(0, 20))
+    // Straight back to the box, to write what the picture is about.
+    requestAnimationFrame(() => drawerRef.current?.querySelector<HTMLTextAreaElement>('textarea[data-va="task.drawer.comment"]')?.focus())
+  }
+  takeFilesRef.current = (files) => stageFiles(files)
   // Deleting an attachment is irreversible — confirm it like the task delete.
   const removeAttachment = async (a: Attachment) => {
     if (!(await confirmDialog({ title: 'Remove attachment', message: `Remove "${a.filename}"? This cannot be undone.`, confirmText: 'Remove', danger: true }))) return
@@ -231,7 +299,39 @@ export default function TaskDrawer({ taskId, onClose, onChange, variant = 'modal
     if (!draggingRef.current) progressTimer.current = setTimeout(commitProgress, 400)
   }
   const approve = (decision: string) => mutate(() => api.post(`/tasks/${taskId}/approve`, { decision }))
-  const addComment = async () => { if (!comment.trim()) return; await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment('') }
+  const sendingComment = useRef(false)
+  const addComment = async () => {
+    const files = staged
+    if (!comment.trim() && !files.length) return
+    if (sendingComment.current || upload) return
+    if (!files.length) { await mutate(() => api.post(`/tasks/${taskId}/comments`, { body: comment })); setComment(''); return }
+    // The files go up first, onto the task, then one comment names them. One
+    // that fails stays in the box to try again; the rest go with the words.
+    sendingComment.current = true
+    const tid = taskId
+    const ids: string[] = []
+    const sent = new Set<string>()
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i].file
+        setUpload({ taskId: tid, name: f.name, pct: 0, n: i + 1, of: files.length })
+        try {
+          const r = await attachToTask(tid, f, (pct) => setUpload((u) => (u ? { ...u, pct } : u)))
+          sent.add(files[i].id)
+          if (r?.attachment_id) ids.push(r.attachment_id)
+        } catch (e: any) { toast.error(`Couldn't send ${f.name}: ${e?.message || 'upload failed'}`) }
+      }
+    } finally { setUpload(null) }
+    try {
+      if (tid !== taskIdRef.current) return
+      dropStaged((s) => !sent.has(s.id))
+      if (!comment.trim() && !ids.length) { if (sent.size) await load(); return }
+      await mutate(() => api.post(`/tasks/${tid}/comments`, { body: comment, attachment_ids: ids }))
+      setComment('')
+    } catch (e: any) {
+      toast.error(e?.message || "Couldn't post the comment")
+    } finally { sendingComment.current = false }
+  }
   const saveComment = async (c: any) => {
     const body = commentDraft.trim()
     if (!body || body === c.body) { setEditingComment(null); return }
@@ -343,7 +443,23 @@ This cannot be undone — comments are not kept in the recycle bin.`,
   // Managers can delete anything; everyone else, only what they made for themselves.
   const canDelete = isManager || isOwnWork || (task.visible_to_manager === 0 && task.assignee?.id === user?.id)
   // The task owner (or a manager) can split a top-level task into shared parts.
-  const canSplit = (isManager || task.assignee?.id === user?.id) && !task.parent_task_id
+  const canSplit = (isManager || isOnTask(task, user?.id)) && !task.parent_task_id
+  // Sharing the task with more people (taskAssignees.js on the server): the
+  // people already on it may add a colleague, which shares the work rather
+  // than handing it off; taking someone off is for whoever set the brief, or
+  // the person themself leaving. A private to-do is nobody else's.
+  const coPeople = task.co_assignees || []
+  const canShare = !!task.assignee && task.visible_to_manager !== 0 && (isManager || task.assigned_by_id === user?.id || isOnTask(task, user?.id))
+  const share = (uid: string) => mutate(() => api.post(`/tasks/${taskId}/assignees`, { user_id: uid }))
+  const unshare = async (u: User) => {
+    const self = u.id === user?.id
+    const ok = await confirmDialog({
+      title: self ? 'Leave this task?' : `Take ${u.name} off this task?`,
+      message: self ? 'It will no longer be one of your tasks. The others on it keep it.' : `${u.name} will no longer have this task. The others on it keep it.`,
+      confirmText: self ? 'Leave task' : 'Remove', danger: true,
+    })
+    if (ok) await mutate(() => api.del(`/tasks/${taskId}/assignees/${u.id}`))
+  }
   // Whoever set the work owns what it asks for: managers, and the person who
   // handed it out. Being given a task is NOT a licence to rewrite it — the
   // assignee moves status and progress and nothing else, so they can't quietly
@@ -388,7 +504,14 @@ This cannot be undone — comments are not kept in the recycle bin.`,
             </div>
           ) : (
             <div className="dr-hero" style={{ ['--pr' as any]: PRIORITY_COLORS[task.priority] || 'var(--primary)' }}>
-              <h2 className="dr-title">{task.title}</h2>
+              {/* Smaller and cut to five lines when the title is a paragraph,
+                  so the status, fields and comments aren't pushed out of reach. */}
+              <h2 className={'dr-title' + (task.title.length > LONG_TITLE ? ' long' + (titleOpen ? '' : ' cut') : '')}><Linkify text={task.title} /></h2>
+              {task.title.length > LONG_TITLE && (
+                <button type="button" className="dr-more" aria-expanded={titleOpen} onClick={() => setTitleOpen((o) => !o)}>
+                  {titleOpen ? 'Show less' : 'Show full title'}
+                </button>
+              )}
               <div className="dr-badges">
                 <PriorityBadge p={task.priority} /><StatusBadge s={task.status} /><CategoryBadge c={task.category} />
                 {task.visible_to_manager === 0 && <span className="badge row" style={{ gap: 5, background: 'var(--info-bg)', color: 'var(--info-ink)', border: '1px solid var(--info-border)' }}><Ic name="lock" size={12} /> Private</span>}
@@ -397,7 +520,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
               {task.description && task.description !== task.title && (
                 <>
                   <div className="dr-section-label">Description</div>
-                  <p className="dr-desc">{task.description}</p>
+                  <p className="dr-desc"><Linkify text={task.description} /></p>
                 </>
               )}
             </div>
@@ -411,8 +534,8 @@ This cannot be undone — comments are not kept in the recycle bin.`,
 
           <div className="dr-fields">
             <div className="dr-field dr-field--tall">
-              <span className="dr-field-label">Assignee</span>
-              <div className="dr-field-val">
+              <span className="dr-field-label">{coPeople.length ? 'Assignees' : 'Assignee'}</span>
+              <div className="dr-field-val dr-people">
                 {canEdit ? (
                   <div className="row" style={{ gap: 8 }}>
                     <select data-va="task.drawer.assignee" value={pendingAssignee} disabled={busy} onChange={(e) => setPendingAssignee(e.target.value)} style={{ flex: 1 }}>
@@ -432,6 +555,26 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                   <div className="row" style={{ gap: 8 }}>{task.assignee ? <><Avatar name={task.assignee.name} color={task.assignee.avatar_color} size={24} /> {task.assignee.name}</> : '—'}</div>
                 )}
                 {task.assignee_name_raw && !task.assignee && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>Heard as: “{task.assignee_name_raw}”</div>}
+                {(coPeople.length > 0 || canShare) && (
+                  <div className="co-chips dr-co">
+                    {coPeople.map((u) => (
+                      <span key={u.id} className="co-chip">
+                        <Avatar name={u.name} color={u.avatar_color} size={20} />
+                        <span className="co-chip-name">{u.id === user?.id ? 'You' : u.name}</span>
+                        {(canEdit || u.id === user?.id) && (
+                          <button type="button" className="co-chip-x" disabled={busy} onClick={() => unshare(u)}
+                            aria-label={u.id === user?.id ? 'Leave this task' : `Take ${u.name} off this task`} title={u.id === user?.id ? 'Leave this task' : 'Remove'}>✕</button>
+                        )}
+                      </span>
+                    ))}
+                    {canShare && (
+                      <select className="co-add" data-va="task.drawer.share" value="" disabled={busy} onChange={(e) => { if (e.target.value) share(e.target.value) }} aria-label="Share this task with another person">
+                        <option value="">＋ Add person</option>
+                        {users.filter((u) => u.role !== 'admin' && !isOnTask(task, u.id)).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             <div className="dr-field">
@@ -579,7 +722,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
             ) : task.approval_status === 'pending' ? (
               <div className="card-pad" style={{ background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: 10 }}>
                 <strong className="row" style={{ gap: 7 }}><Ic name="clock" size={15} /> Submitted for review</strong>
-                {task.assignee?.id === user?.id ? (
+                {isOnTask(task, user?.id) ? (
                   /* The assignee: their work is parked with the reviewer. */
                   <>
                     <p className="muted" style={{ margin: '4px 0 10px' }}>Waiting for your manager — or whoever assigned it to you — to approve. You'll get it back if changes are needed.</p>
@@ -626,8 +769,8 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                     {subs.map((s: any) => {
                       const u = lookupUser(s.assignee_id)
                       return (
-                        <div key={s.id} className="spread" style={{ fontSize: 13, padding: '7px 0', borderBottom: '1px solid #f1f5f9' }}>
-                          <span className="row" style={{ gap: 6 }}>{s.status === 'Done' ? <Ic name="check" size={13} /> : <span style={{ color: 'var(--muted)' }}>•</span>} {s.title}</span>
+                        <div key={s.id} className="spread" style={{ fontSize: 13, padding: '7px 0', borderBottom: '1px solid var(--n-100)' }}>
+                          <span className="row" style={{ gap: 6, minWidth: 0 }}>{s.status === 'Done' ? <Ic name="check" size={13} /> : <span style={{ color: 'var(--muted)' }}>•</span>} <span className="clamp-2" style={{ overflowWrap: 'anywhere' }}>{s.title}</span></span>
                           <span className="row" style={{ gap: 6 }}>
                             {u && <Avatar name={u.name} color={u.avatar_color} size={18} />}
                             <span className="muted">{u?.name || '—'}</span>
@@ -782,18 +925,37 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                       </div>
                     ) : (
                       <>
-                        <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{c.body}</div>
+                        {c.body && <div className="comment-text"><Linkify text={c.body} /></div>}
+                        <CommentFiles files={(task.attachments || []).filter((a: Attachment) => a.comment_id === c.id)} onPhoto={setPhotoAt} />
                       </>
                     )}
                   </div>
                 </div>
               )
             })}
-            <div className="row" style={{ marginTop: 10 }}>
+            {staged.length > 0 && (
+              <div className="cmt-stage" aria-label="Files to send with your comment">
+                {staged.map((s) => (
+                  <div key={s.id} className="cmt-stage-item" title={s.file.name}>
+                    {s.url ? <img src={s.url} alt="" /> : (
+                      <span className="cmt-stage-file"><Ic name="doc" size={20} />{fileExt(s.file.name) && <span>{fileExt(s.file.name)}</span>}</span>
+                    )}
+                    <span className="cmt-stage-name">{s.file.name}</span>
+                    <button type="button" className="cmt-stage-x" disabled={!!upload} onClick={() => dropStaged((x) => x.id !== s.id)} aria-label={`Remove ${s.file.name}`}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="row cmt-compose" style={{ marginTop: 10 }}>
+              <input ref={commentFileInput} type="file" multiple style={{ display: 'none' }} onChange={(e) => stageFiles(e.target.files)} />
+              <button type="button" className="btn btn-ghost cmt-attach" disabled={!!upload} onClick={() => commentFileInput.current?.click()}
+                title="Add a photo or file to your comment (or paste one)" aria-label="Add a photo or file to your comment">
+                <Ic name="attach" size={17} />
+              </button>
               <AutoTextarea
                 data-va="task.drawer.comment"
                 aria-label="Add a comment"
-                placeholder="Add a comment…"
+                placeholder={staged.length ? 'Add a message (optional)…' : 'Add a comment…'}
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 // Enter posts, Shift+Enter breaks the line — the messenger
@@ -803,7 +965,7 @@ This cannot be undone — comments are not kept in the recycle bin.`,
                 onKeyDown={(e) => { if (enterSends(e)) { e.preventDefault(); addComment() } }}
                 style={{ flex: 1 }}
               />
-              <button data-va="task.drawer.postComment" className="btn btn-primary" onClick={addComment} disabled={busy}>Post</button>
+              <button data-va="task.drawer.postComment" className="btn btn-primary" onClick={addComment} disabled={busy || !!upload}>Post</button>
             </div>
           </div>
         </div>

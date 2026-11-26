@@ -977,6 +977,13 @@ export function initSchema() {
   ensureColumn('attachments', 'stored_name', 'TEXT')   // generated name on disk (data/task_uploads)
   ensureColumn('attachments', 'file_type', 'TEXT')     // mime type
   ensureColumn('attachments', 'file_size', 'INTEGER')  // bytes
+  // A file sent with a comment (a pasted screenshot plus the words about it).
+  // It stays one of the task's attachments as well; NULL for one attached on
+  // its own. No index: it is only read with the task's own attachments.
+  ensureColumn('attachments', 'comment_id', 'TEXT')
+  // The tag the notification's push went out with, so reading it can take it
+  // out of the tray on the person's other devices (notifClear.js).
+  ensureColumn('notifications', 'push_tag', 'TEXT')
   ensureColumn('users', 'phone', "TEXT DEFAULT ''")
   ensureColumn('meetings', 'description', "TEXT DEFAULT ''")
 
@@ -1393,6 +1400,16 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_hidden_user ON chat_message_hidden(user_id, message_id);
     -- Deadline reminders (dueReminders.js) look tasks up by due date every minute.
     CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
+    -- The others who share a task with its owner (tasks.assignee_id), see
+    -- taskAssignees.js. Looked up by person for "My tasks" and the lists.
+    CREATE TABLE IF NOT EXISTS task_assignees (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      added_by_id TEXT,
+      added_at TEXT,
+      PRIMARY KEY (task_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_assignees_user ON task_assignees(user_id);
     -- Which deadline reminders went out, so each is sent once (kind: day | hour).
     CREATE TABLE IF NOT EXISTS task_due_reminders (
       task_id TEXT NOT NULL,

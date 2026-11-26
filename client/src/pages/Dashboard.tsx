@@ -716,7 +716,7 @@ function ManagerDash({ admin, name }: { admin?: boolean; name: string }) {
                   <tr key={t.id} className="clickable" onClick={() => d.setOpenId(t.id)}
                     role="button" tabIndex={0} aria-label={`Open ${t.title}`}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.setOpenId(t.id) } }}>
-                    <td>{t.title}<TaskHandoverLine task={t} /></td>
+                    <td><div className="clamp-2">{t.title}</div><TaskHandoverLine task={t} /></td>
                     <td className="muted">{t.assignee_name || 'Unassigned'}</td>
                     <td>{dueLabel(t)}</td>
                   </tr>

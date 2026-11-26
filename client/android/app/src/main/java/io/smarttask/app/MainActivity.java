@@ -25,6 +25,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AppUpdatePlugin.class);
         registerPlugin(FileDownloadPlugin.class);
         registerPlugin(PushSetupPlugin.class);
+        registerPlugin(EdgeSwipePlugin.class);
         super.onCreate(savedInstanceState);
         // A recreated activity (rotation, process restore) carries the original
         // launch intent again; answering it a second time would rejoin a call
