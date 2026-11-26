@@ -6073,8 +6073,18 @@ body.verify-pop-open .va-coach { display: none !important; }
 .att-cam { display: flex; flex-direction: column; gap: 10px; }
 .att-cam-title { font-weight: 700; font-size: 14px; }
 .att-cam-frame { position: relative; aspect-ratio: 4 / 3; overflow: hidden; border-radius: var(--r-md); background: #0f172a; }
-.att-cam-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.att-cam-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.att-cam-video.mirror { transform: scaleX(-1); }
 .att-cam-video.hidden { visibility: hidden; }
+/* Front/back switch over the picture, where a phone's own camera app puts it;
+   shown only on a device with more than one camera (SelfieCamera.tsx). */
+.att-cam-flip { position: absolute; top: 10px; right: 10px; display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.35); border-radius: 999px; background: rgba(15,23,42,.6); color: #fff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.att-cam-flip:hover { background: rgba(15,23,42,.8); }
+.att-cam-flip:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.att-cam-tag { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); max-width: calc(100% - 20px); padding: 4px 10px; border-radius: 999px;
+  background: rgba(15,23,42,.6); color: #fff; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .att-cam-oval { position: absolute; top: 47%; left: 50%; width: 44%; height: 70%; transform: translate(-50%, -50%); border: 2px dashed rgba(255,255,255,.6); border-radius: 50%; pointer-events: none; }
 .att-cam-msg { position: absolute; inset: 0; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; text-align: center; color: #e2e8f0; font-size: 13px; }
 .att-cam-msg strong { color: #fff; font-size: 14px; }

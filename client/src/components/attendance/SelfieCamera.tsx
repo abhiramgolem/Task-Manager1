@@ -11,12 +11,25 @@ import { Ic } from '../../ui'
 // to recognise a face, small enough to store one per punch. The canvas re-encode
 // also drops any metadata (no EXIF, no location). The HRMS re-checks size,
 // format and dimensions and refuses a photo it has seen before.
+//
+// The front camera is the default; a phone can switch to the back one (a broken
+// or poor front camera, or a colleague taking the photo). Either way the HRMS
+// refuses a photo with no face in it and matches the face to the profile photo,
+// so the back camera changes how the photo is taken, not what it must show.
 
 type Phase = 'starting' | 'live' | 'preview' | 'failed'
+type Facing = 'user' | 'environment'
 interface Problem { title: string; hint: string; retry: boolean }
 
 const MAX_SIDE = 640
 const QUALITY = 0.8
+
+// The camera last switched to, kept on this device: whoever needs the back
+// camera needs it every day, not just once.
+const FACING_KEY = 'votask.attendance.camera'
+function savedFacing(): Facing {
+  try { return localStorage.getItem(FACING_KEY) === 'environment' ? 'environment' : 'user' } catch { return 'user' }
+}
 
 // Average brightness and contrast of the frame at 32x32. A covered lens, or a
 // frame grabbed before the sensor woke up, is near-black and flat: refused.
@@ -74,16 +87,28 @@ export default function SelfieCamera({ title, onCancel, onConfirm, privacyUrl }:
   const [problem, setProblem] = useState<Problem | null>(null)
   const [shot, setShot] = useState<{ blob: Blob; url: string } | null>(null)
   const [light, setLight] = useState<'ok' | 'dark' | 'blank' | null>(null)
+  // The side the open camera faces (or, while starting or failed, the side
+  // asked for). Only the front camera is mirrored.
+  const [side, setSide] = useState<Facing>('user')
+  // Cameras on this device, known once one is allowed. The switch shows only
+  // when there is another one to switch to.
+  const [cameras, setCameras] = useState(0)
+  const wantRef = useRef<Facing>('user')
+  const deviceRef = useRef<string | undefined>(undefined)
 
   const stop = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
   }
 
-  const start = useCallback(async () => {
+  // `avoid` is the camera being switched away from.
+  const start = useCallback(async (want: Facing, avoid?: string) => {
     const gen = ++generation.current
+    wantRef.current = want
+    // Stopped before the next one opens: many phones can't run two cameras at once.
     stop()
     setProblem(null)
+    setSide(want)
     setPhase('starting')
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       setProblem(window.isSecureContext
@@ -92,16 +117,35 @@ export default function SelfieCamera({ title, onCancel, onConfirm, privacyUrl }:
       setPhase('failed')
       return
     }
+    const open = (pick: MediaTrackConstraints) => navigator.mediaDevices.getUserMedia({
+      video: { ...pick, width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    })
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      })
+      let stream = await open({ facingMode: want })
+      // The full camera list is only readable once a camera is allowed.
+      const inputs = (await navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[]))
+        .filter((d) => d.kind === 'videoinput')
+      // A laptop's cameras don't say which way they face, so asking for the other
+      // side hands back the same one: the switch then opens the next camera by id.
+      const other = avoid && stream.getVideoTracks()[0]?.getSettings().deviceId === avoid
+        ? inputs.find((d) => d.deviceId && d.deviceId !== avoid) : undefined
+      if (other && gen === generation.current) {
+        stream.getTracks().forEach((t) => t.stop())
+        stream = await open({ deviceId: { exact: other.deviceId } })
+      }
       const video = videoRef.current
       if (gen !== generation.current || !video) {
         stream.getTracks().forEach((t) => t.stop())
         return
       }
+      const settings = stream.getVideoTracks()[0]?.getSettings() || {}
+      deviceRef.current = settings.deviceId
+      setCameras(inputs.length)
+      // A camera that doesn't say which way it faces is a webcam when it is the
+      // only one; otherwise take it to be the side asked for.
+      setSide(settings.facingMode === 'user' || settings.facingMode === 'environment'
+        ? settings.facingMode : inputs.length < 2 ? 'user' : want)
       streamRef.current = stream
       video.srcObject = stream
       await video.play().catch(() => {})
@@ -128,7 +172,7 @@ export default function SelfieCamera({ title, onCancel, onConfirm, privacyUrl }:
 
   useEffect(() => {
     const gen = generation
-    const timer = window.setTimeout(() => void start(), 0)
+    const timer = window.setTimeout(() => void start(savedFacing()), 0)
     return () => {
       window.clearTimeout(timer)
       gen.current++
@@ -168,7 +212,14 @@ export default function SelfieCamera({ title, onCancel, onConfirm, privacyUrl }:
     setLight(null)
     const live = streamRef.current?.getVideoTracks().some((t) => t.readyState === 'live')
     if (live) setPhase('live')
-    else void start()
+    else void start(wantRef.current)
+  }
+
+  const flip = () => {
+    const next: Facing = side === 'user' ? 'environment' : 'user'
+    try { localStorage.setItem(FACING_KEY, next) } catch { /* private window: just not remembered */ }
+    setLight(null)
+    void start(next, deviceRef.current)
   }
 
   const confirm = () => {
@@ -182,10 +233,19 @@ export default function SelfieCamera({ title, onCancel, onConfirm, privacyUrl }:
     <div className="att-cam" data-testid="selfie-camera">
       <div className="att-cam-title">{title}</div>
       <div className="att-cam-frame">
-        {/* Mirrored like a mirror, which is what people expect of a front camera; the saved photo is not mirrored. */}
-        <video ref={videoRef} playsInline muted autoPlay aria-label="Camera preview" className={'att-cam-video' + (phase === 'live' ? '' : ' hidden')} />
-        {shot && phase === 'preview' && <img src={shot.url} alt="Your selfie" className="att-cam-video" />}
+        {/* The front camera is mirrored like a mirror, which is what people expect of it; the back camera
+            shows the scene as it is. The saved photo is never mirrored. */}
+        <video ref={videoRef} playsInline muted autoPlay aria-label="Camera preview"
+          className={'att-cam-video' + (side === 'user' ? ' mirror' : '') + (phase === 'live' ? '' : ' hidden')} />
+        {shot && phase === 'preview' && <img src={shot.url} alt="Your selfie" className={'att-cam-video' + (side === 'user' ? ' mirror' : '')} />}
         {phase === 'live' && <div className="att-cam-oval" aria-hidden="true" />}
+        {phase === 'live' && side === 'environment' && <div className="att-cam-tag">Back camera: keep your face in the oval</div>}
+        {/* Also offered when a camera failed: the other one may still work. */}
+        {cameras > 1 && (phase === 'live' || phase === 'failed') && (
+          <button type="button" className="att-cam-flip" onClick={flip} data-testid="selfie-camera-flip">
+            <Ic name="cameraFlip" size={16} /> {side === 'user' ? 'Back camera' : 'Front camera'}
+          </button>
+        )}
         {phase === 'starting' && <p role="status" className="att-cam-msg">Starting the camera…</p>}
         {phase === 'failed' && problem && (
           <div role="alert" className="att-cam-msg">
@@ -206,7 +266,7 @@ export default function SelfieCamera({ title, onCancel, onConfirm, privacyUrl }:
           <button type="button" className="btn" onClick={retake}>Retake</button>
           <button type="button" className="btn btn-primary" onClick={confirm}>Use this photo</button>
         </>}
-        {phase === 'failed' && problem?.retry && <button type="button" className="btn btn-primary" onClick={() => void start()}><Ic name="refresh" size={15} /> Try again</button>}
+        {phase === 'failed' && problem?.retry && <button type="button" className="btn btn-primary" onClick={() => void start(wantRef.current)}><Ic name="refresh" size={15} /> Try again</button>}
       </div>
       <p className="att-fine">
         Your photo and the server time are saved as proof of attendance, and your face is matched automatically to your profile photo. Only you and HR can see it.
