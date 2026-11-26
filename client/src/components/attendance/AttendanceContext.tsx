@@ -161,8 +161,14 @@ export function AttendanceProvider({ children }: { children: React.ReactNode }) 
     const id = setInterval(() => setTick((n) => n + 1), 10_000)
     return () => clearInterval(id)
   }, [checkedIn])
+  // The HRMS allows several check-ins a day and adds them up, so the clock is
+  // the day's total: today's finished sessions (workedSeconds) plus the open
+  // one, carrying on from the last check-out rather than starting at 0:00. A
+  // session opened on an earlier day (an overnight shift) is not part of
+  // today's total, so it counts alone.
+  const earlier = t && t.openSessionDate === t.today ? t.workedSeconds : 0
   const elapsed = view.kind === 'ready' && t?.openElapsedSeconds != null
-    ? t.openElapsedSeconds + (performance.now() - view.at) / 1000 : null
+    ? earlier + t.openElapsedSeconds + (performance.now() - view.at) / 1000 : null
 
   const visible = view.kind !== 'hidden' && !!user
   const openSheet = useCallback(() => setOpen(true), [])

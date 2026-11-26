@@ -28,7 +28,8 @@ const STATE_LABEL: Record<TodayAttendance['state'], string> = {
 export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerification, onClose, onPunched }: {
   today: TodayAttendance | null
   hrmsUrl: string
-  // Seconds since check-in, ticking (the topbar owns the clock).
+  // Seconds worked today including the open session, ticking (the topbar owns
+  // the clock): it carries on from the last check-out, as the HRMS adds up a day.
   elapsed: number | null
   needsVerification: boolean
   onClose: () => void
@@ -186,7 +187,8 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
               <div className="att-status-main">
                 <div className="att-status-label" data-testid="attendance-status">{t.state === 'NOT_CHECKED_IN' && t.checkedOutToday ? (t.firstCheckInAvailable ? 'Checked out' : 'Checked out for today') : STATE_LABEL[t.state]}</div>
                 {checkedIn && t.openSince && (
-                  <div className="att-status-sub">Since {t.openSince.slice(11)}{elapsed !== null && <> · <strong className="att-clock">{hm(elapsed)}</strong></>}</div>
+                  // "today" once earlier sessions are in the clock, so it isn't read as time since this check-in.
+                  <div className="att-status-sub">Since {t.openSince.slice(11)}{elapsed !== null && <> · <strong className="att-clock">{hm(elapsed)}</strong>{t.workedSeconds > 0 && t.openSessionDate === t.today && ' today'}</>}</div>
                 )}
                 {checkedIn && t.checkInPending && <div className="att-status-sub warn">Off-site check-in, waiting for HR approval</div>}
                 {!checkedIn && t.workedSeconds > 0 && <div className="att-status-sub">Recorded today: {duration(t.workedSeconds)}</div>}
