@@ -64,14 +64,15 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
   const stale = t?.state === 'STALE_OPEN'
   const checkoutPending = t?.state === 'CHECKOUT_PENDING'
   const needsProfilePhoto = !!t && t.selfieRequired && !t.hasProfilePhoto
-  // No new check-in while an off-site punch of today waits for HR; one check-in per day;
+  // No new check-in while an off-site punch of today waits for HR, or when the HRMS
+  // says not (firstCheckInAvailable; several check-ins a day are allowed now);
   // none on a weekly off or holiday, which the HRMS refuses (A120). Check-out stays:
   // an overnight session from a working day can still end after midnight.
   const offDay = t?.offDay || null
   const canCheckIn = !!t && !offDay && t.firstCheckInAvailable && (stale || (!checkedIn && !checkoutPending && !t.waitingForHr))
   const canCheckOut = !!t && (checkedIn || (stale && t.canCheckOut))
   const doneForToday = !!t && t.checkedOutToday && !t.missingCheckOutToday && !t.firstCheckInAvailable && !t.waitingForHr && !checkedIn && !checkoutPending && !stale
-  const missingToday = !!t && t.missingCheckOutToday && !t.firstCheckInAvailable && !t.waitingForHr && !checkedIn && !checkoutPending
+  const missingToday = !!t && t.missingCheckOutToday && !t.waitingForHr && !checkedIn && !checkoutPending
   const staleEarlierDay = !!t && stale && t.openSessionDate !== t.today
   // Work on an off day is claimed as comp-off in HRMS, signed in through VoTask
   // like "Open attendance in HRMS" below, landing on the comp-off form.
@@ -223,12 +224,12 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
             )}
             {missingToday && (
               <div className="att-banner warn">
-                Today&apos;s check-in has no check-out. Only one check-in is allowed per day:{' '}
-                <a href={`${hrmsUrl}/attendance/corrections/new?date=${t.today}`} target="_blank" rel="noopener noreferrer">request a correction</a> to add your check-out.
+                Today&apos;s check-in has no check-out:{' '}
+                <a href={`${hrmsUrl}/attendance/corrections/new?date=${t.today}`} target="_blank" rel="noopener noreferrer">request regularization</a> to add your check-out.
               </div>
             )}
             {doneForToday && (
-              <div className="att-banner info">You have checked out for today. Only one check-in is allowed per day; if your check-out was a mistake, request a correction in the HRMS.</div>
+              <div className="att-banner info">You have checked out for today. If your check-out was a mistake, request regularization in the HRMS.</div>
             )}
             {needsProfilePhoto && canCheckIn && (
               <div className="att-banner warn">
@@ -240,7 +241,7 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
               <div className="att-banner warn">
                 {/* No check-in to suggest on an off day; the correction still applies. */}
                 Your check-in from {t.openSince} has no check-out. If you forgot to check out, {offDay ? '' : 'check in for today and '}
-                <a href={`${hrmsUrl}/attendance/corrections/new?date=${t.openSessionDate}`} target="_blank" rel="noopener noreferrer">request a correction</a>.
+                <a href={`${hrmsUrl}/attendance/corrections/new?date=${t.openSessionDate}`} target="_blank" rel="noopener noreferrer">request regularization</a>.
               </div>
             )}
             {t.selfieRequired && !needsProfilePhoto && (
