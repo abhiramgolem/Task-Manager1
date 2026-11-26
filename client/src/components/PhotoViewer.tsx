@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Ic } from '../ui'
 import { useDialog } from '../lib/useDialog'
 import { pushBackHandler } from '../back'
+import { useEdgeSwipe } from '../lib/edgeSwipe'
 import ZoomMedia, { ZoomHandle } from './ZoomMedia'
 import { ChevronLeft, ChevronRight } from './chat/glyphs'
 
@@ -70,18 +71,13 @@ export default function PhotoViewer({ items, startId, onClose, actions, label = 
   const gone = !it
   useEffect(() => { if (gone) closeRef.current() }, [gone])
 
-  // The neighbours start loading now, so stepping to them is instant.
-  const near = [items[idx + 1], items[idx - 1]].filter((n) => n && !n.video).map((n) => n.src).join('\n')
-  useEffect(() => {
-    for (const src of near.split('\n')) {
-      if (!src) continue
-      const img = new Image()
-      img.decoding = 'async'
-      img.src = src
-    }
-  }, [near])
+  // A swipe starting at the screen's edge turns the picture, not Android's Back.
+  useEdgeSwipe()
 
   if (!it) return null
+  // The neighbours slide in with a swipe; drawing them off screen also loads
+  // them ahead, so stepping to them is instant.
+  const peek = (n?: ViewerItem) => (n ? { src: n.src, video: n.video } : null)
   const sub = [it.subtitle, items.length > 1 ? `${idx + 1} of ${items.length}` : ''].filter(Boolean).join(' · ')
 
   return (
@@ -103,7 +99,7 @@ export default function PhotoViewer({ items, startId, onClose, actions, label = 
       <div className="mv-stage">
         <ZoomMedia key={it.id} ref={zoomCtl} src={it.src} video={it.video} alt={it.alt}
           canPrev={idx > 0} canNext={idx < items.length - 1} onStep={go} onClose={onClose}
-          armedAt={armedAt.current} onZoom={setZoomed} />
+          armedAt={armedAt.current} onZoom={setZoomed} prev={peek(items[idx - 1])} next={peek(items[idx + 1])} />
         {idx > 0 && <button type="button" className="mv-nav prev" onClick={() => go(-1)} aria-label="Previous"><ChevronLeft size={30} /></button>}
         {idx < items.length - 1 && <button type="button" className="mv-nav next" onClick={() => go(1)} aria-label="Next"><ChevronRight size={30} /></button>}
       </div>

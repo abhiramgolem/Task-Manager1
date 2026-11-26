@@ -8,6 +8,7 @@ import { useDialog } from '../lib/useDialog'
 import { pushBackHandler } from '../back'
 import VoicePlayer, { mediaLength } from './VoicePlayer'
 import ZoomMedia from './ZoomMedia'
+import { useEdgeSwipe } from '../lib/edgeSwipe'
 import { openPdf } from './PdfViewer'
 import { isPdf } from '../lib/pdf'
 import {
@@ -812,16 +813,12 @@ function Lightbox({ kind, items, index, total, meId, onIndex, onClose, onShowMes
     return () => document.removeEventListener('keydown', onKey)
   })
 
-  // The neighbours start loading now, so stepping to them is instant.
-  useEffect(() => {
-    if (kind !== 'images') return
-    for (const n of [items[index + 1], items[index - 1]]) {
-      if (!n) continue
-      const img = new Image()
-      img.decoding = 'async'
-      img.src = chatFileUrl(n.id)
-    }
-  }, [kind, items, index])
+  // A swipe starting at the screen's edge turns the picture, not Android's Back.
+  useEdgeSwipe()
+
+  // The neighbours slide in with a swipe; drawing them off screen also loads
+  // them ahead, so stepping to them is instant.
+  const peek = (n?: MediaFileItem) => (n ? { src: chatFileUrl(n.id), video: kind === 'videos' } : null)
 
   const count = Math.max(total, items.length)
   const when = [dayOf(it.created_at), clockOf(it.created_at), count > 1 ? `${index + 1} of ${count}` : ''].filter(Boolean).join(' · ')
@@ -843,7 +840,8 @@ function Lightbox({ kind, items, index, total, meId, onIndex, onClose, onShowMes
       </div>
       <div className="ci-lb-stage">
         <ZoomMedia key={it.id} src={chatFileUrl(it.id)} video={kind === 'videos'} alt={it.caption || it.name || (kind === 'images' ? 'Image' : 'Video')}
-          canPrev={!atStart} canNext={!atEnd} onStep={go} onClose={close} armedAt={armedAt.current} />
+          canPrev={!atStart} canNext={!atEnd} onStep={go} onClose={close} armedAt={armedAt.current}
+          prev={peek(items[index - 1])} next={peek(items[index + 1])} />
         {items.length > 1 && (
           <>
             {/* aria-disabled rather than disabled at either end: a disabled

@@ -5460,6 +5460,14 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .spinner.zm-spin { position: absolute; top: 50%; left: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-color: rgba(255, 255, 255, .25); border-top-color: #fff; animation: spin .7s linear infinite, overlay-fade .2s ease .3s both; }
 .zm-missing { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 320px; text-align: center; font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, .85); }
 .zm-missing-sub { font-size: 12.5px; font-weight: 400; color: rgba(255, 255, 255, .6); }
+/* The pictures either side, waiting one box-width (+24px, GAP in ZoomMedia)
+   off screen; a swipe slides them in with the finger. Laid out as the box lays
+   out its own picture (same padding), so the hand-over at the end of a turn
+   doesn't move a pixel. The stage's overflow: hidden keeps them out of sight. */
+.zm-peek { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: inherit; pointer-events: none; }
+.zm-peek.prev { transform: translateX(calc(-100% - 24px)); }
+.zm-peek.next { transform: translateX(calc(100% + 24px)); }
+.zm-peek-play { position: absolute; top: 50%; left: 50%; width: 60px; height: 60px; margin: -30px 0 0 -30px; display: grid; place-items: center; padding-left: 4px; border-radius: 50%; background: rgba(0, 0, 0, .5); color: #fff; }
 /* The whole screen on a phone: the picture uses every pixel and the arrows
    float over it. */
 @media (max-width: 720px) { .zm-box { padding: 0; } }
