@@ -56,7 +56,7 @@ export default function HrmsLogin() {
     if (loading || !user || started.current) return
     started.current = true
     clearPending()
-    if (!STATE.test(state)) { setError('This sign-in link is incomplete. Start again from the HRMS sign-in page.'); return }
+    if (!STATE.test(state)) { setError('This sign-in link is incomplete. Start again from the VoPeople sign-in page.'); return }
     api.post('/attendance/login-token', { state })
       .then((d: { hrmsUrl: string; token: string }) => {
         window.location.replace(`${d.hrmsUrl}/login/votask#token=${encodeURIComponent(d.token)}`)
@@ -70,14 +70,14 @@ export default function HrmsLogin() {
     <Shell>
       {error ? (
         <>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Couldn’t sign you in to HRMS</div>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Couldn’t sign you in to VoPeople</div>
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13.5, lineHeight: 1.5 }}>{error}</p>
           <Link className="btn btn-primary" to="/">Back to VoTask</Link>
         </>
       ) : (
         <>
           <span className="spinner" />
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Signing you in to HRMS as {user.name}…</div>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Signing you in to VoPeople as {user.name}…</div>
         </>
       )}
     </Shell>

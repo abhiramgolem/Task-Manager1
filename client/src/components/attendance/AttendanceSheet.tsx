@@ -176,7 +176,7 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
             onCancel={() => { setCameraFor(null); busy.current = false }} onConfirm={onPhoto} />
         ) : needsVerification ? (
           <div className="att-body">
-            <div className="att-banner warn">Verify your email to check in. Attendance is matched to your HRMS record by your email address, so it has to be confirmed first.</div>
+            <div className="att-banner warn">Verify your email to check in. Attendance is matched to your VoPeople record by your email address, so it has to be confirmed first.</div>
             <EmailCodeEntry />
           </div>
         ) : !t ? (
@@ -229,11 +229,11 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
               </div>
             )}
             {doneForToday && (
-              <div className="att-banner info">You have checked out for today. If your check-out was a mistake, request regularization in the HRMS.</div>
+              <div className="att-banner info">You have checked out for today. If your check-out was a mistake, request regularization in the VoPeople.</div>
             )}
             {needsProfilePhoto && canCheckIn && (
               <div className="att-banner warn">
-                Add your profile photo in HRMS first: your attendance selfies are compared with it.{' '}
+                Add your profile photo in VoPeople first: your attendance selfies are compared with it.{' '}
                 <a href={`${hrmsUrl}/account#profile-photo`} target="_blank" rel="noopener noreferrer">Add profile photo</a>
               </div>
             )}
@@ -245,7 +245,7 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
               </div>
             )}
             {t.selfieRequired && !needsProfilePhoto && (
-              <p className="att-fine">A selfie is taken at each check-in and check-out and matched to your HRMS profile photo. Only you and HR can see it.</p>
+              <p className="att-fine">A selfie is taken at each check-in and check-out and matched to your VoPeople profile photo. Only you and HR can see it.</p>
             )}
 
             {blocked && !working && (
@@ -261,7 +261,7 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
         )}
 
         <a className="att-link" href={`${hrmsUrl}/api/votask/login/start?next=%2Fattendance`} target="_blank" rel="noopener noreferrer">
-          Open attendance in HRMS <Ic name="external" size={13} />
+          Open attendance in VoPeople <Ic name="external" size={13} />
         </a>
       </div>
     </div>
