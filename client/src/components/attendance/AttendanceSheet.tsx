@@ -229,7 +229,7 @@ export default function AttendanceSheet({ today, hrmsUrl, elapsed, needsVerifica
               </div>
             )}
             {doneForToday && (
-              <div className="att-banner info">You have checked out for today. If your check-out was a mistake, request regularization in the VoPeople.</div>
+              <div className="att-banner info">You have checked out for today. If your check-out was a mistake, request regularization in VoPeople.</div>
             )}
             {needsProfilePhoto && canCheckIn && (
               <div className="att-banner warn">

@@ -88,7 +88,7 @@ export function getSession(force = false): Promise<HrmsSession> {
 }
 
 // ---- HRMS calls --------------------------------------------------------------
-const OFFLINE = 'Could not reach the VoPeople. Check your connection and try again.'
+const OFFLINE = 'Could not reach VoPeople. Check your connection and try again.'
 
 async function call(path: string, init: RequestInit = {}, timeoutMs = 20_000, retried = false): Promise<any> {
   const s = await getSession(retried)
@@ -107,7 +107,7 @@ async function call(path: string, init: RequestInit = {}, timeoutMs = 20_000, re
       signal: ctl.signal,
     })
   } catch (e: any) {
-    throw new HrmsError(e?.name === 'AbortError' ? 'The VoPeople is taking too long to answer. Try again.' : OFFLINE, 0)
+    throw new HrmsError(e?.name === 'AbortError' ? 'VoPeople is taking too long to answer. Try again.' : OFFLINE, 0)
   } finally {
     clearTimeout(timer)
   }
