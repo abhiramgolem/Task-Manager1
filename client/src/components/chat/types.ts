@@ -91,8 +91,12 @@ export const isVideo = (f?: ChatFile | null) => {
 // its extension. The name only decides when the browser declared no type at all.
 export const isAudio = (f?: ChatFile | null) => !!f && !isVideo(f) && ((f.type || '').startsWith('audio/') || /\.(webm|m4a|mp3|ogg|wav)$/i.test(f.name || ''))
 
-// Something a person typed (and so may edit): not a record of an event.
-export const isEditable = (m: Msg) => !m.deleted && !m.kind && !m.call && !m.meeting && !isAudio(m.file) && !m.id.startsWith('tmp_')
+// Edits are allowed for 15 minutes from sending, as on WhatsApp. The server
+// enforces the same window (routes/chat.js); this only decides what is offered.
+export const EDIT_WINDOW_MS = 15 * 60_000
+export const editWindowOpen = (m: Msg) => Date.now() - Date.parse(m.created_at) < EDIT_WINDOW_MS
+// Something a person typed (and so may edit, within the window): not a record of an event.
+export const isEditable = (m: Msg) => !m.deleted && !m.kind && !m.call && !m.meeting && !isAudio(m.file) && !m.id.startsWith('tmp_') && editWindowOpen(m)
 // Something that can travel to another chat.
 export const isForwardable = (m: Msg) => !m.deleted && !m.call && !m.meeting && (!m.kind || m.kind === 'location' || m.kind === 'contact') && !m.id.startsWith('tmp_')
 // A line that records what happened rather than a message anyone sent.

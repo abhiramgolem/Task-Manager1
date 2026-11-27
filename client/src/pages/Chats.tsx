@@ -26,7 +26,7 @@ import { typeInto, flashPress, pause, settle, findVaEl } from '../voice/uiContro
 import TaskDrawer from '../components/TaskDrawer'
 import { setOpenChat } from '../components/InAppChatAlert'
 import type { Member, Conversation, MentionRef, ChatFile, Msg, OrgUser, LocationRef, Poll } from '../components/chat/types'
-import { fileUrl, thumbUrl, isAudio, isEditable, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
+import { fileUrl, thumbUrl, isAudio, isEditable, editWindowOpen, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
 import ChatVideo from '../components/chat/ChatVideo'
 import {
   CopyGlyph, Ticks, PollGlyph, TrendGlyph, PinDropGlyph, ContactGlyph, CameraGlyph, GalleryGlyph, DocGlyph, TaskGlyph,
@@ -2679,7 +2679,12 @@ export default function Chats() {
   // Straight into the box with the caret at the end: choosing Edit means typing
   // next. Whatever was half-typed is set aside and comes back afterwards.
   const startEdit = (m: Msg) => {
-    if (!isEditable(m) || m.sender_id !== user!.id) return
+    if (m.sender_id !== user!.id) return
+    if (!isEditable(m)) {
+      // A button drawn before the 15 minutes ran out can still be tapped.
+      if (!editWindowOpen(m)) toast.error('Messages can only be edited within 15 minutes of sending')
+      return
+    }
     setMenuId(null); setSelectedId(null); setMulti(null)
     if (!editing) editStashRef.current = input
     setEditing({ id: m.id, body: m.body }); setInput(m.body); setReplyTo(null)
