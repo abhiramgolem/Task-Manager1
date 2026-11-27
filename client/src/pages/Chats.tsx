@@ -43,7 +43,7 @@ import { PdfDocPreview, openPdf } from '../components/PdfViewer'
 import { isPdf, thumbForUpload, thumbWithin, type SentThumb } from '../lib/pdf'
 import { sending, aborts, emitUpload, onUpload, startUpload, progressOf, liveBubbles, inFlight, sendingIn, type UploadEvent } from '../lib/liveUploads'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
-import ChatInfoPanel from '../components/ChatInfoPanel'
+import ChatInfoPanel, { muteText } from '../components/ChatInfoPanel'
 import InChip from '../components/attendance/InChip'
 import type { InfoView, Me, MediaKind } from '../lib/chatInfo'
 import { chatInfoApi, MEDIA_TABS } from '../lib/chatInfo'
@@ -681,6 +681,8 @@ export default function Chats() {
   const [threadLastRead, setThreadLastRead] = useState<string | null>(null)
   const [convoMenu, setConvoMenu] = useState<string | null>(null)
   const closeConvoMenu = useCallback(() => setConvoMenu(null), [])
+  const closeHeadMenu = useCallback(() => setHeadMenu(false), [])
+  const headBtnRef = useRef<HTMLButtonElement>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const mediaRef = useRef<HTMLInputElement>(null)
@@ -2760,8 +2762,11 @@ export default function Chats() {
   // - The rest go in groups with a rule between them (pass it on / keep track /
   //   the rest / Delete), each with its icon, so a long list can be scanned.
   //   An action with no group here (a new one) lands just above Delete.
-  const deskMenu = (m: Msg): ActionItem[][] => {
-    const acts = msgActions(m).filter((a) => !ON_HOVER_TOOLS.has(a.key))
+  const deskMenu = (m: Msg) => menuGroups(msgActions(m).filter((a) => !ON_HOVER_TOOLS.has(a.key)))
+  // A phone's action bar: what its icons leave to its ⋮, in the same groups.
+  // Choosing one ends the selection, as every action of the bar does.
+  const barMenu = (m: Msg) => menuGroups(msgActions(m).filter((a) => !a.bar).map((a) => ({ ...a, run: () => { setSelectedId(null); a.run() } })))
+  const menuGroups = (acts: MsgAction[]): ActionItem[][] => {
     const groups = DESK_MENU_GROUPS.map((keys) => keys.flatMap((k) => acts.filter((a) => a.key === k)))
     const placed = new Set(DESK_MENU_GROUPS.flat())
     const rest = acts.filter((a) => !placed.has(a.key))
@@ -2818,9 +2823,7 @@ export default function Chats() {
   const infoOpenerRef = useRef<HTMLElement | null>(null)
   const openInfo = (view: InfoView = { view: 'info' }) => {
     const from = document.activeElement as HTMLElement | null
-    infoOpenerRef.current = from?.closest('.head-menu')
-      ? document.querySelector<HTMLElement>('.chat-peer-actions [aria-label="More options"]')
-      : from
+    infoOpenerRef.current = from?.closest('.am-menu') ? headBtnRef.current : from
     setInfoStart(view); setShowInfo(true)
     setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); setSelectedId(null)
   }
@@ -2918,7 +2921,8 @@ export default function Chats() {
           rowPressRef.current = null
           rowPressedRef.current = true
           try { navigator.vibrate?.(12) } catch { /* the menu says it */ }
-          setMenuAnchor(row.querySelector('.convo-menu-btn') as HTMLElement | null)
+          // Its ⋯ is hidden on touch screens: the menu hangs from the row's right end.
+          setMenuAnchor((row.querySelector('.convo-trailing') as HTMLElement | null) || row)
           setConvoMenu(cid)
         }, LONG_PRESS_MS),
       }
@@ -3041,8 +3045,8 @@ export default function Chats() {
         </div>
         {reactFor === m.id && (
           <div className={'react-picker' + (reactUp ? ' up' : '')} onClick={(e) => e.stopPropagation()}>
-            {EMOJIS.map((emo) => <button key={emo} onClick={() => react(m, emo)}>{emo}</button>)}
-            <button className="react-more" title="More emoji" aria-label="More emoji" onClick={() => { setReactFor(null); setEmojiFor(m.id) }}>＋</button>
+            {EMOJIS.map((emo, i) => <button key={emo} style={{ '--i': i } as React.CSSProperties} onClick={() => react(m, emo)}>{emo}</button>)}
+            <button className="react-more" style={{ '--i': EMOJIS.length } as React.CSSProperties} title="More emoji" aria-label="More emoji" onClick={() => { setReactFor(null); setEmojiFor(m.id) }}>＋</button>
           </div>
         )}
         {emojiFor === m.id && (
@@ -3063,10 +3067,10 @@ export default function Chats() {
         {/* The label names the action ("Take back…"), not a pressed
             state: reactions are one per person, and a different
             emoji replaces yours rather than adding to it. */}
-        {quick.map((emo) => (
-          <button key={emo} className={emo === myEmoji ? 'on' : undefined} aria-label={emo === myEmoji ? `Take back your ${emo}` : `React with ${emo}`} onClick={() => react(m, emo)}>{emo}</button>
+        {quick.map((emo, i) => (
+          <button key={emo} className={emo === myEmoji ? 'on' : undefined} style={{ '--i': i } as React.CSSProperties} aria-label={emo === myEmoji ? `Take back your ${emo}` : `React with ${emo}`} onClick={() => react(m, emo)}>{emo}</button>
         ))}
-        <button className="react-tray-more" aria-label="More emoji" onClick={() => setEmojiFor(m.id)}><Ic name="plus" size={18} /></button>
+        <button className="react-tray-more" style={{ '--i': quick.length } as React.CSSProperties} aria-label="More emoji" onClick={() => setEmojiFor(m.id)}><Ic name="plus" size={18} /></button>
       </div>
     )
   }
@@ -3374,9 +3378,37 @@ export default function Chats() {
   useEffect(() => { if (search.trim().length < 2) setHits(null) }, [search])
 
   const hasUnread = (c: Conversation) => c.unread > 0 || !!c.marked_unread
-  // A list row's ⋯ on a mouse screen (ActionMenu): the same rows as the touch
-  // menu below in the list, in the same order, with icons and the two
-  // destructive ones set apart at the bottom.
+  // The open chat's ⋮: what it is (info, media, meetings), what you can do in
+  // it, and the chat as a whole — mute says until when.
+  const headMenuGroups = (c: Conversation): ActionItem[][] => {
+    // A wide header has its own search button; a phone's has no room for it.
+    const narrow = window.matchMedia('(max-width: 720px)').matches
+    const muted = c.muted ? muteText(c) : ''
+    const items = (list: (ActionItem | false)[]) => list.filter(Boolean) as ActionItem[]
+    return [
+      items([
+        { key: 'info', label: c.type === 'group' ? 'Group info' : 'Contact info', icon: <Ic name="user" size={16} />, run: () => openInfo() },
+        narrow && { key: 'search', label: 'Search in chat', icon: <Ic name="search" size={16} />, run: () => setInSearchOpen(true) },
+        { key: 'media', label: 'Media, links and docs', icon: <Ic name="attach" size={16} />, run: () => openInfo({ view: 'media' }) },
+        { key: 'meetings', label: 'All meetings', icon: <Ic name="video" size={16} />, run: () => openInfo({ view: 'meetings' }) },
+      ]),
+      items([
+        { key: 'select', label: 'Select messages', icon: <SelectGlyph size={16} />, run: () => { setSelectedId(null); setMulti([]) } },
+        !readOnly && { key: 'task', label: 'Assign a task', icon: <TaskGlyph size={16} />, run: () => setAssignFor({ source: null, draft: { title: '' } }) },
+        { key: 'jump', label: 'Jump to a date', icon: <Ic name="calendar" size={16} />, run: () => setJumpOpen(true) },
+      ]),
+      [
+        { key: 'mute', label: c.muted ? 'Unmute notifications' : 'Mute notifications', hint: muted && muted !== 'Muted' ? muted : undefined,
+          icon: <Ic name={c.muted ? 'bell' : 'muteBell'} size={16} />, run: () => { if (c.muted) muteConversation(c, 0); else setMuteFor(c) } },
+        { key: 'archive', label: c.archived ? 'Unarchive chat' : 'Archive chat', icon: <ArchiveGlyph size={16} />, run: () => archive(c, !c.archived) },
+        { key: 'export', label: 'Export chat', icon: <ExportGlyph size={16} />, run: () => exportChat(c) },
+        { key: 'print', label: 'Print conversation', icon: <Ic name="doc" size={16} />, run: () => printConversation() },
+        { key: 'channels', label: 'Browse channels', icon: <Ic name="hash" size={16} />, run: () => setShowChannels(true) },
+      ],
+    ]
+  }
+  // A list row's ⋯ (or, on a phone, holding the row): its rows in groups, with
+  // icons and the two destructive ones set apart at the bottom.
   const convoMenuGroups = (c: Conversation): ActionItem[][] => [
     [
       { key: 'archive', label: c.archived ? 'Unarchive chat' : 'Archive chat', icon: <ArchiveGlyph size={16} />, run: () => archive(c, !c.archived) },
@@ -3587,24 +3619,11 @@ export default function Chats() {
                   <div className="convo-menu-wrap">
                     <button className="convo-menu-btn" title="Options" aria-label={`Options for ${c.name}`} aria-haspopup="menu" aria-expanded={convoMenu === c.id}
                       onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
-                    {/* Mouse screens: the same menu as a message's, for the
-                        same reason — the list scrolls, and a menu inside it was
-                        cut to a sliver on the last rows of a laptop's list. */}
-                    {convoMenu === c.id && !touchUI && (
+                    {/* The same menu as a message's, for the same reason — the
+                        list scrolls, and a menu inside it was cut to a sliver
+                        on the last rows of a laptop's list. */}
+                    {convoMenu === c.id && (
                       <ActionMenu anchor={menuAnchor} alignEnd groups={convoMenuGroups(c)} label={`Options for ${c.name}`} onClose={closeConvoMenu} />
-                    )}
-                    {convoMenu === c.id && touchUI && (
-                      <div className="msg-menu mine" onClick={(e) => e.stopPropagation()}>
-                        <button onClick={() => archive(c, !c.archived)}>{c.archived ? 'Unarchive chat' : 'Archive chat'}</button>
-                        <button onClick={() => setPref(c, 'pinned')}>{c.pinned ? 'Unpin chat' : 'Pin chat'}</button>
-                        <button onClick={() => { setConvoMenu(null); if (c.muted) muteConversation(c, 0); else setMuteFor(c) }}>{c.muted ? 'Unmute notifications' : 'Mute notifications'}</button>
-                        <button onClick={() => markChat(c, !hasUnread(c))}>{hasUnread(c) ? 'Mark as read' : 'Mark as unread'}</button>
-                        <button onClick={() => { setConvoMenu(null); exportChat(c) }}>Export chat</button>
-                        <button className="danger" onClick={() => clearChat(c)}>Clear chat</button>
-                        {c.type === 'direct'
-                          ? <button className="danger" onClick={() => deleteChat(c)}>Delete chat</button>
-                          : <button className="danger" onClick={() => exitGroup(c)}>Exit group</button>}
-                      </div>
                     )}
                   </div>
                 </div>
@@ -3661,6 +3680,8 @@ export default function Chats() {
               <button className="ic-btn" title="Cancel" aria-label="Cancel selection" onClick={(e) => { e.stopPropagation(); setSelectedId(null) }}>
                 <Ic name="close" size={21} />
               </button>
+              {/* As WhatsApp counts the selection; picking more turns this into the multi bar. */}
+              <span className="sel-count" aria-hidden="true">1</span>
               <div className="chat-peer-actions">
                 {msgActions(selMsg).filter((a) => a.bar).map((a) => (
                   <button
@@ -3674,15 +3695,12 @@ export default function Chats() {
                   </button>
                 ))}
                 <div className="msg-menu-wrap">
-                  <button className="ic-btn" title="More" aria-label="More actions" aria-expanded={menuId === SEL_MENU} onClick={(e) => { e.stopPropagation(); setMenuId(menuId === SEL_MENU ? null : SEL_MENU) }}>
+                  <button className="ic-btn" title="More" aria-label="More actions" aria-haspopup="menu" aria-expanded={menuId === SEL_MENU}
+                    onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuId(menuId === SEL_MENU ? null : SEL_MENU) }}>
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.9" /><circle cx="12" cy="12" r="1.9" /><circle cx="12" cy="19" r="1.9" /></svg>
                   </button>
                   {menuId === SEL_MENU && (
-                    <div className="msg-menu mine head-menu" onClick={(e) => e.stopPropagation()}>
-                      {msgActions(selMsg).filter((a) => !a.bar).map((a) => (
-                        <button key={a.key} className={a.danger ? 'danger' : undefined} onClick={() => { setMenuId(null); setSelectedId(null); a.run() }}>{a.label}</button>
-                      ))}
-                    </div>
+                    <ActionMenu anchor={menuAnchor} alignEnd label="More actions for the selected message" onClose={closeMsgMenu} groups={barMenu(selMsg)} />
                   )}
                 </div>
               </div>
@@ -3766,24 +3784,11 @@ export default function Chats() {
                 {/* Everything else lives behind ⋮. Six boxed buttons in a row left a
                     phone ~120px for the chat's own name. */}
                 <div className="msg-menu-wrap jump-wrap">
-                  <button className="ic-btn" title="More" aria-label="More options" aria-expanded={headMenu} onClick={(e) => { e.stopPropagation(); setHeadMenu((o) => !o); setJumpOpen(false); setLoadOpen(false) }}>
+                  <button ref={headBtnRef} className="ic-btn" title="More" aria-label="More options" aria-haspopup="menu" aria-expanded={headMenu} onClick={(e) => { e.stopPropagation(); setHeadMenu((o) => !o); setJumpOpen(false); setLoadOpen(false) }}>
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.9" /><circle cx="12" cy="12" r="1.9" /><circle cx="12" cy="19" r="1.9" /></svg>
                   </button>
                   {headMenu && (
-                    <div className="msg-menu mine head-menu" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => openInfo()}><Ic name="user" size={15} /> {active.type === 'group' ? 'Group info' : 'Contact info'}</button>
-                      <button className="phone-only" onClick={() => { setHeadMenu(false); setInSearchOpen(true) }}><Ic name="search" size={15} /> Search in chat</button>
-                      <button onClick={() => { setHeadMenu(false); setSelectedId(null); setMulti([]) }}><SelectGlyph size={15} /> Select messages</button>
-                      {!readOnly && <button onClick={() => { setHeadMenu(false); setAssignFor({ source: null, draft: { title: '' } }) }}><TaskGlyph size={15} /> Assign a task</button>}
-                      <button onClick={() => openInfo({ view: 'media' })}><Ic name="attach" size={15} /> Media, links and docs</button>
-                      <button onClick={() => openInfo({ view: 'meetings' })}><Ic name="video" size={15} /> All meetings</button>
-                      <button onClick={() => { setHeadMenu(false); setJumpOpen(true) }}><Ic name="calendar" size={15} /> Jump to a date</button>
-                      <button onClick={() => { setHeadMenu(false); if (active.muted) muteConversation(active, 0); else setMuteFor(active) }}><Ic name={active.muted ? 'bell' : 'muteBell'} size={15} /> {active.muted ? 'Unmute notifications' : 'Mute notifications'}</button>
-                      <button onClick={() => { setHeadMenu(false); archive(active, !active.archived) }}><ArchiveGlyph size={15} /> {active.archived ? 'Unarchive chat' : 'Archive chat'}</button>
-                      <button onClick={() => exportChat(active)}><ExportGlyph size={15} /> Export chat</button>
-                      <button onClick={() => { setHeadMenu(false); printConversation() }}><Ic name="doc" size={15} /> Print conversation</button>
-                      <button onClick={() => { setHeadMenu(false); setShowChannels(true) }}><Ic name="hash" size={15} /> Browse channels</button>
-                    </div>
+                    <ActionMenu anchor={headBtnRef.current} alignEnd label={`Options for ${active.name}`} onClose={closeHeadMenu} groups={headMenuGroups(active)} />
                   )}
                   {jumpOpen && <JumpToDate days={dayIndex} onPick={jumpToDay} onClose={() => setJumpOpen(false)} />}
                 </div>

@@ -92,7 +92,7 @@ const untilText = (iso: string) => `${dayWord(iso)} at ${fmtClock(iso)}`
 // month away can only be the open-ended one. Printing next year's date for it
 // would read as if someone had picked that date.
 const OPEN_ENDED_MS = 31 * 86400000
-function muteText(conv: ChatConvLite) {
+export function muteText(conv: Pick<ChatConvLite, 'muted' | 'muted_until'>) {
   if (!conv.muted) return 'Off'
   const until = msOf(conv.muted_until)
   if (until == null || until - Date.now() > OPEN_ENDED_MS) return 'Muted'
