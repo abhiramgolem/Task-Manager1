@@ -4,8 +4,14 @@
 //
 //   votask_chime    tasks and everything else the bell announces
 //   votask_mention  someone @mentioned you — its own sound, as in Cliq, so it
-//                   can be told from the rest without looking
+//                   can be told from the rest without looking: three rising
+//                   tings, louder than the chime, and on a phone the same
+//                   triple buzz as its notification (ChatNotifier.java)
 export type NotifSound = 'votask_chime' | 'votask_mention'
+
+// A mention is meant to be noticed; the chime stays in the background.
+const GAIN: Record<NotifSound, number> = { votask_chime: 0.5, votask_mention: 0.85 }
+const VIBRATE: Partial<Record<NotifSound, number[]>> = { votask_mention: [180, 90, 180, 90, 260] }
 
 // Browsers start an AudioContext suspended until the page has been interacted
 // with; it is resumed on play, so the first click anywhere unlocks it.
@@ -17,6 +23,8 @@ const playedAt = new Map<NotifSound, number>()
 export function playNotifSound(name: NotifSound, { unlessPlayedWithinMs = 0 } = {}) {
   if (unlessPlayedWithinMs && Date.now() - (playedAt.get(name) || 0) < unlessPlayedWithinMs) return
   playedAt.set(name, Date.now())
+  // Phones only in effect; a browser without a motor ignores it.
+  try { const v = VIBRATE[name]; if (v) navigator.vibrate?.(v) } catch {}
   try {
     const Ctx = window.AudioContext || (window as any).webkitAudioContext
     if (!Ctx) return
@@ -31,7 +39,7 @@ export function playNotifSound(name: NotifSound, { unlessPlayedWithinMs = 0 } = 
       const src = c.createBufferSource()
       const gain = c.createGain()
       src.buffer = b
-      gain.gain.value = 0.5
+      gain.gain.value = GAIN[name]
       src.connect(gain); gain.connect(c.destination)
       src.start()
     }).catch(() => { decoded.delete(name) })

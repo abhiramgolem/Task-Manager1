@@ -35,9 +35,20 @@ final class ChatNotifier {
     static final String CHANNEL_ID = "votask_chime";
     // Being @mentioned has its own sound (res/raw/votask_mention.wav), as in
     // Cliq, so it can be told from the room's chatter without looking. Android
-    // takes a notification's sound from its channel, so it is its own channel;
-    // push.ts creates it too, for the server's non-chat mention pushes.
-    static final String MENTION_CHANNEL_ID = "votask_mention";
+    // takes a notification's sound from its channel, so it is its own channel.
+    //
+    // _v2: from versionCode 46 a mention rings three rising tings and buzzes
+    // three times, so a phone on vibrate in a pocket still says "you were
+    // tagged". Android freezes a channel's vibration when it is first created
+    // (and re-creating a deleted id restores the old settings), so the pattern
+    // needs a new id. The 5.8/5.9 channel, 'votask_mention', is deleted; the
+    // server sends task-comment mentions to whichever one the build has
+    // (push.js MENTION_V2_FROM).
+    static final String MENTION_CHANNEL_ID = "votask_mention_v2";
+    private static final String OLD_MENTION_CHANNEL_ID = "votask_mention";
+    // Three buzzes under the three tings. Pre-Android 8 reads it off the
+    // notification, later ones off the channel.
+    private static final long[] MENTION_VIBRATION = {0, 180, 90, 180, 90, 260};
     private static final int NOTIFICATION_ID = 1;
     // Lines kept per chat: WhatsApp shows about this many before "+N more".
     private static final int KEEP = 8;
@@ -132,6 +143,7 @@ final class ChatNotifier {
             .setAutoCancel(true)
             .setOnlyAlertOnce(local)
             .setContentIntent(tap);
+        if (mention) b.setVibrate(MENTION_VIBRATION);
         addActions(ctx, b, d, cid);
         Notification n = b.build();
         try {
@@ -224,13 +236,27 @@ final class ChatNotifier {
         return false;
     }
 
-    private static void ensureChannel(Context ctx, NotificationManager nm) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        ensureChannel(ctx, nm, CHANNEL_ID, "VoTask notifications", "Task updates, mentions and new messages", "votask_chime");
-        ensureChannel(ctx, nm, MENTION_CHANNEL_ID, "Mentions", "When someone @mentions you in a chat or a task comment", "votask_mention");
+    /**
+     * The app's own channels, made when the app starts (MainActivity) as well
+     * as when a chat push arrives. A task-comment mention is drawn by Firebase
+     * into the channel the server names, and a channel that does not exist yet
+     * sends it to Firebase's plain fallback one instead. push.ts cannot make
+     * the mention channel: Capacitor's createChannel takes no vibration pattern.
+     */
+    static void ensureChannels(Context ctx) {
+        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) ensureChannel(ctx, nm);
     }
 
-    private static void ensureChannel(Context ctx, NotificationManager nm, String id, String name, String description, String sound) {
+    private static void ensureChannel(Context ctx, NotificationManager nm) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        ensureChannel(ctx, nm, CHANNEL_ID, "VoTask notifications", "Task updates, mentions and new messages", "votask_chime", null);
+        ensureChannel(ctx, nm, MENTION_CHANNEL_ID, "Mentions", "When someone @mentions you in a chat or a task comment", "votask_mention", MENTION_VIBRATION);
+        // Otherwise Settings lists two "Mentions", one of them never used again.
+        if (nm.getNotificationChannel(OLD_MENTION_CHANNEL_ID) != null) nm.deleteNotificationChannel(OLD_MENTION_CHANNEL_ID);
+    }
+
+    private static void ensureChannel(Context ctx, NotificationManager nm, String id, String name, String description, String sound, long[] vibration) {
         if (nm.getNotificationChannel(id) != null) return;
         NotificationChannel ch = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
         ch.setDescription(description);
@@ -240,6 +266,7 @@ final class ChatNotifier {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build());
         ch.enableVibration(true);
+        if (vibration != null) ch.setVibrationPattern(vibration);
         ch.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
         nm.createNotificationChannel(ch);
     }

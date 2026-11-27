@@ -98,8 +98,11 @@ export function removeDeviceToken(token) {
 //
 // `mention`: someone @mentioned this person. A build from MENTION_SOUND_FROM
 // on plays its own mention sound for it, as Cliq does, from the
-// 'votask_mention' channel. A rich chat line needs nothing here: the phone
-// picks that channel itself from the chat_mention type (ChatNotifier.java).
+// 'votask_mention' channel; from MENTION_V2_FROM, 'votask_mention_v2' (three
+// tings and a triple buzz; that build deletes the old channel, and a push to
+// a missing channel lands in Firebase's plain fallback one). A rich chat line
+// needs nothing here: the phone picks the channel itself from the
+// chat_mention type (ChatNotifier.java).
 export async function sendPushToUser(userId, { title, body, data, tag, rich, mention }) {
   if (!userId) return
   // The same notification to the browsers this person turned it on in.
@@ -112,6 +115,8 @@ export async function sendPushToUser(userId, { title, body, data, tag, rich, men
 const RICH_CHAT_FROM = 29
 // The first versionCode with the mention sound and its channel (push.ts).
 const MENTION_SOUND_FROM = 44
+// The first versionCode with the louder mention and its channel (ChatNotifier.java).
+const MENTION_V2_FROM = 46
 
 // "A new version is on the Play Store", to every phone whose app is older than
 // belowBuild (its versionCode). Builds before 4.5 do not report their version
@@ -157,7 +162,7 @@ async function sendToDevices(rows, { title, body, data, tag, rich, mention }) {
             android: {
               priority: 'high',
               notification: mention && build >= MENTION_SOUND_FROM
-                ? { sound: 'votask_mention', channel_id: 'votask_mention', ...(tag ? { tag } : {}) }
+                ? { sound: 'votask_mention', channel_id: build >= MENTION_V2_FROM ? 'votask_mention_v2' : 'votask_mention', ...(tag ? { tag } : {}) }
                 : chime
                   ? { sound: 'votask_chime', channel_id: 'votask_chime', ...(tag ? { tag } : {}) }
                   : { sound: 'default', channel_id: 'smarttask_v2', ...(tag ? { tag } : {}) },
