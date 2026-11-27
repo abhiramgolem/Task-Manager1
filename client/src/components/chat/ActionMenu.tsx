@@ -1,15 +1,18 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-export interface ActionItem { key: string; label: string; icon: React.ReactNode; on?: boolean; danger?: boolean; run: () => void }
+// `hint`: a second line under the label, for the state the row changes ("Muted until 5:00 PM").
+export interface ActionItem { key: string; label: string; icon: React.ReactNode; hint?: string; on?: boolean; danger?: boolean; run: () => void }
 
 // Space kept between the menu and the ⋯ it hangs from, and between the menu
 // and the window's edges.
 const GAP = 4
 const EDGE = 8
 
-// A ⋯ menu for a mouse screen: a message's, or a chat's in the list. Phones
-// never get it — they select the message and use the action bar instead.
+// Every chat menu: a message's ⋯ on a mouse screen, the ⋮ of a selected
+// message's action bar on a phone, the chat's own ⋮, and a chat's in the list
+// (its ⋯, or holding the row on a phone). Grouped rows with icons, one look
+// everywhere, where phones used to get a plain list of words.
 //
 // It lives in a portal, fixed to the window, not inside the thread or the
 // list: both are scroll boxes and clip whatever pokes out of them. Hung under
@@ -149,7 +152,7 @@ export default function ActionMenu({ anchor, alignEnd, groups, label, onClose }:
                 })
               }}>
               <span className="am-ic">{a.icon}</span>
-              <span className="am-label">{a.label}</span>
+              <span className="am-label">{a.label}{a.hint && <span className="am-hint">{a.hint}</span>}</span>
             </button>
           ))}
         </React.Fragment>

@@ -1428,6 +1428,10 @@ export function initSchema() {
   // file_thumb is its name on disk beside the file; file_pages the page count.
   ensureColumn('chat_messages', 'file_thumb', 'TEXT')
   ensureColumn('chat_messages', 'file_pages', 'INTEGER')
+  // Photos and videos picked and sent together share one id, chosen on the
+  // sender's device, so they show as one album however long each took to
+  // upload and whatever was said in between.
+  ensureColumn('chat_messages', 'album_id', 'TEXT')
   // Files moved off the Render disk into object storage (archive.js). `key` is
   // the file's place on disk ("chat_uploads/<name>"), `remote` the folder of
   // parts in the bucket — shared when one stored file is forwarded or attached

@@ -389,6 +389,7 @@ export function shapeMessage(row, viewerId, ctx = {}) {
     } : null,
     // Only the sender sees it: how their phone matches its "sending" bubble to the saved message.
     ...(row.client_id && row.sender_id === viewerId ? { client_id: row.client_id } : {}),
+    album_id: row.album_id || null,
     reactions,
     mentions: ctx.mentions ? (ctx.mentions[row.id] || []) : (mentionsByMessage([row.id])[row.id] || []),
     starred: ctx.stars ? ctx.stars.has(row.id) : false,
@@ -1344,11 +1345,13 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   // stores a message, with LF, or a multi-line caption reads differently.
   const caption = String(req.body?.body || '').replace(/\r\n?/g, '\n').trim().slice(0, 4000)
   const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
+  // Older apps send none and fall back to grouping by time on the client.
+  const albumId = clientIdOf(req.body?.album_id)
   const mid = id('msg')
   const ts = now()
-  db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at, client_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?)`)
-    .run(mid, conv.org_id, conv.id, me.id, '', caption, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, replyTo, ts, clientId)
+  db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at, client_id, album_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`)
+    .run(mid, conv.org_id, conv.id, me.id, '', caption, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, replyTo, ts, clientId, albumId)
   // A voice note whose sender's browser already recognised the speech arrives
   // with the text attached, so nobody has to pay for a transcription that has
   // effectively already happened. Trusted no further than any other client
@@ -1373,12 +1376,17 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
 // The @mentions are re-read from the new text so a name taken out stops
 // counting, but nobody is notified again: an edit is a correction, not a
 // second message.
+// Only within 15 minutes of sending, WhatsApp's window: after that people have
+// read it and acted on it. The client hides Edit by the same rule
+// (EDIT_WINDOW_MS in components/chat/types.ts).
+const EDIT_WINDOW_MS = 15 * 60_000
 r.patch('/message/:id', (req, res) => {
   const me = req.user
   const m = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.id)
   if (!m || m.sender_id !== me.id || !member(m.conversation_id, me.id)) return res.status(404).json({ error: 'Message not found' })
   if (m.deleted_for_all) return res.status(400).json({ error: 'Cannot edit a deleted message' })
   if (m.kind || m.call_id || m.meeting_id || (m.file_type || '').startsWith('audio/')) return res.status(400).json({ error: 'This message cannot be edited' })
+  if (Date.now() - Date.parse(m.created_at) > EDIT_WINDOW_MS) return res.status(400).json({ error: 'Messages can only be edited within 15 minutes of sending' })
   const body = String(req.body?.body || '').trim()
   if (!body && !m.file_stored) return res.status(400).json({ error: 'Body required' })
   if (body.length > 4000) return res.status(400).json({ error: 'Message too long' })

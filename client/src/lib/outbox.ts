@@ -32,6 +32,7 @@ export interface OutItem {
   fileName?: string
   fileType?: string
   fileSize?: number
+  albumId?: string | null  // photos sent together (Msg.album_id)
   createdAt: string
   // Set when the server refused it for good (not a network problem): it is not
   // retried by itself, and the bubble says why.

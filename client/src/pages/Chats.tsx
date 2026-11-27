@@ -26,7 +26,7 @@ import { typeInto, flashPress, pause, settle, findVaEl } from '../voice/uiContro
 import TaskDrawer from '../components/TaskDrawer'
 import { setOpenChat } from '../components/InAppChatAlert'
 import type { Member, Conversation, MentionRef, ChatFile, Msg, OrgUser, LocationRef, Poll } from '../components/chat/types'
-import { fileUrl, thumbUrl, isAudio, isEditable, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
+import { fileUrl, thumbUrl, isAudio, isEditable, editWindowOpen, isForwardable, isRecordLine, isVideo } from '../components/chat/types'
 import ChatVideo from '../components/chat/ChatVideo'
 import {
   CopyGlyph, Ticks, PollGlyph, TrendGlyph, PinDropGlyph, ContactGlyph, CameraGlyph, GalleryGlyph, DocGlyph, TaskGlyph,
@@ -43,7 +43,7 @@ import { PdfDocPreview, openPdf } from '../components/PdfViewer'
 import { isPdf, thumbForUpload, thumbWithin, type SentThumb } from '../lib/pdf'
 import { sending, aborts, emitUpload, onUpload, startUpload, progressOf, liveBubbles, inFlight, sendingIn, type UploadEvent } from '../lib/liveUploads'
 import ActionMenu, { type ActionItem } from '../components/chat/ActionMenu'
-import ChatInfoPanel from '../components/ChatInfoPanel'
+import ChatInfoPanel, { muteText } from '../components/ChatInfoPanel'
 import InChip from '../components/attendance/InChip'
 import type { InfoView, Me, MediaKind } from '../lib/chatInfo'
 import { chatInfoApi, MEDIA_TABS } from '../lib/chatInfo'
@@ -105,15 +105,18 @@ const MAX_STAGED = 10
 // pasted log should not push a whole conversation off the screen.
 // Messages from one person this close together read as one turn (see `cont`).
 const RUN_GAP_MS = 5 * 60_000
-// Photos from one person this close together were sent together: four or more
-// in a row become an album (AlbumGrid). Each upload is stamped when it lands,
-// so a slow connection spaces a batch out; two minutes covers that.
+// Photos sent together carry one album id (sendStaged), and that is what makes
+// their album. Photos without one (sent before it existed, or from an older
+// app) are grouped by time instead: from one person this close together, four
+// or more in a row. Each upload is stamped when it lands, so a slow connection
+// spaces a batch out; two minutes covers that, but not a slow video.
 const ALBUM_GAP_MS = 2 * 60_000
-// A photo or video that can sit in an album: on the server, and with nothing
-// of its own to show beside it. A caption, a quote or "Forwarded" belongs to
-// that one photo, so such a photo stays a message of its own.
+// A photo or video that can sit in an album: with nothing of its own to show
+// beside it. A caption, a quote or "Forwarded" belongs to that one photo, so
+// such a photo stays a message of its own. One still uploading has a place
+// only in the album it was sent in; one that failed shows on its own, with Retry.
 const albumable = (m: Msg) => !!m.file && !m.deleted && !m.kind && !m.call && !m.meeting && !m.body?.trim()
-  && !m.reply && !m.forwarded && !m.uploading && !m.failed && !m.id.startsWith('tmp_')
+  && !m.reply && !m.forwarded && !m.failed && (!!m.album_id || (!m.uploading && !m.id.startsWith('tmp_')))
   && ((m.file.type || '').startsWith('image/') || isVideo(m.file))
 // A held voice note: slide this far left to cancel, this far up to lock; a
 // press shorter than HOLD_TAP_MS is a tap.
@@ -678,6 +681,8 @@ export default function Chats() {
   const [threadLastRead, setThreadLastRead] = useState<string | null>(null)
   const [convoMenu, setConvoMenu] = useState<string | null>(null)
   const closeConvoMenu = useCallback(() => setConvoMenu(null), [])
+  const closeHeadMenu = useCallback(() => setHeadMenu(false), [])
+  const headBtnRef = useRef<HTMLButtonElement>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const mediaRef = useRef<HTMLInputElement>(null)
@@ -850,7 +855,7 @@ export default function Chats() {
     id: 'tmp_' + it.clientId, client_id: it.clientId, conversation_id: it.convId, sender_id: it.userId, body: it.body,
     created_at: it.createdAt, reactions: [], starred: false, seen: false, reply: it.reply || null, reply_to: it.replyTo || null,
     transcript: it.transcript || null,
-    file: it.fileName ? { name: it.fileName, type: it.fileType || '', size: it.fileSize || 0 } : null,
+    file: it.fileName ? { name: it.fileName, type: it.fileType || '', size: it.fileSize || 0 } : null, album_id: it.albumId || null,
     uploading: sendingRef.current.has(it.clientId) && it.kind === 'file', progress: progressOf(it.clientId),
     failed: !sendingRef.current.has(it.clientId), failReason: it.error || null,
   })
@@ -887,7 +892,7 @@ export default function Chats() {
         const file = it.file instanceof File ? it.file : new File([it.file as Blob], it.fileName || 'file', { type: it.fileType || 'application/octet-stream' })
         let shown = -1
         saved = await sendWhole(it.convId, file, {
-          caption: it.body, replyTo: it.replyTo || null, mentions: it.mentions || [], clientId: it.clientId, transcript: it.transcript || null,
+          caption: it.body, replyTo: it.replyTo || null, mentions: it.mentions || [], clientId: it.clientId, transcript: it.transcript || null, albumId: it.albumId || null,
           progress: (pct) => { if (pct !== shown) { shown = pct; emitUpload({ clientId: it.clientId, convId: it.convId, type: 'progress', pct }) } },
         })
       }
@@ -1790,10 +1795,11 @@ export default function Chats() {
     const th = await thumbWithin(file)
     return th ? { thumb: th.data, pages: th.pages } : {}
   }
-  const addPending = (conv: Conversation, file: File, caption: string) => {
+  const addPending = (conv: Conversation, file: File, caption: string, albumId: string | null = null, localUrl: string | null = null) => {
     const clientId = newClientId()
     const tmpId = 'tmp_' + clientId
-    const bubble: Msg = { id: tmpId, client_id: clientId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }
+    const bubble: Msg = { id: tmpId, client_id: clientId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true,
+      ...(albumId ? { album_id: albumId, localUrl: localUrl || undefined } : {}) }
     setMessages((m) => [...m, bubble])
     // Known app-wide from now until it is sent, so leaving the chat and coming
     // back still shows it — waiting its turn or going up.
@@ -1813,11 +1819,12 @@ export default function Chats() {
   // A stalled upload (no progress for 45 s — the connection died without
   // saying so) is given up, so it shows "Not sent" with Retry instead of
   // "Sending… 40%" forever. The ✕ on the bubble cancels it.
-  const sendWhole = async (convId: string, file: File, o: { caption?: string; replyTo?: string | null; mentions?: string[]; clientId?: string; transcript?: string | null; progress: (pct: number) => void }) => {
+  const sendWhole = async (convId: string, file: File, o: { caption?: string; replyTo?: string | null; mentions?: string[]; clientId?: string; transcript?: string | null; albumId?: string | null; progress: (pct: number) => void }) => {
     if (file.size > 10 * 1024 * 1024) await api.get(`/chat/upload-room?size=${file.size}`)
     const form = new FormData()
     // The id before the file, so it is read even if the file is cut short.
     if (o.clientId) form.append('client_id', o.clientId)
+    if (o.albumId) form.append('album_id', o.albumId)
     if (o.caption) form.append('body', o.caption)
     if (o.replyTo) form.append('replyTo', o.replyTo)
     if (o.mentions?.length) form.append('mentions', JSON.stringify(o.mentions))
@@ -1854,7 +1861,7 @@ export default function Chats() {
   // line counts up: a file can be 1 GB, minutes on a phone, and a line that
   // never moves reads as stuck. A big file goes up in chunks
   // (lib/chunkedUpload), which rides out the connection dropping.
-  const uploadOne = async (conv: Conversation, tmpId: string, file: File, caption: string, rep: Msg | null, capMentions: string[]) => {
+  const uploadOne = async (conv: Conversation, tmpId: string, file: File, caption: string, rep: Msg | null, capMentions: string[], albumId: string | null = null) => {
     const clientId = tmpId.slice(4)
     // A file small enough to keep on the device goes through the outbox: if it
     // can't be sent now it stays in the chat as "Not sent" and goes by itself
@@ -1863,7 +1870,7 @@ export default function Chats() {
       const reply = rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? rep.file.name : rep.body, image: !!rep.file && (rep.file.type || '').startsWith('image/'), conversation_id: rep.conversation_id } : null
       const it: OutItem = {
         clientId, userId: user!.id, convId: conv.id, kind: 'file', body: caption, replyTo: rep?.id || null, reply, mentions: capMentions,
-        file, fileName: file.name, fileType: file.type, fileSize: file.size, createdAt: new Date().toISOString(),
+        file, fileName: file.name, fileType: file.type, fileSize: file.size, albumId, createdAt: new Date().toISOString(),
       }
       outboxPut(it)
       await postOut(it)
@@ -1879,8 +1886,8 @@ export default function Chats() {
     try {
       const uploadId = file.size > CHUNKED_FROM ? await sendInChunks(file, 'chat', progress) : null
       const data: Msg = uploadId
-        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions, client_id: clientId, ...await thumbFields(file) })
-        : await sendWhole(conv.id, file, { caption, replyTo: rep?.id || null, mentions: capMentions, clientId, progress })
+        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions, client_id: clientId, album_id: albumId || undefined, ...await thumbFields(file) })
+        : await sendWhole(conv.id, file, { caption, replyTo: rep?.id || null, mentions: capMentions, clientId, albumId, progress })
       emitUpload({ clientId, convId: conv.id, type: 'saved', msg: data })
       return true
     } catch (err: any) {
@@ -1910,14 +1917,21 @@ export default function Chats() {
     const mentionsOf = (caption: string) => (caption ? resolveMentions(caption, picked, conv.members, user!.id) : [])
     setStaged([]); setCapId(null); setInput(''); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
     forgetStaged(items.map((it) => it.id))
-    const pending = items.map((it) => addPending(conv, it.file, it.caption))
+    // Four or more photos and videos with no caption of their own go as one
+    // album, shown as one from the moment they are sent. The first carries the
+    // quote, if there is one, so it stays apart.
+    const media = items.filter((it, i) => !it.caption && !(i === 0 && rep) && (it.file.type.startsWith('image/') || isVideo(it.file)))
+    const albumId = media.length >= ALBUM_MIN ? newClientId() : null
+    const inAlbum = new Set(albumId ? media : [])
+    const albumOf = (it: (typeof items)[number]) => (inAlbum.has(it) ? albumId : null)
+    const pending = items.map((it) => addPending(conv, it.file, it.caption, albumOf(it), it.url))
     uploadQueue.current = uploadQueue.current.then(async () => {
       const failed: StagedFile[] = []
       for (let i = 0; i < items.length; i++) {
         const it = items[i]
         // Photos go smaller first (lib/compressImage.ts) — minutes to seconds on mobile data.
         const file = await compressImage(it.file)
-        if (await uploadOne(conv, pending[i], file, it.caption, i === 0 ? rep : null, mentionsOf(it.caption))) {
+        if (await uploadOne(conv, pending[i], file, it.caption, i === 0 ? rep : null, mentionsOf(it.caption), albumOf(it))) {
           if (it.url) URL.revokeObjectURL(it.url)
         } else {
           failed.push(it)
@@ -2558,7 +2572,9 @@ export default function Chats() {
   })
   // Several at once (an album, or its "+N" tile): all picked already, all
   // let go; otherwise the missing ones join.
-  const pickMany = (ids: string[]) => setMulti((cur) => {
+  const pickMany = (given: string[]) => setMulti((cur) => {
+    // A photo still uploading is not on the server yet: nothing to act on.
+    const ids = given.filter((x) => !x.startsWith('tmp_'))
     const set = new Set(cur || [])
     const all = ids.every((x) => set.has(x))
     for (const x of ids) { if (all) set.delete(x); else set.add(x) }
@@ -2679,7 +2695,12 @@ export default function Chats() {
   // Straight into the box with the caret at the end: choosing Edit means typing
   // next. Whatever was half-typed is set aside and comes back afterwards.
   const startEdit = (m: Msg) => {
-    if (!isEditable(m) || m.sender_id !== user!.id) return
+    if (m.sender_id !== user!.id) return
+    if (!isEditable(m)) {
+      // A button drawn before the 15 minutes ran out can still be tapped.
+      if (!editWindowOpen(m)) toast.error('Messages can only be edited within 15 minutes of sending')
+      return
+    }
     setMenuId(null); setSelectedId(null); setMulti(null)
     if (!editing) editStashRef.current = input
     setEditing({ id: m.id, body: m.body }); setInput(m.body); setReplyTo(null)
@@ -2741,8 +2762,11 @@ export default function Chats() {
   // - The rest go in groups with a rule between them (pass it on / keep track /
   //   the rest / Delete), each with its icon, so a long list can be scanned.
   //   An action with no group here (a new one) lands just above Delete.
-  const deskMenu = (m: Msg): ActionItem[][] => {
-    const acts = msgActions(m).filter((a) => !ON_HOVER_TOOLS.has(a.key))
+  const deskMenu = (m: Msg) => menuGroups(msgActions(m).filter((a) => !ON_HOVER_TOOLS.has(a.key)))
+  // A phone's action bar: what its icons leave to its ⋮, in the same groups.
+  // Choosing one ends the selection, as every action of the bar does.
+  const barMenu = (m: Msg) => menuGroups(msgActions(m).filter((a) => !a.bar).map((a) => ({ ...a, run: () => { setSelectedId(null); a.run() } })))
+  const menuGroups = (acts: MsgAction[]): ActionItem[][] => {
     const groups = DESK_MENU_GROUPS.map((keys) => keys.flatMap((k) => acts.filter((a) => a.key === k)))
     const placed = new Set(DESK_MENU_GROUPS.flat())
     const rest = acts.filter((a) => !placed.has(a.key))
@@ -2799,9 +2823,7 @@ export default function Chats() {
   const infoOpenerRef = useRef<HTMLElement | null>(null)
   const openInfo = (view: InfoView = { view: 'info' }) => {
     const from = document.activeElement as HTMLElement | null
-    infoOpenerRef.current = from?.closest('.head-menu')
-      ? document.querySelector<HTMLElement>('.chat-peer-actions [aria-label="More options"]')
-      : from
+    infoOpenerRef.current = from?.closest('.am-menu') ? headBtnRef.current : from
     setInfoStart(view); setShowInfo(true)
     setHeadMenu(false); setJumpOpen(false); setLoadOpen(false); setSelectedId(null)
   }
@@ -2899,7 +2921,8 @@ export default function Chats() {
           rowPressRef.current = null
           rowPressedRef.current = true
           try { navigator.vibrate?.(12) } catch { /* the menu says it */ }
-          setMenuAnchor(row.querySelector('.convo-menu-btn') as HTMLElement | null)
+          // Its ⋯ is hidden on touch screens: the menu hangs from the row's right end.
+          setMenuAnchor((row.querySelector('.convo-trailing') as HTMLElement | null) || row)
           setConvoMenu(cid)
         }, LONG_PRESS_MS),
       }
@@ -3022,8 +3045,8 @@ export default function Chats() {
         </div>
         {reactFor === m.id && (
           <div className={'react-picker' + (reactUp ? ' up' : '')} onClick={(e) => e.stopPropagation()}>
-            {EMOJIS.map((emo) => <button key={emo} onClick={() => react(m, emo)}>{emo}</button>)}
-            <button className="react-more" title="More emoji" aria-label="More emoji" onClick={() => { setReactFor(null); setEmojiFor(m.id) }}>＋</button>
+            {EMOJIS.map((emo, i) => <button key={emo} style={{ '--i': i } as React.CSSProperties} onClick={() => react(m, emo)}>{emo}</button>)}
+            <button className="react-more" style={{ '--i': EMOJIS.length } as React.CSSProperties} title="More emoji" aria-label="More emoji" onClick={() => { setReactFor(null); setEmojiFor(m.id) }}>＋</button>
           </div>
         )}
         {emojiFor === m.id && (
@@ -3044,10 +3067,10 @@ export default function Chats() {
         {/* The label names the action ("Take back…"), not a pressed
             state: reactions are one per person, and a different
             emoji replaces yours rather than adding to it. */}
-        {quick.map((emo) => (
-          <button key={emo} className={emo === myEmoji ? 'on' : undefined} aria-label={emo === myEmoji ? `Take back your ${emo}` : `React with ${emo}`} onClick={() => react(m, emo)}>{emo}</button>
+        {quick.map((emo, i) => (
+          <button key={emo} className={emo === myEmoji ? 'on' : undefined} style={{ '--i': i } as React.CSSProperties} aria-label={emo === myEmoji ? `Take back your ${emo}` : `React with ${emo}`} onClick={() => react(m, emo)}>{emo}</button>
         ))}
-        <button className="react-tray-more" aria-label="More emoji" onClick={() => setEmojiFor(m.id)}><Ic name="plus" size={18} /></button>
+        <button className="react-tray-more" style={{ '--i': quick.length } as React.CSSProperties} aria-label="More emoji" onClick={() => setEmojiFor(m.id)}><Ic name="plus" size={18} /></button>
       </div>
     )
   }
@@ -3081,7 +3104,7 @@ export default function Chats() {
           </button>
         )}
         {multi && <span className={'album-check' + (multi.includes(m.id) ? ' on' : '')} aria-hidden="true">{multi.includes(m.id) && <Ic name="check" size={12} />}</span>}
-        {!touchUI && !multi && deskTools(m, mine, true)}
+        {!touchUI && !multi && !m.id.startsWith('tmp_') && deskTools(m, mine, true)}
       </>
     )
   }
@@ -3096,9 +3119,10 @@ export default function Chats() {
     const face = withFace && !cont ? active?.members.find((mm) => mm.id === first.sender_id) : null
     const sel = touchUI && selectedId ? ms.find((x) => x.id === selectedId) || null : null
     const allPicked = !!multi && ids.every((x) => multi.includes(x))
-    const tick = last.seen ? 'read' : last.delivered ? 'delivered' : 'sent'
+    const tick = ms.some((x) => x.id.startsWith('tmp_')) ? 'pending' : last.seen ? 'read' : last.delivered ? 'delivered' : 'sent'
     return (
-      <div key={'album' + first.id} data-album={first.id}
+      // By its album id when it has one: the first photo's id changes when it lands.
+      <div key={'album' + (first.album_id || first.id)} data-album={first.id}
         className={'msg-wrap album-wrap' + (sel ? ' selected' : '') + (allPicked ? ' picked' : '') + (mine ? ' mine' : '') + (cont ? ' cont' : '') + (withFace ? ' has-face' : '')}
         style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}
         // Desktop, picking messages: a tile picks its photo (and what is behind
@@ -3127,7 +3151,7 @@ export default function Chats() {
           <div className="msg-body">
             <div className={'bubble ' + (mine ? 'user' : 'ai') + ' file-bubble media-bubble bare album-bubble'}>
               {inGroup && !mine && !cont && <div className="msg-sender" style={{ color: senderColor(first.sender_id) }}>{senderName(first.sender_id)}</div>}
-              <AlbumGrid items={ms} onOpen={(m) => setViewerAt(m.id)}
+              <AlbumGrid items={ms} onOpen={(m) => { if (!m.id.startsWith('tmp_')) setViewerAt(m.id) }}
                 tileProps={albumTouch}
                 tileClass={(m, group) => [
                   sel?.id === m.id ? 'sel' : '',
@@ -3354,9 +3378,37 @@ export default function Chats() {
   useEffect(() => { if (search.trim().length < 2) setHits(null) }, [search])
 
   const hasUnread = (c: Conversation) => c.unread > 0 || !!c.marked_unread
-  // A list row's ⋯ on a mouse screen (ActionMenu): the same rows as the touch
-  // menu below in the list, in the same order, with icons and the two
-  // destructive ones set apart at the bottom.
+  // The open chat's ⋮: what it is (info, media, meetings), what you can do in
+  // it, and the chat as a whole — mute says until when.
+  const headMenuGroups = (c: Conversation): ActionItem[][] => {
+    // A wide header has its own search button; a phone's has no room for it.
+    const narrow = window.matchMedia('(max-width: 720px)').matches
+    const muted = c.muted ? muteText(c) : ''
+    const items = (list: (ActionItem | false)[]) => list.filter(Boolean) as ActionItem[]
+    return [
+      items([
+        { key: 'info', label: c.type === 'group' ? 'Group info' : 'Contact info', icon: <Ic name="user" size={16} />, run: () => openInfo() },
+        narrow && { key: 'search', label: 'Search in chat', icon: <Ic name="search" size={16} />, run: () => setInSearchOpen(true) },
+        { key: 'media', label: 'Media, links and docs', icon: <Ic name="attach" size={16} />, run: () => openInfo({ view: 'media' }) },
+        { key: 'meetings', label: 'All meetings', icon: <Ic name="video" size={16} />, run: () => openInfo({ view: 'meetings' }) },
+      ]),
+      items([
+        { key: 'select', label: 'Select messages', icon: <SelectGlyph size={16} />, run: () => { setSelectedId(null); setMulti([]) } },
+        !readOnly && { key: 'task', label: 'Assign a task', icon: <TaskGlyph size={16} />, run: () => setAssignFor({ source: null, draft: { title: '' } }) },
+        { key: 'jump', label: 'Jump to a date', icon: <Ic name="calendar" size={16} />, run: () => setJumpOpen(true) },
+      ]),
+      [
+        { key: 'mute', label: c.muted ? 'Unmute notifications' : 'Mute notifications', hint: muted && muted !== 'Muted' ? muted : undefined,
+          icon: <Ic name={c.muted ? 'bell' : 'muteBell'} size={16} />, run: () => { if (c.muted) muteConversation(c, 0); else setMuteFor(c) } },
+        { key: 'archive', label: c.archived ? 'Unarchive chat' : 'Archive chat', icon: <ArchiveGlyph size={16} />, run: () => archive(c, !c.archived) },
+        { key: 'export', label: 'Export chat', icon: <ExportGlyph size={16} />, run: () => exportChat(c) },
+        { key: 'print', label: 'Print conversation', icon: <Ic name="doc" size={16} />, run: () => printConversation() },
+        { key: 'channels', label: 'Browse channels', icon: <Ic name="hash" size={16} />, run: () => setShowChannels(true) },
+      ],
+    ]
+  }
+  // A list row's ⋯ (or, on a phone, holding the row): its rows in groups, with
+  // icons and the two destructive ones set apart at the bottom.
   const convoMenuGroups = (c: Conversation): ActionItem[][] => [
     [
       { key: 'archive', label: c.archived ? 'Unarchive chat' : 'Archive chat', icon: <ArchiveGlyph size={16} />, run: () => archive(c, !c.archived) },
@@ -3411,15 +3463,23 @@ export default function Chats() {
   const lines: LogItem[] = []
   let lastDay = ''
   let unreadShown = false
+  // Where each album sent with an id sits: the rest of its photos join it
+  // there, however long each took to land and whatever was said in between.
+  const albumLine = new Map<string, number>()
   for (const m of shownMessages) {
+    const inAlbum = !!m.album_id && albumable(m)
+    const at = inAlbum ? albumLine.get(m.album_id!) : undefined
+    const held = at !== undefined ? lines[at] : null
+    if (held && 'album' in held && held.album[0].sender_id === m.sender_id) { lines[at!] = { album: [...held.album, m] }; continue }
     const day = new Date(m.created_at).toDateString()
     if (day !== lastDay) { lines.push({ sep: dayLabel(m.created_at) }); lastDay = day }
     if (!unreadShown && !inSearch && isUnreadForMe(m)) {
       lines.push({ unread: unreadCount }); unreadShown = true
     }
-    // Straight after another photo from the same person, sent together: one run.
+    if (inAlbum) { albumLine.set(m.album_id!, lines.length); lines.push({ album: [m] }); continue }
+    // No album id: straight after another such photo from the same person, sent together: one run.
     const prev = lines[lines.length - 1]
-    const run = prev && 'album' in prev ? prev.album : prev && 'm' in prev && albumable(prev.m) ? [prev.m] : null
+    const run = prev && 'album' in prev && !prev.album[0].album_id ? prev.album : prev && 'm' in prev && albumable(prev.m) ? [prev.m] : null
     const tail = run?.[run.length - 1]
     if (run && tail && albumable(m) && tail.sender_id === m.sender_id
       && new Date(m.created_at).getTime() - new Date(tail.created_at).getTime() < ALBUM_GAP_MS) {
@@ -3559,24 +3619,11 @@ export default function Chats() {
                   <div className="convo-menu-wrap">
                     <button className="convo-menu-btn" title="Options" aria-label={`Options for ${c.name}`} aria-haspopup="menu" aria-expanded={convoMenu === c.id}
                       onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setConvoMenu(convoMenu === c.id ? null : c.id) }}>⋯</button>
-                    {/* Mouse screens: the same menu as a message's, for the
-                        same reason — the list scrolls, and a menu inside it was
-                        cut to a sliver on the last rows of a laptop's list. */}
-                    {convoMenu === c.id && !touchUI && (
+                    {/* The same menu as a message's, for the same reason — the
+                        list scrolls, and a menu inside it was cut to a sliver
+                        on the last rows of a laptop's list. */}
+                    {convoMenu === c.id && (
                       <ActionMenu anchor={menuAnchor} alignEnd groups={convoMenuGroups(c)} label={`Options for ${c.name}`} onClose={closeConvoMenu} />
-                    )}
-                    {convoMenu === c.id && touchUI && (
-                      <div className="msg-menu mine" onClick={(e) => e.stopPropagation()}>
-                        <button onClick={() => archive(c, !c.archived)}>{c.archived ? 'Unarchive chat' : 'Archive chat'}</button>
-                        <button onClick={() => setPref(c, 'pinned')}>{c.pinned ? 'Unpin chat' : 'Pin chat'}</button>
-                        <button onClick={() => { setConvoMenu(null); if (c.muted) muteConversation(c, 0); else setMuteFor(c) }}>{c.muted ? 'Unmute notifications' : 'Mute notifications'}</button>
-                        <button onClick={() => markChat(c, !hasUnread(c))}>{hasUnread(c) ? 'Mark as read' : 'Mark as unread'}</button>
-                        <button onClick={() => { setConvoMenu(null); exportChat(c) }}>Export chat</button>
-                        <button className="danger" onClick={() => clearChat(c)}>Clear chat</button>
-                        {c.type === 'direct'
-                          ? <button className="danger" onClick={() => deleteChat(c)}>Delete chat</button>
-                          : <button className="danger" onClick={() => exitGroup(c)}>Exit group</button>}
-                      </div>
                     )}
                   </div>
                 </div>
@@ -3633,6 +3680,8 @@ export default function Chats() {
               <button className="ic-btn" title="Cancel" aria-label="Cancel selection" onClick={(e) => { e.stopPropagation(); setSelectedId(null) }}>
                 <Ic name="close" size={21} />
               </button>
+              {/* As WhatsApp counts the selection; picking more turns this into the multi bar. */}
+              <span className="sel-count" aria-hidden="true">1</span>
               <div className="chat-peer-actions">
                 {msgActions(selMsg).filter((a) => a.bar).map((a) => (
                   <button
@@ -3646,15 +3695,12 @@ export default function Chats() {
                   </button>
                 ))}
                 <div className="msg-menu-wrap">
-                  <button className="ic-btn" title="More" aria-label="More actions" aria-expanded={menuId === SEL_MENU} onClick={(e) => { e.stopPropagation(); setMenuId(menuId === SEL_MENU ? null : SEL_MENU) }}>
+                  <button className="ic-btn" title="More" aria-label="More actions" aria-haspopup="menu" aria-expanded={menuId === SEL_MENU}
+                    onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); setMenuId(menuId === SEL_MENU ? null : SEL_MENU) }}>
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.9" /><circle cx="12" cy="12" r="1.9" /><circle cx="12" cy="19" r="1.9" /></svg>
                   </button>
                   {menuId === SEL_MENU && (
-                    <div className="msg-menu mine head-menu" onClick={(e) => e.stopPropagation()}>
-                      {msgActions(selMsg).filter((a) => !a.bar).map((a) => (
-                        <button key={a.key} className={a.danger ? 'danger' : undefined} onClick={() => { setMenuId(null); setSelectedId(null); a.run() }}>{a.label}</button>
-                      ))}
-                    </div>
+                    <ActionMenu anchor={menuAnchor} alignEnd label="More actions for the selected message" onClose={closeMsgMenu} groups={barMenu(selMsg)} />
                   )}
                 </div>
               </div>
@@ -3738,24 +3784,11 @@ export default function Chats() {
                 {/* Everything else lives behind ⋮. Six boxed buttons in a row left a
                     phone ~120px for the chat's own name. */}
                 <div className="msg-menu-wrap jump-wrap">
-                  <button className="ic-btn" title="More" aria-label="More options" aria-expanded={headMenu} onClick={(e) => { e.stopPropagation(); setHeadMenu((o) => !o); setJumpOpen(false); setLoadOpen(false) }}>
+                  <button ref={headBtnRef} className="ic-btn" title="More" aria-label="More options" aria-haspopup="menu" aria-expanded={headMenu} onClick={(e) => { e.stopPropagation(); setHeadMenu((o) => !o); setJumpOpen(false); setLoadOpen(false) }}>
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.9" /><circle cx="12" cy="12" r="1.9" /><circle cx="12" cy="19" r="1.9" /></svg>
                   </button>
                   {headMenu && (
-                    <div className="msg-menu mine head-menu" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => openInfo()}><Ic name="user" size={15} /> {active.type === 'group' ? 'Group info' : 'Contact info'}</button>
-                      <button className="phone-only" onClick={() => { setHeadMenu(false); setInSearchOpen(true) }}><Ic name="search" size={15} /> Search in chat</button>
-                      <button onClick={() => { setHeadMenu(false); setSelectedId(null); setMulti([]) }}><SelectGlyph size={15} /> Select messages</button>
-                      {!readOnly && <button onClick={() => { setHeadMenu(false); setAssignFor({ source: null, draft: { title: '' } }) }}><TaskGlyph size={15} /> Assign a task</button>}
-                      <button onClick={() => openInfo({ view: 'media' })}><Ic name="attach" size={15} /> Media, links and docs</button>
-                      <button onClick={() => openInfo({ view: 'meetings' })}><Ic name="video" size={15} /> All meetings</button>
-                      <button onClick={() => { setHeadMenu(false); setJumpOpen(true) }}><Ic name="calendar" size={15} /> Jump to a date</button>
-                      <button onClick={() => { setHeadMenu(false); if (active.muted) muteConversation(active, 0); else setMuteFor(active) }}><Ic name={active.muted ? 'bell' : 'muteBell'} size={15} /> {active.muted ? 'Unmute notifications' : 'Mute notifications'}</button>
-                      <button onClick={() => { setHeadMenu(false); archive(active, !active.archived) }}><ArchiveGlyph size={15} /> {active.archived ? 'Unarchive chat' : 'Archive chat'}</button>
-                      <button onClick={() => exportChat(active)}><ExportGlyph size={15} /> Export chat</button>
-                      <button onClick={() => { setHeadMenu(false); printConversation() }}><Ic name="doc" size={15} /> Print conversation</button>
-                      <button onClick={() => { setHeadMenu(false); setShowChannels(true) }}><Ic name="hash" size={15} /> Browse channels</button>
-                    </div>
+                    <ActionMenu anchor={headBtnRef.current} alignEnd label={`Options for ${active.name}`} onClose={closeHeadMenu} groups={headMenuGroups(active)} />
                   )}
                   {jumpOpen && <JumpToDate days={dayIndex} onPick={jumpToDay} onClose={() => setJumpOpen(false)} />}
                 </div>
