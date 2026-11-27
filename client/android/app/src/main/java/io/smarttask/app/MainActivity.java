@@ -27,6 +27,9 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(PushSetupPlugin.class);
         registerPlugin(EdgeSwipePlugin.class);
         super.onCreate(savedInstanceState);
+        // Before any push can need them: the mention channel's vibration can
+        // only be set here, not from push.ts.
+        ChatNotifier.ensureChannels(this);
         // A recreated activity (rotation, process restore) carries the original
         // launch intent again; answering it a second time would rejoin a call
         // that may long be over.
