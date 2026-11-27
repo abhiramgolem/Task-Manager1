@@ -5999,6 +5999,17 @@ button.mc-open { border: 0; background: transparent; padding: 0; font: inherit; 
 .chat-layout .album-play svg { fill: currentColor; }
 .chat-layout .album-more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(11, 20, 26, .58); color: #fff; font-size: 30px; font-weight: 600; line-height: 1; }
 .chat-layout .album-hidden { display: none; }
+/* A photo of my album still going up: a ring that fills as it goes, or turns
+   while it waits its turn in the queue. */
+.chat-layout .album-sending { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(11, 20, 26, .35); color: #fff; }
+.chat-layout .album-sending > * { grid-area: 1 / 1; }
+.chat-layout .album-ring { width: 46px; height: 46px; border-radius: 50%; background: conic-gradient(#fff calc(var(--p) * 1%), rgba(255, 255, 255, .3) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3.5px)); mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3.5px)); }
+.chat-layout .album-ring.wait { animation: album-turn 1s linear infinite; }
+@keyframes album-turn { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { .chat-layout .album-ring.wait { animation: none; } }
+.chat-layout .album-pct { font-size: 11px; font-weight: 600; line-height: 1; }
+.chat-layout .album-open:has(> .album-sending) { cursor: default; }
 /* Rings drawn over the picture (the picture would cover an inset shadow). */
 .chat-layout .album-tile::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
 .chat-layout .album-tile.sel::after,

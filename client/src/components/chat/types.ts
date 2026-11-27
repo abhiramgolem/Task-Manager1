@@ -50,6 +50,9 @@ export interface Msg {
   failed?: boolean; failReason?: string | null; client_id?: string
   // A PDF still on its way: its first page, drawn here, so the bubble shows it while it sends.
   localThumb?: string; localPages?: number
+  // Photos and videos sent together (one album); `localUrl` is a photo's own
+  // picture on this device, shown in its album tile while it uploads.
+  album_id?: string | null; localUrl?: string
   pinned_at?: string | null; call?: CallInfo | null; transcript?: string | null; meeting?: MeetingCard | null
   system?: string | null; poll?: Poll | null; task?: TaskRef | null; location?: LocationRef | null; contact?: ContactRef | null
   update?: UpdateMeta | null

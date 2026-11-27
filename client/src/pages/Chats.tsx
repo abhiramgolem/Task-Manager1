@@ -105,15 +105,18 @@ const MAX_STAGED = 10
 // pasted log should not push a whole conversation off the screen.
 // Messages from one person this close together read as one turn (see `cont`).
 const RUN_GAP_MS = 5 * 60_000
-// Photos from one person this close together were sent together: four or more
-// in a row become an album (AlbumGrid). Each upload is stamped when it lands,
-// so a slow connection spaces a batch out; two minutes covers that.
+// Photos sent together carry one album id (sendStaged), and that is what makes
+// their album. Photos without one (sent before it existed, or from an older
+// app) are grouped by time instead: from one person this close together, four
+// or more in a row. Each upload is stamped when it lands, so a slow connection
+// spaces a batch out; two minutes covers that, but not a slow video.
 const ALBUM_GAP_MS = 2 * 60_000
-// A photo or video that can sit in an album: on the server, and with nothing
-// of its own to show beside it. A caption, a quote or "Forwarded" belongs to
-// that one photo, so such a photo stays a message of its own.
+// A photo or video that can sit in an album: with nothing of its own to show
+// beside it. A caption, a quote or "Forwarded" belongs to that one photo, so
+// such a photo stays a message of its own. One still uploading has a place
+// only in the album it was sent in; one that failed shows on its own, with Retry.
 const albumable = (m: Msg) => !!m.file && !m.deleted && !m.kind && !m.call && !m.meeting && !m.body?.trim()
-  && !m.reply && !m.forwarded && !m.uploading && !m.failed && !m.id.startsWith('tmp_')
+  && !m.reply && !m.forwarded && !m.failed && (!!m.album_id || (!m.uploading && !m.id.startsWith('tmp_')))
   && ((m.file.type || '').startsWith('image/') || isVideo(m.file))
 // A held voice note: slide this far left to cancel, this far up to lock; a
 // press shorter than HOLD_TAP_MS is a tap.
@@ -850,7 +853,7 @@ export default function Chats() {
     id: 'tmp_' + it.clientId, client_id: it.clientId, conversation_id: it.convId, sender_id: it.userId, body: it.body,
     created_at: it.createdAt, reactions: [], starred: false, seen: false, reply: it.reply || null, reply_to: it.replyTo || null,
     transcript: it.transcript || null,
-    file: it.fileName ? { name: it.fileName, type: it.fileType || '', size: it.fileSize || 0 } : null,
+    file: it.fileName ? { name: it.fileName, type: it.fileType || '', size: it.fileSize || 0 } : null, album_id: it.albumId || null,
     uploading: sendingRef.current.has(it.clientId) && it.kind === 'file', progress: progressOf(it.clientId),
     failed: !sendingRef.current.has(it.clientId), failReason: it.error || null,
   })
@@ -887,7 +890,7 @@ export default function Chats() {
         const file = it.file instanceof File ? it.file : new File([it.file as Blob], it.fileName || 'file', { type: it.fileType || 'application/octet-stream' })
         let shown = -1
         saved = await sendWhole(it.convId, file, {
-          caption: it.body, replyTo: it.replyTo || null, mentions: it.mentions || [], clientId: it.clientId, transcript: it.transcript || null,
+          caption: it.body, replyTo: it.replyTo || null, mentions: it.mentions || [], clientId: it.clientId, transcript: it.transcript || null, albumId: it.albumId || null,
           progress: (pct) => { if (pct !== shown) { shown = pct; emitUpload({ clientId: it.clientId, convId: it.convId, type: 'progress', pct }) } },
         })
       }
@@ -1790,10 +1793,11 @@ export default function Chats() {
     const th = await thumbWithin(file)
     return th ? { thumb: th.data, pages: th.pages } : {}
   }
-  const addPending = (conv: Conversation, file: File, caption: string) => {
+  const addPending = (conv: Conversation, file: File, caption: string, albumId: string | null = null, localUrl: string | null = null) => {
     const clientId = newClientId()
     const tmpId = 'tmp_' + clientId
-    const bubble: Msg = { id: tmpId, client_id: clientId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true }
+    const bubble: Msg = { id: tmpId, client_id: clientId, conversation_id: conv.id, sender_id: user!.id, body: caption, created_at: new Date().toISOString(), reactions: [], starred: false, seen: false, file: { name: file.name, type: file.type, size: file.size }, uploading: true,
+      ...(albumId ? { album_id: albumId, localUrl: localUrl || undefined } : {}) }
     setMessages((m) => [...m, bubble])
     // Known app-wide from now until it is sent, so leaving the chat and coming
     // back still shows it — waiting its turn or going up.
@@ -1813,11 +1817,12 @@ export default function Chats() {
   // A stalled upload (no progress for 45 s — the connection died without
   // saying so) is given up, so it shows "Not sent" with Retry instead of
   // "Sending… 40%" forever. The ✕ on the bubble cancels it.
-  const sendWhole = async (convId: string, file: File, o: { caption?: string; replyTo?: string | null; mentions?: string[]; clientId?: string; transcript?: string | null; progress: (pct: number) => void }) => {
+  const sendWhole = async (convId: string, file: File, o: { caption?: string; replyTo?: string | null; mentions?: string[]; clientId?: string; transcript?: string | null; albumId?: string | null; progress: (pct: number) => void }) => {
     if (file.size > 10 * 1024 * 1024) await api.get(`/chat/upload-room?size=${file.size}`)
     const form = new FormData()
     // The id before the file, so it is read even if the file is cut short.
     if (o.clientId) form.append('client_id', o.clientId)
+    if (o.albumId) form.append('album_id', o.albumId)
     if (o.caption) form.append('body', o.caption)
     if (o.replyTo) form.append('replyTo', o.replyTo)
     if (o.mentions?.length) form.append('mentions', JSON.stringify(o.mentions))
@@ -1854,7 +1859,7 @@ export default function Chats() {
   // line counts up: a file can be 1 GB, minutes on a phone, and a line that
   // never moves reads as stuck. A big file goes up in chunks
   // (lib/chunkedUpload), which rides out the connection dropping.
-  const uploadOne = async (conv: Conversation, tmpId: string, file: File, caption: string, rep: Msg | null, capMentions: string[]) => {
+  const uploadOne = async (conv: Conversation, tmpId: string, file: File, caption: string, rep: Msg | null, capMentions: string[], albumId: string | null = null) => {
     const clientId = tmpId.slice(4)
     // A file small enough to keep on the device goes through the outbox: if it
     // can't be sent now it stays in the chat as "Not sent" and goes by itself
@@ -1863,7 +1868,7 @@ export default function Chats() {
       const reply = rep ? { id: rep.id, sender_id: rep.sender_id, sender_name: senderName(rep.sender_id), text: rep.file ? rep.file.name : rep.body, image: !!rep.file && (rep.file.type || '').startsWith('image/'), conversation_id: rep.conversation_id } : null
       const it: OutItem = {
         clientId, userId: user!.id, convId: conv.id, kind: 'file', body: caption, replyTo: rep?.id || null, reply, mentions: capMentions,
-        file, fileName: file.name, fileType: file.type, fileSize: file.size, createdAt: new Date().toISOString(),
+        file, fileName: file.name, fileType: file.type, fileSize: file.size, albumId, createdAt: new Date().toISOString(),
       }
       outboxPut(it)
       await postOut(it)
@@ -1879,8 +1884,8 @@ export default function Chats() {
     try {
       const uploadId = file.size > CHUNKED_FROM ? await sendInChunks(file, 'chat', progress) : null
       const data: Msg = uploadId
-        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions, client_id: clientId, ...await thumbFields(file) })
-        : await sendWhole(conv.id, file, { caption, replyTo: rep?.id || null, mentions: capMentions, clientId, progress })
+        ? await api.post(`/chat/conversations/${conv.id}/upload`, { uploadId, body: caption || undefined, replyTo: rep?.id, mentions: capMentions, client_id: clientId, album_id: albumId || undefined, ...await thumbFields(file) })
+        : await sendWhole(conv.id, file, { caption, replyTo: rep?.id || null, mentions: capMentions, clientId, albumId, progress })
       emitUpload({ clientId, convId: conv.id, type: 'saved', msg: data })
       return true
     } catch (err: any) {
@@ -1910,14 +1915,21 @@ export default function Chats() {
     const mentionsOf = (caption: string) => (caption ? resolveMentions(caption, picked, conv.members, user!.id) : [])
     setStaged([]); setCapId(null); setInput(''); sendTyping(false); setReplyTo(null); setPicked([]); setMentionQ(null)
     forgetStaged(items.map((it) => it.id))
-    const pending = items.map((it) => addPending(conv, it.file, it.caption))
+    // Four or more photos and videos with no caption of their own go as one
+    // album, shown as one from the moment they are sent. The first carries the
+    // quote, if there is one, so it stays apart.
+    const media = items.filter((it, i) => !it.caption && !(i === 0 && rep) && (it.file.type.startsWith('image/') || isVideo(it.file)))
+    const albumId = media.length >= ALBUM_MIN ? newClientId() : null
+    const inAlbum = new Set(albumId ? media : [])
+    const albumOf = (it: (typeof items)[number]) => (inAlbum.has(it) ? albumId : null)
+    const pending = items.map((it) => addPending(conv, it.file, it.caption, albumOf(it), it.url))
     uploadQueue.current = uploadQueue.current.then(async () => {
       const failed: StagedFile[] = []
       for (let i = 0; i < items.length; i++) {
         const it = items[i]
         // Photos go smaller first (lib/compressImage.ts) — minutes to seconds on mobile data.
         const file = await compressImage(it.file)
-        if (await uploadOne(conv, pending[i], file, it.caption, i === 0 ? rep : null, mentionsOf(it.caption))) {
+        if (await uploadOne(conv, pending[i], file, it.caption, i === 0 ? rep : null, mentionsOf(it.caption), albumOf(it))) {
           if (it.url) URL.revokeObjectURL(it.url)
         } else {
           failed.push(it)
@@ -2558,7 +2570,9 @@ export default function Chats() {
   })
   // Several at once (an album, or its "+N" tile): all picked already, all
   // let go; otherwise the missing ones join.
-  const pickMany = (ids: string[]) => setMulti((cur) => {
+  const pickMany = (given: string[]) => setMulti((cur) => {
+    // A photo still uploading is not on the server yet: nothing to act on.
+    const ids = given.filter((x) => !x.startsWith('tmp_'))
     const set = new Set(cur || [])
     const all = ids.every((x) => set.has(x))
     for (const x of ids) { if (all) set.delete(x); else set.add(x) }
@@ -3086,7 +3100,7 @@ export default function Chats() {
           </button>
         )}
         {multi && <span className={'album-check' + (multi.includes(m.id) ? ' on' : '')} aria-hidden="true">{multi.includes(m.id) && <Ic name="check" size={12} />}</span>}
-        {!touchUI && !multi && deskTools(m, mine, true)}
+        {!touchUI && !multi && !m.id.startsWith('tmp_') && deskTools(m, mine, true)}
       </>
     )
   }
@@ -3101,9 +3115,10 @@ export default function Chats() {
     const face = withFace && !cont ? active?.members.find((mm) => mm.id === first.sender_id) : null
     const sel = touchUI && selectedId ? ms.find((x) => x.id === selectedId) || null : null
     const allPicked = !!multi && ids.every((x) => multi.includes(x))
-    const tick = last.seen ? 'read' : last.delivered ? 'delivered' : 'sent'
+    const tick = ms.some((x) => x.id.startsWith('tmp_')) ? 'pending' : last.seen ? 'read' : last.delivered ? 'delivered' : 'sent'
     return (
-      <div key={'album' + first.id} data-album={first.id}
+      // By its album id when it has one: the first photo's id changes when it lands.
+      <div key={'album' + (first.album_id || first.id)} data-album={first.id}
         className={'msg-wrap album-wrap' + (sel ? ' selected' : '') + (allPicked ? ' picked' : '') + (mine ? ' mine' : '') + (cont ? ' cont' : '') + (withFace ? ' has-face' : '')}
         style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}
         // Desktop, picking messages: a tile picks its photo (and what is behind
@@ -3132,7 +3147,7 @@ export default function Chats() {
           <div className="msg-body">
             <div className={'bubble ' + (mine ? 'user' : 'ai') + ' file-bubble media-bubble bare album-bubble'}>
               {inGroup && !mine && !cont && <div className="msg-sender" style={{ color: senderColor(first.sender_id) }}>{senderName(first.sender_id)}</div>}
-              <AlbumGrid items={ms} onOpen={(m) => setViewerAt(m.id)}
+              <AlbumGrid items={ms} onOpen={(m) => { if (!m.id.startsWith('tmp_')) setViewerAt(m.id) }}
                 tileProps={albumTouch}
                 tileClass={(m, group) => [
                   sel?.id === m.id ? 'sel' : '',
@@ -3416,15 +3431,23 @@ export default function Chats() {
   const lines: LogItem[] = []
   let lastDay = ''
   let unreadShown = false
+  // Where each album sent with an id sits: the rest of its photos join it
+  // there, however long each took to land and whatever was said in between.
+  const albumLine = new Map<string, number>()
   for (const m of shownMessages) {
+    const inAlbum = !!m.album_id && albumable(m)
+    const at = inAlbum ? albumLine.get(m.album_id!) : undefined
+    const held = at !== undefined ? lines[at] : null
+    if (held && 'album' in held && held.album[0].sender_id === m.sender_id) { lines[at!] = { album: [...held.album, m] }; continue }
     const day = new Date(m.created_at).toDateString()
     if (day !== lastDay) { lines.push({ sep: dayLabel(m.created_at) }); lastDay = day }
     if (!unreadShown && !inSearch && isUnreadForMe(m)) {
       lines.push({ unread: unreadCount }); unreadShown = true
     }
-    // Straight after another photo from the same person, sent together: one run.
+    if (inAlbum) { albumLine.set(m.album_id!, lines.length); lines.push({ album: [m] }); continue }
+    // No album id: straight after another such photo from the same person, sent together: one run.
     const prev = lines[lines.length - 1]
-    const run = prev && 'album' in prev ? prev.album : prev && 'm' in prev && albumable(prev.m) ? [prev.m] : null
+    const run = prev && 'album' in prev && !prev.album[0].album_id ? prev.album : prev && 'm' in prev && albumable(prev.m) ? [prev.m] : null
     const tail = run?.[run.length - 1]
     if (run && tail && albumable(m) && tail.sender_id === m.sender_id
       && new Date(m.created_at).getTime() - new Date(tail.created_at).getTime() < ALBUM_GAP_MS) {

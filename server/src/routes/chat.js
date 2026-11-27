@@ -389,6 +389,7 @@ export function shapeMessage(row, viewerId, ctx = {}) {
     } : null,
     // Only the sender sees it: how their phone matches its "sending" bubble to the saved message.
     ...(row.client_id && row.sender_id === viewerId ? { client_id: row.client_id } : {}),
+    album_id: row.album_id || null,
     reactions,
     mentions: ctx.mentions ? (ctx.mentions[row.id] || []) : (mentionsByMessage([row.id])[row.id] || []),
     starred: ctx.stars ? ctx.stars.has(row.id) : false,
@@ -1344,11 +1345,13 @@ r.post('/conversations/:id/upload', receiveChatFile, (req, res) => {
   // stores a message, with LF, or a multi-line caption reads differently.
   const caption = String(req.body?.body || '').replace(/\r\n?/g, '\n').trim().slice(0, 4000)
   const replyTo = resolveReply(req.body?.replyTo, conv, me.id)
+  // Older apps send none and fall back to grouping by time on the client.
+  const albumId = clientIdOf(req.body?.album_id)
   const mid = id('msg')
   const ts = now()
-  db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at, client_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?)`)
-    .run(mid, conv.org_id, conv.id, me.id, '', caption, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, replyTo, ts, clientId)
+  db.prepare(`INSERT INTO chat_messages (id, org_id, conversation_id, sender_id, recipient_id, body, file_name, file_stored, file_type, file_size, reply_to, read, created_at, client_id, album_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`)
+    .run(mid, conv.org_id, conv.id, me.id, '', caption, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, replyTo, ts, clientId, albumId)
   // A voice note whose sender's browser already recognised the speech arrives
   // with the text attached, so nobody has to pay for a transcription that has
   // effectively already happened. Trusted no further than any other client
